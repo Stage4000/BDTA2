@@ -1,0 +1,38 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noEmitOnError": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "rootDir": ".",
+    "types": [
+      "node",
+      "vitest/globals"
+    ],
+    "baseUrl": ".",
+    "paths": {
+      "@bdta/domain": [
+        "packages/domain/src/index.ts"
+      ],
+      "@bdta/contracts": [
+        "packages/contracts/src/index.ts"
+      ],
+      "@bdta/application": [
+        "packages/application/src/index.ts"
+      ],
+      "@bdta/infrastructure": [
+        "packages/infrastructure/src/index.ts"
+      ],
+      "@bdta/platform": [
+        "packages/platform/src/index.ts"
+      ]
+    }
+  }
+}

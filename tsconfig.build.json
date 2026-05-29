@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "./dist"
+  },
+  "include": [
+    "apps/**/*.ts",
+    "packages/**/*.ts"
+  ],
+  "exclude": [
+    "tests/**/*.ts",
+    "dist"
+  ]
+}
