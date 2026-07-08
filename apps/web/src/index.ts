@@ -5,7 +5,7 @@ export const webRuntimeManifest = {
   surfaces: appSurfaces,
   routeGroups: {
     publicSite: ["/", "/services", "/blog", "/book"],
-    adminCrm: ["/client", "/client/bookings", "/client/settings"],
+    adminCrm: ["/client", "/client/bookings", "/client/settings", "/admin/appointment-types", "/admin/email-templates", "/admin/scheduled-tasks"],
     customerPortal: ["/portal", "/portal/appointments", "/portal/invoices"]
   }
 } as const;

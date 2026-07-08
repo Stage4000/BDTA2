@@ -15,6 +15,10 @@ import {
   publicAccessTokenSchema,
   quoteStatusSchema,
   timestampSchema,
+  workflowAutoEnrollmentTriggerTypeSchema,
+  workflowEnrollmentStatusSchema,
+  workflowStepDelayTypeSchema,
+  workflowStepExecutionStatusSchema,
   workflowTriggerSchema
 } from "./common.js";
 
@@ -99,11 +103,107 @@ export const settingSchema = z.object({
   updatedAt: timestampSchema
 });
 
+const timeOfDaySchema = z.string().regex(/^\d{2}:\d{2}$/);
+
+const appointmentTypeSpecificDateTimeslotSchema = z.union([
+  z.object({
+    type: z.literal("point"),
+    time: timeOfDaySchema
+  }),
+  z.object({
+    type: z.literal("range"),
+    start: timeOfDaySchema,
+    end: timeOfDaySchema
+  })
+]);
+
+const appointmentTypeSpecificDateSchema = z.object({
+  date: dateSchema,
+  timeslots: z.array(appointmentTypeSpecificDateTimeslotSchema)
+});
+
+const appointmentTypeDayScheduleSchema = z.object({
+  start: timeOfDaySchema,
+  end: timeOfDaySchema
+});
+
+export const appointmentTypeSchema = z.object({
+  id: idSchema,
+  name: z.string().min(1),
+  description: z.string(),
+  bulletPoints: z.array(z.string().min(1)),
+  adminUserId: idSchema.nullable(),
+  durationMinutes: z.number().int().positive(),
+  bufferBeforeMinutes: z.number().int().nonnegative(),
+  bufferAfterMinutes: z.number().int().nonnegative(),
+  useTravelTimeBuffer: z.boolean(),
+  travelTimeMinutes: z.number().int().nonnegative(),
+  advanceBookingMinDays: z.number().int().nonnegative(),
+  advanceBookingMaxDays: z.number().int().nonnegative(),
+  cancellationNoticeHours: z.number().int().nonnegative(),
+  requiresForms: z.boolean(),
+  formTemplateIds: z.array(idSchema),
+  requiresContract: z.boolean(),
+  contractTemplateId: idSchema.nullable(),
+  autoInvoice: z.boolean(),
+  invoiceDueDays: z.number().int().nonnegative(),
+  invoiceDueTiming: z.string().min(1),
+  defaultAmount: moneySchema,
+  consumesCredits: z.boolean(),
+  creditCount: z.number().int().positive(),
+  isGroupClass: z.boolean(),
+  maxParticipants: z.number().int().positive(),
+  publicAvailable: z.boolean(),
+  portalAvailable: z.boolean(),
+  scheduleType: z.string().min(1),
+  specificDate: dateSchema.nullable(),
+  specificDates: z.array(appointmentTypeSpecificDateSchema),
+  availableDays: z.array(z.number().int().min(0).max(6)),
+  availableStartTime: timeOfDaySchema,
+  availableEndTime: timeOfDaySchema,
+  timeSlotInterval: z.number().int().positive(),
+  perDaySchedule: z.record(z.string(), appointmentTypeDayScheduleSchema),
+  isMiniSession: z.boolean(),
+  miniSessionLocation: z.string(),
+  miniSessionTopic: z.string(),
+  isFieldRental: z.boolean(),
+  fieldRentalLocation: z.string(),
+  groupClassLocation: z.string(),
+  locationTypes: z.array(z.string().min(1)),
+  confirmationTemplateId: idSchema.nullable(),
+  bookingRequestTemplateId: idSchema.nullable(),
+  invoiceTemplateId: idSchema.nullable(),
+  reminderTemplateId: idSchema.nullable(),
+  cancellationTemplateId: idSchema.nullable(),
+  requiresAdminConfirmation: z.boolean(),
+  usesResource: z.boolean(),
+  resourceName: z.string(),
+  resourceCapacity: z.number().int().positive(),
+  resourceAllocation: z.string().min(1),
+  uniqueLink: z.string().min(1),
+  active: z.boolean(),
+  createdAt: timestampSchema.nullable().optional(),
+  updatedAt: timestampSchema.nullable().optional()
+});
+
+export const emailTemplateSchema = z.object({
+  id: idSchema,
+  name: z.string().min(1),
+  templateType: z.string().min(1),
+  subject: z.string().min(1),
+  bodyHtml: z.string(),
+  bodyText: z.string(),
+  active: z.boolean(),
+  createdAt: timestampSchema.nullable().optional(),
+  updatedAt: timestampSchema.nullable().optional()
+});
+
 export const petSchema = z.object({
   id: idSchema,
   clientId: idSchema,
   name: z.string().min(1),
   species: z.string().min(1),
+  petSittingNotes: z.string(),
   archived: z.boolean()
 });
 
@@ -164,6 +264,7 @@ export const bookingSchema = z.object({
   startsAt: timestampSchema,
   endsAt: timestampSchema,
   status: bookingStatusSchema,
+  adminUserId: idSchema.nullable().optional(),
   icalAccess: publicAccessTokenSchema.nullable()
 });
 
@@ -176,11 +277,27 @@ export const invoiceSchema = z.object({
   dueAt: timestampSchema.nullable()
 });
 
+export const quoteLineItemSchema = z.object({
+  description: z.string().min(1),
+  quantity: z.number(),
+  unitPrice: moneySchema,
+  amount: moneySchema,
+  itemType: z.string().min(1).optional(),
+  referenceId: idSchema.nullable().optional()
+});
+
 export const quoteSchema = z.object({
   id: idSchema,
   clientId: idSchema,
   status: quoteStatusSchema,
   totalAmount: moneySchema,
+  quoteNumber: z.string().min(1).optional(),
+  title: z.string().min(1).optional(),
+  description: z.string().optional(),
+  expiresAt: z.string().min(1).nullable().optional(),
+  acceptedAt: z.string().min(1).nullable().optional(),
+  declinedAt: z.string().min(1).nullable().optional(),
+  items: z.array(quoteLineItemSchema).optional(),
   publicAccess: publicAccessTokenSchema.nullable()
 });
 
@@ -188,42 +305,135 @@ export const contractSchema = z.object({
   id: idSchema,
   clientId: idSchema,
   status: contractStatusSchema,
+  contractNumber: z.string().min(1).optional(),
+  title: z.string().min(1).optional(),
+  description: z.string().optional(),
+  contractText: z.string().optional(),
+  effectiveDate: z.string().min(1).nullable().optional(),
+  signedAt: z.string().min(1).nullable().optional(),
+  signatureTypedName: z.string().nullable().optional(),
+  signatureFont: z.string().nullable().optional(),
   publicAccess: publicAccessTokenSchema.nullable()
 });
 
 export const formTemplateSchema = z.object({
   id: idSchema,
   name: z.string().min(1),
-  active: z.boolean()
+  active: z.boolean(),
+  description: z.string().optional(),
+  fields: z.array(z.record(z.string(), z.unknown())).optional(),
+  formType: z.string().min(1).optional(),
+  requiredFrequency: z.string().min(1).nullable().optional(),
+  appointmentTypeId: idSchema.nullable().optional(),
+  templateIsInternal: z.boolean().nullable().optional(),
+  templateShowInClientPortal: z.boolean().nullable().optional()
 });
 
 export const formSubmissionSchema = z.object({
   id: idSchema,
   templateId: idSchema,
   clientId: idSchema,
+  clientName: z.string().min(1).nullable().optional(),
+  bookingId: idSchema.nullable().optional(),
+  bookingSummary: z.string().nullable().optional(),
+  petId: idSchema.nullable().optional(),
+  petName: z.string().min(1).nullable().optional(),
+  templateName: z.string().min(1).nullable().optional(),
+  templateDescription: z.string().nullable().optional(),
+  templateFields: z.array(z.record(z.string(), z.unknown())).optional(),
+  formType: z.string().min(1).optional(),
+  templateIsInternal: z.boolean().nullable().optional(),
+  templateShowInClientPortal: z.boolean().nullable().optional(),
+  clientReviewSubmission: z.boolean().optional(),
+  status: z.string().min(1).optional(),
+  submittedByAdminUserId: idSchema.nullable().optional(),
+  submittedByName: z.string().min(1).nullable().optional(),
+  reviewedByAdminUserId: idSchema.nullable().optional(),
+  reviewedByName: z.string().min(1).nullable().optional(),
+  reviewedAt: timestampSchema.nullable().optional(),
+  notes: z.string().optional(),
+  contactName: z.string().nullable().optional(),
+  contactEmail: z.string().nullable().optional(),
+  contactPhone: z.string().nullable().optional(),
+  responses: z.array(z.unknown()).optional(),
   submittedAt: timestampSchema.nullable(),
   publicAccess: publicAccessTokenSchema.nullable()
+});
+
+export const packageItemSchema = z.object({
+  appointmentTypeId: idSchema.nullable().optional(),
+  appointmentTypeName: z.string().min(1),
+  quantity: z.number().int().positive()
 });
 
 export const packageSchema = z.object({
   id: idSchema,
   name: z.string().min(1),
   active: z.boolean(),
-  price: moneySchema
+  price: moneySchema,
+  description: z.string().optional(),
+  bulletPoints: z.array(z.string().min(1)).optional(),
+  expirationDays: z.number().int().positive().nullable().optional(),
+  shareToken: z.string().min(1).nullable().optional(),
+  portalAvailable: z.boolean().optional(),
+  formTemplateId: idSchema.nullable().optional(),
+  items: z.array(packageItemSchema).optional()
 });
 
 export const creditSchema = z.object({
   id: idSchema,
   clientId: idSchema,
   packageId: idSchema.nullable(),
+  appointmentTypeId: idSchema,
   remainingUnits: z.number().int().nonnegative()
 });
 
 export const workflowSchema = z.object({
   id: idSchema,
   name: z.string().min(1),
+  description: z.string().nullable().optional(),
   trigger: workflowTriggerSchema,
-  active: z.boolean()
+  active: z.boolean(),
+  createdAt: timestampSchema.optional()
+});
+
+export const workflowAutoEnrollmentTriggerSchema = z.object({
+  id: idSchema,
+  workflowId: idSchema,
+  triggerType: workflowAutoEnrollmentTriggerTypeSchema,
+  appointmentTypeId: idSchema.nullable().optional(),
+  formTemplateId: idSchema.nullable().optional(),
+  active: z.boolean(),
+  createdAt: timestampSchema.optional()
+}).superRefine((trigger, ctx) => {
+  if (trigger.triggerType === "appointment_booking") {
+    if (trigger.appointmentTypeId == null || trigger.appointmentTypeId.trim() === "") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Appointment-booking workflow triggers require an appointment type."
+      });
+    }
+    if (trigger.formTemplateId != null && trigger.formTemplateId.trim() !== "") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Appointment-booking workflow triggers cannot include a form template."
+      });
+    }
+    return;
+  }
+
+  if (trigger.formTemplateId == null || trigger.formTemplateId.trim() === "") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Form-submission workflow triggers require a form template."
+    });
+  }
+  if (trigger.appointmentTypeId != null && trigger.appointmentTypeId.trim() !== "") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Form-submission workflow triggers cannot include an appointment type."
+    });
+  }
 });
 
 export const workflowEnrollmentSchema = z.object({
@@ -231,14 +441,53 @@ export const workflowEnrollmentSchema = z.object({
   workflowId: idSchema,
   clientId: idSchema,
   enrolledAt: timestampSchema,
-  completedAt: timestampSchema.nullable()
+  completedAt: timestampSchema.nullable(),
+  nextRunAt: timestampSchema.nullable().optional(),
+  status: workflowEnrollmentStatusSchema.optional(),
+  enrolledByAdminUserId: idSchema.nullable().optional(),
+  cancelledAt: timestampSchema.nullable().optional()
+});
+
+export const workflowStepSchema = z.object({
+  id: idSchema,
+  workflowId: idSchema,
+  stepOrder: z.number().int().positive(),
+  stepName: z.string().min(1),
+  emailSubject: z.string().min(1),
+  emailBodyHtml: z.string(),
+  emailBodyText: z.string().nullable().optional(),
+  delayType: workflowStepDelayTypeSchema,
+  delayValue: z.string().nullable().optional(),
+  scheduledDate: timestampSchema.nullable().optional(),
+  attachContractId: idSchema.nullable().optional(),
+  attachFormId: idSchema.nullable().optional(),
+  attachQuoteId: idSchema.nullable().optional(),
+  attachInvoiceId: idSchema.nullable().optional(),
+  includeAppointmentLink: z.boolean(),
+  appointmentTypeId: idSchema.nullable().optional(),
+  createdAt: timestampSchema.optional(),
+  updatedAt: timestampSchema.optional()
+});
+
+export const workflowStepExecutionSchema = z.object({
+  id: idSchema,
+  enrollmentId: idSchema,
+  stepId: idSchema,
+  scheduledFor: timestampSchema,
+  executedAt: timestampSchema.nullable(),
+  status: workflowStepExecutionStatusSchema,
+  errorMessage: z.string().nullable().optional()
 });
 
 export const scheduledTaskSchema = z.object({
   id: idSchema,
   name: z.string().min(1),
   taskType: z.string().min(1),
-  active: z.boolean()
+  scheduleType: z.string().min(1),
+  scheduleValue: z.string(),
+  active: z.boolean(),
+  lastRunAt: timestampSchema.nullable().optional(),
+  nextRunAt: timestampSchema.nullable().optional()
 });
 
 export const taskLogSchema = z.object({
@@ -253,8 +502,13 @@ export const notificationSchema = z.object({
   id: idSchema,
   clientId: idSchema,
   channel: z.enum(["email", "portal"]),
+  entityType: z.string().min(1),
+  entityId: idSchema.nullable(),
   createdAt: timestampSchema,
-  subject: z.string().min(1)
+  subject: z.string().min(1),
+  message: z.string(),
+  url: z.string().min(1),
+  isRead: z.boolean()
 });
 
 export const inboundEmailSchema = z.object({
@@ -284,6 +538,8 @@ export type ClientProfile = z.infer<typeof clientProfileSchema>;
 export type BlogPost = z.infer<typeof blogPostSchema>;
 export type SitePage = z.infer<typeof sitePageSchema>;
 export type Setting = z.infer<typeof settingSchema>;
+export type AppointmentType = z.infer<typeof appointmentTypeSchema>;
+export type EmailTemplate = z.infer<typeof emailTemplateSchema>;
 export type Pet = z.infer<typeof petSchema>;
 export type PetFile = z.infer<typeof petFileSchema>;
 export type AchievementType = z.infer<typeof achievementTypeSchema>;
@@ -294,10 +550,14 @@ export type Quote = z.infer<typeof quoteSchema>;
 export type Contract = z.infer<typeof contractSchema>;
 export type FormTemplate = z.infer<typeof formTemplateSchema>;
 export type FormSubmission = z.infer<typeof formSubmissionSchema>;
+export type PackageItem = z.infer<typeof packageItemSchema>;
 export type Package = z.infer<typeof packageSchema>;
 export type Credit = z.infer<typeof creditSchema>;
 export type Workflow = z.infer<typeof workflowSchema>;
+export type WorkflowAutoEnrollmentTrigger = z.infer<typeof workflowAutoEnrollmentTriggerSchema>;
 export type WorkflowEnrollment = z.infer<typeof workflowEnrollmentSchema>;
+export type WorkflowStep = z.infer<typeof workflowStepSchema>;
+export type WorkflowStepExecution = z.infer<typeof workflowStepExecutionSchema>;
 export type ScheduledTask = z.infer<typeof scheduledTaskSchema>;
 export type TaskLog = z.infer<typeof taskLogSchema>;
 export type Notification = z.infer<typeof notificationSchema>;

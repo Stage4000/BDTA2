@@ -35,6 +35,143 @@ describe("infrastructure adapters", () => {
     expect(state.bookings[0]?.icalAccess?.token).toContain("ical-booking-");
   });
 
+  it("auto-enrolls clients into workflows from public booking triggers in memory", async () => {
+    const state = createInMemoryPlatformState({
+      portalUsers: [
+        {
+          clientId: "client-1",
+          email: "client@example.com",
+          displayName: "Client One",
+          passwordHash: "hash-1",
+          archived: false
+        }
+      ],
+      workflows: [{
+        id: "workflow-1",
+        name: "Booking Follow-up",
+        description: "Triggered after booking.",
+        trigger: "appointment_booking",
+        active: true,
+        createdAt: "2026-05-27T18:00:00.000Z"
+      }],
+      workflowTriggers: [{
+        id: "workflow-trigger-1",
+        workflowId: "workflow-1",
+        triggerType: "appointment_booking",
+        appointmentTypeId: "svc-private-lesson",
+        formTemplateId: null,
+        active: true,
+        createdAt: "2026-05-27T18:00:00.000Z"
+      }],
+      workflowSteps: [{
+        id: "workflow-step-1",
+        workflowId: "workflow-1",
+        stepOrder: 1,
+        stepName: "Follow-up Email",
+        emailSubject: "Thanks for booking",
+        emailBodyHtml: "<p>See you soon.</p>",
+        emailBodyText: "See you soon.",
+        delayType: "immediate",
+        delayValue: null,
+        scheduledDate: null,
+        attachContractId: null,
+        attachFormId: null,
+        attachQuoteId: null,
+        attachInvoiceId: null,
+        includeAppointmentLink: false,
+        appointmentTypeId: null,
+        createdAt: "2026-05-27T18:00:00.000Z",
+        updatedAt: "2026-05-27T18:00:00.000Z"
+      }]
+    });
+
+    const runtime = buildApiRuntime(createInMemoryApiDependencies(state));
+    const result = await runtime.handlers.handlePublicBooking({
+      serviceId: "svc-private-lesson",
+      clientEmail: "client@example.com",
+      petIds: ["pet-1"],
+      requestedStart: "2026-06-01T16:00:00.000Z",
+      requestedEnd: "2026-06-01T17:00:00.000Z",
+      turnstileToken: "turnstile-ok"
+    });
+
+    expect(result.status).toBe(201);
+    expect(state.workflowEnrollments).toHaveLength(1);
+    expect(state.workflowEnrollments[0]).toMatchObject({
+      workflowId: "workflow-1",
+      clientId: "client-1",
+      enrolledByAdminUserId: null
+    });
+    expect(state.workflowStepExecutions).toHaveLength(1);
+    expect(state.workflowStepExecutions[0]).toMatchObject({
+      enrollmentId: state.workflowEnrollments[0]?.id,
+      stepId: "workflow-step-1",
+      status: "pending"
+    });
+  });
+
+  it("auto-enrolls portal clients only once from submitted form triggers in memory", async () => {
+    const state = createInMemoryPlatformState({
+      portalUsers: [
+        {
+          clientId: "client-1",
+          email: "client@example.com",
+          displayName: "Client One",
+          passwordHash: "hash-1",
+          archived: false
+        }
+      ],
+      formSubmissions: [{
+        id: "submission-1",
+        templateId: "form-template-1",
+        clientId: "client-1",
+        templateName: "Intake Form",
+        formType: "booking_form",
+        templateIsInternal: false,
+        templateShowInClientPortal: true,
+        submittedAt: null,
+        publicAccess: null
+      }],
+      workflows: [{
+        id: "workflow-1",
+        name: "Form Follow-up",
+        description: "Triggered after form submission.",
+        trigger: "form_submission",
+        active: true,
+        createdAt: "2026-05-27T18:00:00.000Z"
+      }],
+      workflowTriggers: [{
+        id: "workflow-trigger-1",
+        workflowId: "workflow-1",
+        triggerType: "form_submission",
+        appointmentTypeId: null,
+        formTemplateId: "form-template-1",
+        active: true,
+        createdAt: "2026-05-27T18:00:00.000Z"
+      }]
+    });
+
+    const runtime = buildApiRuntime(createInMemoryApiDependencies(state));
+    const session = {
+      actorId: "client-1",
+      actorType: "portal_user" as const,
+      issuedAt: "2026-05-27T18:00:00.000Z",
+      expiresAt: "2026-05-27T19:00:00.000Z"
+    };
+
+    const firstSubmit = await runtime.handlers.handlePortalFormSubmit(session, "submission-1");
+    const secondSubmit = await runtime.handlers.handlePortalFormSubmit(session, "submission-1");
+
+    expect(firstSubmit.status).toBe(200);
+    expect(secondSubmit.status).toBe(200);
+    expect(state.workflowEnrollments).toHaveLength(1);
+    expect(state.workflowEnrollments[0]).toMatchObject({
+      workflowId: "workflow-1",
+      clientId: "client-1",
+      enrolledByAdminUserId: null
+    });
+  });
+
   it("records portal login activity and issues a session through infrastructure dependencies", async () => {
     const state = createInMemoryPlatformState({
       portalUsers: [
@@ -150,6 +287,55 @@ describe("infrastructure adapters", () => {
       throw new Error("Expected captcha failure response.");
     }
     expect(result.body.error.code).toBe("captcha_failed");
+  });
+
+  it("persists public contact leads and deterministic note merges through in-memory dependencies", async () => {
+    const state = createInMemoryPlatformState({
+      portalUsers: [
+        {
+          clientId: "client-1",
+          email: "contact-existing@example.com",
+          displayName: "Older Duplicate",
+          passwordHash: "",
+          phone: "555-9999",
+          notes: "Old duplicate note",
+          archived: false
+        },
+        {
+          clientId: "client-2",
+          email: "contact-existing@example.com",
+          displayName: "Old Name",
+          passwordHash: "",
+          phone: "555-0000",
+          notes: "Existing note",
+          archived: false
+        }
+      ],
+      captchaVerifier: async () => true
+    });
+
+    const runtime = buildApiRuntime(createInMemoryApiDependencies(state));
+    const result = await runtime.handlers.handlePublicContact({
+      name: "Attempted Update Name",
+      email: "CONTACT-EXISTING@EXAMPLE.COM",
+      phone: "555-2200",
+      service: "walking",
+      message: "Second message from existing contact.",
+      turnstileToken: "turnstile-ok"
+    });
+
+    expect(result.status).toBe(200);
+    if ("error" in result.body) {
+      throw new Error("Expected successful public contact response.");
+    }
+    expect(state.portalUsers[0]?.notes).toBe("Old duplicate note");
+    expect(state.portalUsers[1]).toMatchObject({
+      displayName: "Old Name",
+      phone: "555-0000"
+    });
+    expect(state.portalUsers[1]?.notes).toContain("Existing note");
+    expect(state.portalUsers[1]?.notes).toContain("Service interested in: walking");
+    expect(state.portalUsers[1]?.notes).toContain("Message: Second message from existing contact.");
   });
 
   it("applies stripe callback invoice updates through in-memory dependencies", async () => {
@@ -288,6 +474,7 @@ describe("infrastructure adapters", () => {
         id: "credit-1",
         clientId: "client-1",
         packageId: "package-1",
+        appointmentTypeId: "appointment-type-1",
         remainingUnits: 4
       }]
     });
@@ -332,6 +519,7 @@ describe("infrastructure adapters", () => {
         clientId: "client-1",
         name: "Buddy",
         species: "Dog",
+        petSittingNotes: "Use the side gate and towel paws before re-entry.",
         archived: false
       }]
     });
@@ -370,6 +558,7 @@ describe("infrastructure adapters", () => {
         clientId: "client-1",
         name: "Buddy",
         species: "Dog",
+        petSittingNotes: "Use the side gate and towel paws before re-entry.",
         archived: false
       }],
       petFileContents: {
@@ -441,6 +630,7 @@ describe("infrastructure adapters", () => {
         clientId: "client-1",
         name: "Buddy",
         species: "Dog",
+        petSittingNotes: "Use the side gate and towel paws before re-entry.",
         archived: false
       }],
       petFiles: [{
@@ -580,6 +770,234 @@ describe("infrastructure adapters", () => {
       externalEventUrl: expect.stringContaining("calendar.google.com"),
       syncedAt: "2026-05-27T18:00:00.000Z"
     }]);
+  });
+
+  it("persists admin appointment-type, email-template, and scheduled-task configuration through in-memory dependencies", async () => {
+    const state = createInMemoryPlatformState({
+      appointmentTypes: [{
+        id: "appointment-type-1",
+        name: "Private Coaching",
+        description: "One-on-one coaching session.",
+        bulletPoints: ["Behavior assessment", "Homework plan"],
+        adminUserId: "admin-1",
+        durationMinutes: 90,
+        bufferBeforeMinutes: 15,
+        bufferAfterMinutes: 15,
+        useTravelTimeBuffer: true,
+        travelTimeMinutes: 20,
+        advanceBookingMinDays: 2,
+        advanceBookingMaxDays: 45,
+        cancellationNoticeHours: 24,
+        requiresForms: true,
+        formTemplateIds: ["form-template-1"],
+        requiresContract: true,
+        contractTemplateId: "contract-template-1",
+        autoInvoice: true,
+        invoiceDueDays: 7,
+        invoiceDueTiming: "after",
+        defaultAmount: 225,
+        consumesCredits: true,
+        creditCount: 2,
+        isGroupClass: false,
+        maxParticipants: 1,
+        publicAvailable: true,
+        portalAvailable: true,
+        scheduleType: "recurring",
+        specificDate: null,
+        specificDates: [],
+        availableDays: [1, 2, 3, 4, 5],
+        availableStartTime: "09:00",
+        availableEndTime: "17:00",
+        timeSlotInterval: 30,
+        perDaySchedule: {},
+        isMiniSession: false,
+        miniSessionLocation: "",
+        miniSessionTopic: "",
+        isFieldRental: false,
+        fieldRentalLocation: "",
+        groupClassLocation: "",
+        locationTypes: ["client_address"],
+        confirmationTemplateId: "email-template-1",
+        bookingRequestTemplateId: null,
+        invoiceTemplateId: null,
+        reminderTemplateId: null,
+        cancellationTemplateId: null,
+        requiresAdminConfirmation: true,
+        usesResource: true,
+        resourceName: "Trainer Vehicle",
+        resourceCapacity: 1,
+        resourceAllocation: "per_appointment",
+        uniqueLink: "private-coaching-link",
+        active: true
+      }] as never,
+      emailTemplates: [{
+        id: "email-template-1",
+        name: "Booking Confirmation",
+        templateType: "booking_confirmation",
+        subject: "Confirmed",
+        bodyHtml: "<p>Confirmed.</p>",
+        bodyText: "Confirmed.",
+        active: true
+      }] as never,
+      scheduledTasks: [{
+        id: "scheduled-task-1",
+        name: "Workflow Processor",
+        taskType: "workflow_processor",
+        active: true,
+        scheduleType: "interval",
+        scheduleValue: "60",
+        lastRunAt: "2026-05-27T17:00:00.000Z",
+        nextRunAt: "2026-05-27T18:00:00.000Z"
+      }] as never
+    });
+
+    const dependencies = createInMemoryApiDependencies(state) as Record<string, unknown>;
+    const adminConfiguration = dependencies.adminConfiguration as Record<string, (...args: unknown[]) => Promise<unknown>>;
+
+    const appointmentTypes = await adminConfiguration.listAdminAppointmentTypes();
+    const createdAppointmentType = await adminConfiguration.createAdminAppointmentType("admin-1", {
+      name: "Mini Session Saturday",
+      description: "Short-format mini session.",
+      bulletPoints: ["Outdoor setup"],
+      adminUserId: "admin-1",
+      durationMinutes: 45,
+      bufferBeforeMinutes: 10,
+      bufferAfterMinutes: 10,
+      useTravelTimeBuffer: false,
+      travelTimeMinutes: 0,
+      advanceBookingMinDays: 1,
+      advanceBookingMaxDays: 14,
+      cancellationNoticeHours: 12,
+      requiresForms: true,
+      formTemplateIds: ["form-template-1"],
+      requiresContract: false,
+      contractTemplateId: null,
+      autoInvoice: true,
+      invoiceDueDays: 3,
+      invoiceDueTiming: "before",
+      defaultAmount: 95,
+      consumesCredits: false,
+      creditCount: 1,
+      isGroupClass: false,
+      maxParticipants: 1,
+      publicAvailable: false,
+      portalAvailable: true,
+      scheduleType: "specific_date",
+      specificDate: "2026-06-21",
+      specificDates: [],
+      availableDays: [0],
+      availableStartTime: "10:00",
+      availableEndTime: "14:00",
+      timeSlotInterval: 30,
+      perDaySchedule: {},
+      isMiniSession: true,
+      miniSessionLocation: "Downtown Park",
+      miniSessionTopic: "Recall refresh",
+      isFieldRental: false,
+      fieldRentalLocation: "",
+      groupClassLocation: "",
+      locationTypes: [],
+      confirmationTemplateId: "email-template-1",
+      bookingRequestTemplateId: null,
+      invoiceTemplateId: null,
+      reminderTemplateId: null,
+      cancellationTemplateId: null,
+      requiresAdminConfirmation: true,
+      usesResource: false,
+      resourceName: "",
+      resourceCapacity: 1,
+      resourceAllocation: "per_appointment",
+      uniqueLink: "mini-session-june-21",
+      active: true
+    });
+    const updatedAppointmentType = await adminConfiguration.updateAdminAppointmentType("appointment-type-1", "admin-1", {
+      name: "Private Coaching Updated",
+      description: "Updated coaching session.",
+      bulletPoints: ["Updated assessment"],
+      adminUserId: "admin-1",
+      durationMinutes: 60,
+      bufferBeforeMinutes: 5,
+      bufferAfterMinutes: 5,
+      useTravelTimeBuffer: false,
+      travelTimeMinutes: 0,
+      advanceBookingMinDays: 1,
+      advanceBookingMaxDays: 30,
+      cancellationNoticeHours: 12,
+      requiresForms: false,
+      formTemplateIds: [],
+      requiresContract: false,
+      contractTemplateId: null,
+      autoInvoice: false,
+      invoiceDueDays: 7,
+      invoiceDueTiming: "after",
+      defaultAmount: 175,
+      consumesCredits: false,
+      creditCount: 1,
+      isGroupClass: false,
+      maxParticipants: 1,
+      publicAvailable: true,
+      portalAvailable: true,
+      scheduleType: "recurring",
+      specificDate: null,
+      specificDates: [],
+      availableDays: [1, 2, 3],
+      availableStartTime: "08:00",
+      availableEndTime: "12:00",
+      timeSlotInterval: 30,
+      perDaySchedule: {},
+      isMiniSession: false,
+      miniSessionLocation: "",
+      miniSessionTopic: "",
+      isFieldRental: false,
+      fieldRentalLocation: "",
+      groupClassLocation: "",
+      locationTypes: ["client_address"],
+      confirmationTemplateId: "email-template-1",
+      bookingRequestTemplateId: null,
+      invoiceTemplateId: null,
+      reminderTemplateId: null,
+      cancellationTemplateId: null,
+      requiresAdminConfirmation: false,
+      usesResource: false,
+      resourceName: "",
+      resourceCapacity: 1,
+      resourceAllocation: "per_appointment",
+      uniqueLink: "private-coaching-updated",
+      active: true
+    });
+    const emailTemplates = await adminConfiguration.listAdminEmailTemplates();
+    const createdEmailTemplate = await adminConfiguration.createAdminEmailTemplate("admin-1", {
+      name: "Reminder Template",
+      templateType: "booking_reminder",
+      subject: "Reminder",
+      bodyHtml: "<p>Reminder.</p>",
+      bodyText: "Reminder.",
+      active: true
+    });
+    const updatedScheduledTask = await adminConfiguration.updateAdminScheduledTask("scheduled-task-1", "admin-1", {
+      name: "Workflow Processor Revised",
+      taskType: "workflow_processor",
+      scheduleType: "interval",
+      scheduleValue: "30",
+      active: true
+    });
+
+    expect(Array.isArray(appointmentTypes)).toBe(true);
+    expect(createdAppointmentType).toEqual(expect.objectContaining({
+      id: expect.stringMatching(/^appointment-type-/)
+    }));
+    expect(updatedAppointmentType).toEqual(expect.objectContaining({
+      id: "appointment-type-1",
+      uniqueLink: "private-coaching-updated"
+    }));
+    expect(Array.isArray(emailTemplates)).toBe(true);
+    expect(createdEmailTemplate).toEqual(expect.objectContaining({
+      id: expect.stringMatching(/^email-template-/)
+    }));
+    expect(updatedScheduledTask).toEqual(expect.objectContaining({
+      id: "scheduled-task-1",
+      scheduleValue: "30"
+    }));
   });
 
   it("reads persisted calendar sync links through in-memory admin dependencies", async () => {

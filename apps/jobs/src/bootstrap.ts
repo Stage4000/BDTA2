@@ -23,25 +23,37 @@ import {
   type WorkflowProcessorDependencies
 } from "@bdta/application";
 import {
+  applyMySqlBootstrap,
   createMySqlJobProcessorDependencies,
   createMySqlPoolFromDatabaseUrl,
-  getMySqlBootstrapStatements,
+  resolveMySqlPortalBaseUrl,
   type SqlExecutor
 } from "@bdta/infrastructure";
-import type { Booking, Contract, FormSubmission, OutboundEmailMessage, Quote, UnmatchedEmail, Workflow, WorkflowEnrollment } from "@bdta/domain";
+import type { Booking, Contract, FormSubmission, OutboundEmailMessage, Quote, UnmatchedEmail, Workflow, WorkflowEnrollment, WorkflowStep, WorkflowStepExecution } from "@bdta/domain";
 import type { JobEnvelope, SupportedJobKind } from "@bdta/contracts";
 import { randomUUID } from "node:crypto";
 
 type BootstrapOptions = {
   executor: SqlExecutor;
-  portalBaseUrl: string;
+  portalBaseUrl?: string;
   now?: () => string;
 };
 
+type WorkerPollOptions = BootstrapOptions & {
+  jobBatchSize: number;
+  emailBatchSize: number;
+  pollIntervalMs: number;
+  onCycleError?: (error: unknown) => void | Promise<void>;
+};
+
+type ProductionJobWorker = {
+  manifest: typeof jobRuntimeManifest;
+  runtime: Awaited<ReturnType<typeof buildProductionJobRuntime>>;
+  stop(): Promise<void>;
+};
+
 export async function applyProductionJobBootstrap(executor: SqlExecutor): Promise<void> {
-  for (const statement of getMySqlBootstrapStatements()) {
-    await executor.execute(statement);
-  }
+  await applyMySqlBootstrap(executor);
 }
 
 function normalizeBaseUrl(baseUrl: string): string {
@@ -521,13 +533,38 @@ function createMySqlWorkflowProcessorDependencies(
 
   return {
     now,
-    async listDueWorkflowEnrollments(limit) {
+    async listDueWorkflowStepExecutions(limit: number) {
       const [rows] = await executor.execute<Array<{
+        workflow_step_execution_id: string;
+        execution_enrollment_id: string;
+        step_id: string;
+        scheduled_for: string;
+        executed_at: string | null;
+        execution_status: WorkflowStepExecution["status"];
+        error_message: string | null;
         workflow_enrollment_id: string;
         workflow_id: string;
         client_id: string;
         enrolled_at: string;
         completed_at: string | null;
+        enrollment_status: WorkflowEnrollment["status"] | null;
+        workflow_step_id: string;
+        step_order: number;
+        step_name: string;
+        email_subject: string;
+        email_body_html: string;
+        email_body_text: string | null;
+        delay_type: WorkflowStep["delayType"];
+        delay_value: string | null;
+        scheduled_date: string | null;
+        attach_contract_id: string | null;
+        attach_form_id: string | null;
+        attach_quote_id: string | null;
+        attach_invoice_id: string | null;
+        include_appointment_link: number;
+        appointment_type_id: string | null;
+        step_created_at: string | null;
+        step_updated_at: string | null;
         workflow_name: string;
         workflow_trigger: Workflow["trigger"];
         workflow_active: number;
@@ -535,16 +572,25 @@ function createMySqlWorkflowProcessorDependencies(
         recipient_name: string | null;
       }>>(
         [
-          "SELECT we.workflow_enrollment_id, we.workflow_id, we.client_id, we.enrolled_at, we.completed_at,",
+          "SELECT wse.workflow_step_execution_id, wse.enrollment_id AS execution_enrollment_id, wse.step_id,",
+          "wse.scheduled_for, wse.executed_at, wse.status AS execution_status, wse.error_message,",
+          "we.workflow_enrollment_id, we.workflow_id, we.client_id, we.enrolled_at, we.completed_at, we.status AS enrollment_status,",
+          "ws.workflow_step_id, ws.step_order, ws.step_name, ws.email_subject, ws.email_body_html, ws.email_body_text,",
+          "ws.delay_type, ws.delay_value, ws.scheduled_date, ws.attach_contract_id, ws.attach_form_id, ws.attach_quote_id, ws.attach_invoice_id,",
+          "ws.include_appointment_link, ws.appointment_type_id, ws.created_at AS step_created_at, ws.updated_at AS step_updated_at,",
           "w.workflow_name, w.workflow_trigger, w.active AS workflow_active,",
           "c.email AS recipient_email, c.name AS recipient_name",
-          "FROM workflow_enrollments we",
+          "FROM workflow_step_executions wse",
+          "INNER JOIN workflow_enrollments we ON we.workflow_enrollment_id = wse.enrollment_id",
+          "INNER JOIN workflow_steps ws ON ws.workflow_step_id = wse.step_id",
           "INNER JOIN workflows w ON w.workflow_id = we.workflow_id",
           "INNER JOIN clients c ON c.id = we.client_id",
-          "WHERE we.completed_at IS NULL",
+          "WHERE wse.executed_at IS NULL",
+          "AND wse.status = 'pending'",
+          "AND COALESCE(we.status, 'active') = 'active'",
           "AND w.active = 1",
-          "AND we.next_run_at <= ?",
-          "ORDER BY we.next_run_at ASC",
+          "AND wse.scheduled_for <= ?",
+          "ORDER BY wse.scheduled_for ASC",
           "LIMIT ?"
         ].join(" "),
         [now(), limit]
@@ -562,17 +608,86 @@ function createMySqlWorkflowProcessorDependencies(
           workflowId: row.workflow_id,
           clientId: row.client_id,
           enrolledAt: row.enrolled_at,
-          completedAt: row.completed_at
+          completedAt: row.completed_at,
+          status: row.enrollment_status ?? undefined
         } satisfies WorkflowEnrollment,
+        step: {
+          id: row.workflow_step_id,
+          workflowId: row.workflow_id,
+          stepOrder: Number(row.step_order),
+          stepName: row.step_name,
+          emailSubject: row.email_subject,
+          emailBodyHtml: row.email_body_html,
+          emailBodyText: row.email_body_text,
+          delayType: row.delay_type,
+          delayValue: row.delay_value,
+          scheduledDate: row.scheduled_date,
+          attachContractId: row.attach_contract_id,
+          attachFormId: row.attach_form_id,
+          attachQuoteId: row.attach_quote_id,
+          attachInvoiceId: row.attach_invoice_id,
+          includeAppointmentLink: Number(row.include_appointment_link) === 1,
+          appointmentTypeId: row.appointment_type_id,
+          createdAt: row.step_created_at ?? undefined,
+          updatedAt: row.step_updated_at ?? undefined
+        } satisfies WorkflowStep,
+        execution: {
+          id: row.workflow_step_execution_id,
+          enrollmentId: row.execution_enrollment_id,
+          stepId: row.step_id,
+          scheduledFor: row.scheduled_for,
+          executedAt: row.executed_at,
+          status: row.execution_status,
+          errorMessage: row.error_message
+        } satisfies WorkflowStepExecution,
         recipientEmail: row.recipient_email,
         recipientDisplayName: row.recipient_name
       }));
     },
     queueWorkflowEmail,
-    async markWorkflowEnrollmentCompleted(enrollmentId, completedAt) {
+    async markWorkflowStepExecutionCompleted(executionId: string, completedAt: string) {
+      const [executionRows] = await executor.execute<Array<{ enrollment_id: string }>>(
+        [
+          "SELECT enrollment_id",
+          "FROM workflow_step_executions",
+          "WHERE workflow_step_execution_id = ?",
+          "LIMIT 1"
+        ].join(" "),
+        [executionId]
+      );
+      const enrollmentId = executionRows[0]?.enrollment_id ?? null;
+
       await executor.execute(
-        "UPDATE workflow_enrollments SET completed_at = ? WHERE workflow_enrollment_id = ?",
-        [completedAt, enrollmentId]
+        "UPDATE workflow_step_executions SET executed_at = ?, status = 'completed' WHERE workflow_step_execution_id = ?",
+        [completedAt, executionId]
+      );
+
+      if (enrollmentId == null) {
+        return;
+      }
+
+      const [pendingRows] = await executor.execute<Array<{ scheduled_for: string }>>(
+        [
+          "SELECT scheduled_for",
+          "FROM workflow_step_executions",
+          "WHERE enrollment_id = ? AND status = 'pending' AND executed_at IS NULL",
+          "ORDER BY scheduled_for ASC"
+        ].join(" "),
+        [enrollmentId]
+      );
+
+      const nextPending = pendingRows[0]?.scheduled_for ?? null;
+      if (nextPending == null) {
+        await executor.execute(
+          "UPDATE workflow_enrollments SET completed_at = ?, status = 'completed', next_run_at = NULL WHERE workflow_enrollment_id = ?",
+          [completedAt, enrollmentId]
+        );
+        return;
+      }
+
+      await executor.execute(
+        "UPDATE workflow_enrollments SET next_run_at = ? WHERE workflow_enrollment_id = ?",
+        [nextPending, enrollmentId]
       );
     },
     buildPortalClientUrl(clientId) {
@@ -666,28 +781,87 @@ export function createDefaultJobHandlers(
 export async function buildProductionJobRuntime(options: BootstrapOptions) {
   await applyProductionJobBootstrap(options.executor);
   const now = options.now ?? (() => new Date().toISOString());
+  const portalBaseUrl = await resolveMySqlPortalBaseUrl(options.executor, options.portalBaseUrl);
 
   return buildJobRuntime(createMySqlJobProcessorDependencies(options.executor, {
     now,
     handlers: createDefaultJobHandlers({
-      bookingReminder: createMySqlBookingReminderDependencies(options.executor, options.portalBaseUrl),
-      quoteReminder: createMySqlQuoteReminderDependencies(options.executor, options.portalBaseUrl, now),
-      contractReminder: createMySqlContractReminderDependencies(options.executor, options.portalBaseUrl, now),
-      formReminder: createMySqlFormReminderDependencies(options.executor, options.portalBaseUrl, now),
-      invoiceReminder: createMySqlInvoiceReminderDependencies(options.executor, options.portalBaseUrl),
+      bookingReminder: createMySqlBookingReminderDependencies(options.executor, portalBaseUrl),
+      quoteReminder: createMySqlQuoteReminderDependencies(options.executor, portalBaseUrl, now),
+      contractReminder: createMySqlContractReminderDependencies(options.executor, portalBaseUrl, now),
+      formReminder: createMySqlFormReminderDependencies(options.executor, portalBaseUrl, now),
+      invoiceReminder: createMySqlInvoiceReminderDependencies(options.executor, portalBaseUrl),
       scheduledEmailSender: {
         queueScheduledEmail: createQueuedEmailWriter(options.executor)
       },
       inboundEmailProcessing: createMySqlInboundEmailProcessingDependencies(options.executor, now),
       unmatchedEmailCleaner: createMySqlUnmatchedEmailCleanerDependencies(options.executor, now),
-      workflowProcessor: createMySqlWorkflowProcessorDependencies(options.executor, options.portalBaseUrl, now)
+      workflowProcessor: createMySqlWorkflowProcessorDependencies(options.executor, portalBaseUrl, now)
     })
   }));
 }
 
+export async function startProductionJobWorker(options: WorkerPollOptions): Promise<ProductionJobWorker> {
+  const runtime = await buildProductionJobRuntime({
+    executor: options.executor,
+    portalBaseUrl: options.portalBaseUrl,
+    now: options.now
+  });
+
+  await runtime.processDueWork({
+    jobLimit: options.jobBatchSize,
+    emailLimit: options.emailBatchSize
+  });
+
+  let timer: NodeJS.Timeout | null = null;
+  let stopped = false;
+  let inFlightCycle: Promise<void> | null = null;
+  const onCycleError = options.onCycleError ?? ((error: unknown) => {
+    console.error("[bdta-jobs] scheduled worker cycle failed", error);
+  });
+
+  const scheduleNext = () => {
+    if (stopped) {
+      return;
+    }
+
+    timer = setTimeout(() => {
+      timer = null;
+      inFlightCycle = (async () => {
+        try {
+          await runtime.processDueWork({
+            jobLimit: options.jobBatchSize,
+            emailLimit: options.emailBatchSize
+          });
+        } catch (error) {
+          await onCycleError(error);
+        } finally {
+          inFlightCycle = null;
+          scheduleNext();
+        }
+      })();
+    }, options.pollIntervalMs);
+  };
+
+  scheduleNext();
+
+  return {
+    manifest: jobRuntimeManifest,
+    runtime,
+    async stop() {
+      stopped = true;
+      if (timer != null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      await inFlightCycle;
+    }
+  };
+}
+
 export async function startProductionJobWorkerFromDatabaseUrl(input: {
   databaseUrl: string;
-  portalBaseUrl: string;
+  portalBaseUrl?: string;
   now?: () => string;
   jobBatchSize: number;
   emailBatchSize: number;
@@ -701,32 +875,19 @@ export async function startProductionJobWorkerFromDatabaseUrl(input: {
     }
   };
 
-  const runtime = await buildProductionJobRuntime({
+  const worker = await startProductionJobWorker({
     executor,
     portalBaseUrl: input.portalBaseUrl,
-    now: input.now
-  });
-
-  let timer: NodeJS.Timeout | null = setInterval(() => {
-    void runtime.processDueWork({
-      jobLimit: input.jobBatchSize,
-      emailLimit: input.emailBatchSize
-    });
-  }, input.pollIntervalMs);
-
-  await runtime.processDueWork({
-    jobLimit: input.jobBatchSize,
-    emailLimit: input.emailBatchSize
+    now: input.now,
+    jobBatchSize: input.jobBatchSize,
+    emailBatchSize: input.emailBatchSize,
+    pollIntervalMs: input.pollIntervalMs
   });
 
   return {
-    manifest: jobRuntimeManifest,
-    runtime,
+    ...worker,
     async stop() {
-      if (timer != null) {
-        clearInterval(timer);
-        timer = null;
-      }
+      await worker.stop();
       await pool.end();
     }
   };

@@ -664,7 +664,7 @@ describe("job runtime", () => {
     expect(state.unmatchedEmails[0]?.resolvedAt).toBe("2026-05-27T18:00:00.000Z");
   });
 
-  it("processes due workflow enrollments into outbound workflow emails", async () => {
+  it("processes due workflow step executions into outbound workflow emails", async () => {
     const state = createInMemoryPlatformState({
       portalUsers: [{
         clientId: "client-1",
@@ -689,6 +689,24 @@ describe("job runtime", () => {
       trigger: "scheduled" as const,
       active: true
     }];
+    const workflowSteps = [{
+      id: "workflow-step-1",
+      workflowId: "workflow-1",
+      stepOrder: 1,
+      stepName: "Reminder Email",
+      emailSubject: "Reminder for {client_name}",
+      emailBodyHtml: "<p>Hello {client_name}, review {workflow_name}.</p>",
+      emailBodyText: "Hello {client_name}",
+      delayType: "immediate" as const,
+      delayValue: null,
+      scheduledDate: null,
+      attachContractId: null,
+      attachFormId: null,
+      attachQuoteId: null,
+      attachInvoiceId: null,
+      includeAppointmentLink: false,
+      appointmentTypeId: null
+    }];
     const workflowEnrollments = [{
       id: "enrollment-1",
       workflowId: "workflow-1",
@@ -696,40 +714,67 @@ describe("job runtime", () => {
       enrolledAt: "2026-05-27T16:00:00.000Z",
       completedAt: null as string | null
     }];
+    const workflowStepExecutions: Array<{
+      id: string;
+      enrollmentId: string;
+      stepId: string;
+      scheduledFor: string;
+      executedAt: string | null;
+      status: "pending" | "completed";
+      errorMessage: string | null;
+    }> = [{
+      id: "workflow-step-execution-1",
+      enrollmentId: "enrollment-1",
+      stepId: "workflow-step-1",
+      scheduledFor: "2026-05-27T17:00:00.000Z",
+      executedAt: null as string | null,
+      status: "pending",
+      errorMessage: null as string | null
+    }];
 
     const { createDefaultJobHandlers } = await import("../apps/jobs/src/bootstrap.js");
     const runtime = buildJobRuntime(createInMemoryJobProcessorDependencies(state, {
       handlers: createDefaultJobHandlers({
         workflowProcessor: {
           now: state.now,
-          listDueWorkflowEnrollments: async (limit: number) => workflowEnrollments
-            .filter((enrollment) => enrollment.completedAt == null)
+          listDueWorkflowStepExecutions: async (limit: number) => workflowStepExecutions
+            .filter((execution) => execution.status === "pending")
             .slice(0, limit)
-            .map((enrollment) => ({
-              workflow: workflows.find((workflow) => workflow.id === enrollment.workflowId) ?? null,
-              enrollment
+            .map((execution) => ({
+              execution,
+              enrollment: workflowEnrollments.find((enrollment) => enrollment.id === execution.enrollmentId) ?? null,
+              step: workflowSteps.find((step) => step.id === execution.stepId) ?? null
             }))
             .filter((record): record is {
+              execution: typeof workflowStepExecutions[number];
+              step: typeof workflowSteps[number];
               workflow: typeof workflows[number];
               enrollment: typeof workflowEnrollments[number];
-            } => record.workflow != null)
+            } => record.enrollment != null && record.step != null)
             .map((record) => ({
-              workflow: record.workflow,
+              workflow: workflows.find((workflow) => workflow.id === record.enrollment.workflowId) ?? workflows[0],
               enrollment: record.enrollment,
+              step: record.step,
+              execution: record.execution,
               recipientEmail: "workflow-client@example.com",
               recipientDisplayName: "Workflow Client"
             })),
           queueWorkflowEmail: async (message: (typeof state.sentEmails)[number]) => {
             state.queuedEmails.push(message);
           },
-          markWorkflowEnrollmentCompleted: async (enrollmentId: string, completedAt: string) => {
-            const index = workflowEnrollments.findIndex((enrollment) => enrollment.id === enrollmentId);
+          markWorkflowStepExecutionCompleted: async (executionId: string, completedAt: string) => {
+            const index = workflowStepExecutions.findIndex((execution) => execution.id === executionId);
             if (index >= 0) {
-              workflowEnrollments[index] = {
-                ...workflowEnrollments[index],
-                completedAt
+              workflowStepExecutions[index] = {
+                ...workflowStepExecutions[index],
+                executedAt: completedAt,
+                status: "completed"
               };
             }
+            workflowEnrollments[0] = {
+              ...workflowEnrollments[0],
+              completedAt
+            };
           },
           buildPortalClientUrl: (clientId: string) => `https://portal.example.test/portal?client=${clientId}`
         }
@@ -739,13 +784,15 @@ describe("job runtime", () => {
     const result = await runtime.processDueWork();
 
     expect(result.jobResults[0]?.success).toBe(true);
-    expect(result.jobResults[0]?.summary).toContain("Processed 1 workflow enrollment");
+    expect(result.jobResults[0]?.summary).toContain("Processed 1 workflow step execution");
     expect(workflowEnrollments[0]?.completedAt).toBe("2026-05-27T18:00:00.000Z");
+    expect(workflowStepExecutions[0]?.status).toBe("completed");
+    expect(workflowStepExecutions[0]?.executedAt).toBe("2026-05-27T18:00:00.000Z");
     expect(state.sentEmails).toEqual([{
       to: ["workflow-client@example.com"],
-      subject: "Workflow: Invoice Overdue Follow-up",
+      subject: "Reminder for Workflow Client",
       html: expect.stringContaining("https://portal.example.test/portal?client=client-1"),
-      templateKey: "workflow_notification"
+      templateKey: "workflow_step"
     }]);
   });
 });

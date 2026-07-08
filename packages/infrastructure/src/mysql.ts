@@ -1,8 +1,9 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type {
+  AdminConfigurationDependencies,
   AdminCalendarSyncDependencies,
   AdminIdentity,
   AdminLoginDependencies,
@@ -17,7 +18,7 @@ import type {
   ContentManagementDependencies,
   ContactManagementDependencies,
   IntegrationCallbackDependencies,
-  MigrationAuditDependencies,
+  LaunchPreflightDependencies,
   PetFileManagementDependencies,
   PortalCommerceDependencies,
   PublicDocumentAccessDependencies,
@@ -25,10 +26,14 @@ import type {
   PortalSummaryDependencies,
   PortalActorProfileDependencies,
   PortalLoginDependencies,
-  PublicBookingDependencies
+  PublicContactDependencies,
+  PublicPackagePurchaseDependencies,
+  PublicBookingDependencies,
+  WorkflowManagementDependencies
 } from "@bdta/application";
 import type {
   AchievementType,
+  AppointmentType,
   BlogPost,
   Booking,
   Client,
@@ -38,19 +43,26 @@ import type {
   Contract,
   Credit,
   FormSubmission,
+  FormTemplate,
   Invoice,
   OutboundEmailMessage,
   Package,
   Pet,
   PetFile,
   PublicAccessToken,
-  Quote
-  ,
+  Quote,
+  EmailTemplate,
+  ScheduledTask,
   Setting,
-  SitePage
+  SitePage,
+  Workflow,
+  WorkflowAutoEnrollmentTrigger,
+  WorkflowEnrollment,
+  WorkflowStep
 } from "@bdta/domain";
 import { outboundEmailSchema } from "@bdta/domain";
 import { jobEnvelopeSchema, type JobEnvelope, type SupportedJobKind } from "@bdta/contracts";
+import { managedSettingsCatalog } from "@bdta/platform";
 import { compare, hash } from "bcryptjs";
 import { createPool, type Pool, type PoolOptions } from "mysql2/promise.js";
 
@@ -72,6 +84,32 @@ type MySqlApiOptions = {
   petFileContentLoader?: (petId: string, fileName: string) => Promise<Buffer | null>;
   petFileContentWriter?: (petId: string, fileName: string, content: Uint8Array) => Promise<void>;
   petFileContentDeleter?: (petId: string, fileName: string) => Promise<void>;
+  stripeClient?: StripeClient;
+};
+
+type StripeCheckoutSessionCreateInput = {
+  successUrl: string;
+  cancelUrl: string;
+  customerEmail?: string | null;
+  amountTotal: number;
+  itemName: string;
+  itemDescription?: string | null;
+  metadata: Record<string, string>;
+};
+
+type StripeCheckoutSessionSnapshot = {
+  sessionId: string;
+  checkoutUrl: string;
+  expiresAt: string | null;
+  paymentStatus: string;
+  amountTotal: number;
+  paymentIntentId: string | null;
+  metadata: Record<string, string>;
+};
+
+type StripeClient = {
+  createCheckoutSession(input: StripeCheckoutSessionCreateInput): Promise<StripeCheckoutSessionSnapshot>;
+  fetchCheckoutSession(sessionId: string): Promise<StripeCheckoutSessionSnapshot | null>;
 };
 
 type SessionStoreOptions = {
@@ -87,6 +125,233 @@ type MySqlJobProcessorOptions = {
 
 function defaultNow(): string {
   return new Date().toISOString();
+}
+
+function normalizeWebsiteBaseUrl(baseUrl: string): string {
+  const trimmed = baseUrl.trim();
+  if (trimmed === "") {
+    return "";
+  }
+
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) {
+    return trimmed.replace(/\/$/, "");
+  }
+
+  return `https://${trimmed.replace(/\/$/, "")}`;
+}
+
+function normalizeStripeMetadata(input: unknown): Record<string, string> {
+  if (input == null || typeof input !== "object" || Array.isArray(input)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(input)
+      .filter((entry): entry is [string, string | number | boolean] => (
+        typeof entry[0] === "string"
+        && ["string", "number", "boolean"].includes(typeof entry[1])
+      ))
+      .map(([key, value]) => [key, String(value)])
+  );
+}
+
+function readStripePaymentIntentId(input: unknown): string | null {
+  if (typeof input === "string" && input.trim() !== "") {
+    return input.trim();
+  }
+
+  if (input != null && typeof input === "object" && "id" in input && typeof input.id === "string" && input.id.trim() !== "") {
+    return input.id.trim();
+  }
+
+  return null;
+}
+
+function toIsoTimestampFromUnixSeconds(input: unknown): string | null {
+  if (typeof input !== "number" || !Number.isFinite(input)) {
+    return null;
+  }
+
+  return new Date(input * 1000).toISOString();
+}
+
+async function readStripeResponsePayload(response: Response): Promise<Record<string, unknown>> {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (contentType.toLowerCase().includes("application/json")) {
+    return await response.json() as Record<string, unknown>;
+  }
+
+  const text = await response.text();
+  return text.trim() === "" ? {} : { message: text };
+}
+
+function readStripeErrorMessage(payload: Record<string, unknown>): string {
+  const errorPayload = payload.error;
+  if (errorPayload != null && typeof errorPayload === "object" && "message" in errorPayload && typeof errorPayload.message === "string") {
+    return errorPayload.message;
+  }
+
+  if (typeof payload.message === "string" && payload.message.trim() !== "") {
+    return payload.message.trim();
+  }
+
+  return "Stripe request failed.";
+}
+
+function parseStripeSignatureHeader(signatureHeader: string): {
+  timestamp: string;
+  signatures: string[];
+} | null {
+  let timestamp = "";
+  const signatures: string[] = [];
+
+  for (const part of signatureHeader.split(",")) {
+    const [key, ...valueParts] = part.split("=");
+    const normalizedKey = key?.trim() ?? "";
+    const normalizedValue = valueParts.join("=").trim();
+    if (normalizedKey === "t" && normalizedValue !== "") {
+      timestamp = normalizedValue;
+    }
+    if (normalizedKey === "v1" && normalizedValue !== "") {
+      signatures.push(normalizedValue);
+    }
+  }
+
+  return timestamp !== "" && signatures.length > 0
+    ? {
+      timestamp,
+      signatures
+    }
+    : null;
+}
+
+function secureCompare(expected: string, candidate: string): boolean {
+  const expectedBuffer = Buffer.from(expected, "utf8");
+  const candidateBuffer = Buffer.from(candidate, "utf8");
+  return expectedBuffer.length === candidateBuffer.length
+    && timingSafeEqual(expectedBuffer, candidateBuffer);
+}
+
+function createHttpStripeClient(resolveSecretKey: () => Promise<string>): StripeClient {
+  return {
+    async createCheckoutSession(input) {
+      const params = new URLSearchParams();
+      params.set("mode", "payment");
+      params.set("success_url", input.successUrl);
+      params.set("cancel_url", input.cancelUrl);
+      params.set("payment_method_types[0]", "card");
+      params.set("line_items[0][quantity]", "1");
+      params.set("line_items[0][price_data][currency]", "usd");
+      params.set("line_items[0][price_data][unit_amount]", String(Math.max(0, Math.round(input.amountTotal))));
+      params.set("line_items[0][price_data][product_data][name]", input.itemName.trim() === "" ? "Brook's Dog Training Academy" : input.itemName.trim());
+
+      const description = input.itemDescription?.trim() ?? "";
+      if (description !== "") {
+        params.set("line_items[0][price_data][product_data][description]", description);
+      }
+
+      const customerEmail = input.customerEmail?.trim() ?? "";
+      if (customerEmail !== "") {
+        params.set("customer_email", customerEmail);
+      }
+
+      for (const [key, value] of Object.entries(input.metadata)) {
+        if (key.trim() !== "" && value.trim() !== "") {
+          params.set(`metadata[${key}]`, value);
+        }
+      }
+
+      const response = await fetch("https://api.stripe.com/v1/checkout/sessions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${await resolveSecretKey()}`,
+          "content-type": "application/x-www-form-urlencoded"
+        },
+        body: params
+      });
+
+      const payload = await readStripeResponsePayload(response);
+      if (!response.ok) {
+        throw new Error(readStripeErrorMessage(payload));
+      }
+
+      const sessionId = typeof payload.id === "string" ? payload.id.trim() : "";
+      const checkoutUrl = typeof payload.url === "string" ? payload.url.trim() : "";
+      if (sessionId === "" || checkoutUrl === "") {
+        throw new Error("Stripe checkout session response was missing the checkout URL.");
+      }
+
+      return {
+        sessionId,
+        checkoutUrl,
+        expiresAt: toIsoTimestampFromUnixSeconds(payload.expires_at),
+        paymentStatus: typeof payload.payment_status === "string" ? payload.payment_status : "unpaid",
+        amountTotal: typeof payload.amount_total === "number" ? payload.amount_total : Math.max(0, Math.round(input.amountTotal)),
+        paymentIntentId: readStripePaymentIntentId(payload.payment_intent),
+        metadata: normalizeStripeMetadata(payload.metadata)
+      };
+    },
+    async fetchCheckoutSession(sessionId) {
+      const normalizedSessionId = sessionId.trim();
+      if (normalizedSessionId === "") {
+        return null;
+      }
+
+      const response = await fetch(`https://api.stripe.com/v1/checkout/sessions/${encodeURIComponent(normalizedSessionId)}`, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${await resolveSecretKey()}`
+        }
+      });
+
+      const payload = await readStripeResponsePayload(response);
+      if (response.status === 404) {
+        return null;
+      }
+
+      if (!response.ok) {
+        throw new Error(readStripeErrorMessage(payload));
+      }
+
+      const returnedSessionId = typeof payload.id === "string" ? payload.id.trim() : normalizedSessionId;
+      return {
+        sessionId: returnedSessionId,
+        checkoutUrl: typeof payload.url === "string" ? payload.url.trim() : "",
+        expiresAt: toIsoTimestampFromUnixSeconds(payload.expires_at),
+        paymentStatus: typeof payload.payment_status === "string" ? payload.payment_status : "unpaid",
+        amountTotal: typeof payload.amount_total === "number" ? payload.amount_total : 0,
+        paymentIntentId: readStripePaymentIntentId(payload.payment_intent),
+        metadata: normalizeStripeMetadata(payload.metadata)
+      };
+    }
+  };
+}
+
+export async function resolveMySqlPortalBaseUrl(
+  executor: SqlExecutor,
+  override?: string | null
+): Promise<string> {
+  const normalizedOverride = normalizeWebsiteBaseUrl(override ?? "");
+  if (normalizedOverride !== "") {
+    return normalizedOverride;
+  }
+
+  const [rows] = await executor.execute<Array<{ setting_value: string | null }>>(
+    [
+      "SELECT setting_value",
+      "FROM settings",
+      "WHERE setting_key = ?",
+      "LIMIT 1"
+    ].join(" "),
+    ["base_url"]
+  );
+
+  const configuredWebsiteBaseUrl = normalizeWebsiteBaseUrl(rows[0]?.setting_value ?? "");
+  if (configuredWebsiteBaseUrl !== "") {
+    return `${configuredWebsiteBaseUrl}/portal`;
+  }
+
+  return "http://localhost:3000/portal";
 }
 
 function buildPortalUrl(baseUrl: string, clientId: string, requestedReturnTo: string | null): string {
@@ -277,7 +542,7 @@ function toSitePageRecord(row: {
 }
 
 function toSettingRecord(row: {
-  id: number;
+  id: string | number;
   setting_key: string;
   setting_value: string | null;
   setting_type: string;
@@ -300,12 +565,416 @@ function toSettingRecord(row: {
   };
 }
 
-function toPackageRecord(row: { id: number; name: string; is_active: number; price: number }): Package {
+function toAdminSettingsUserRecord(row: {
+  id: string | number;
+  username: string;
+  email: string | null;
+  account_type: string | null;
+  can_manage_admin_users: number | null;
+  can_manage_api_keys: number | null;
+}) {
+  const username = row.username.trim();
+  const accountTypeValue = row.account_type?.trim().toLowerCase() ?? "standard";
+  const isMainAccount = username.toLowerCase() === "admin" || accountTypeValue === "main" || accountTypeValue === "owner";
+  const accountType = isMainAccount
+    ? "main"
+    : (accountTypeValue === "accountant" ? "accountant" : "standard");
+  const isAccountant = accountType === "accountant" || accountTypeValue === "accountant";
+  const role = isMainAccount
+    ? "owner"
+    : (accountTypeValue === "staff" ? "staff" : isAccountant ? "accountant" : "admin");
+
+  return {
+    actorId: String(row.id),
+    username,
+    email: row.email?.trim() ? row.email.trim() : `${username}@example.com`,
+    accountType,
+    role,
+    isMainAccount,
+    canManageAdminUsers: isMainAccount ? true : (!isAccountant && Number(row.can_manage_admin_users ?? 0) === 1),
+    canManageApiKeys: isMainAccount ? true : (!isAccountant && Number(row.can_manage_api_keys ?? 0) === 1),
+    active: true
+  } as const;
+}
+
+function toEmailTemplateRecord(row: {
+  id: number;
+  name: string;
+  template_type: string;
+  subject: string;
+  body_html: string | null;
+  body_text: string | null;
+  is_active: number;
+  created_at: string | null;
+  updated_at: string | null;
+}): EmailTemplate {
+  return {
+    id: String(row.id),
+    name: row.name,
+    templateType: row.template_type,
+    subject: row.subject,
+    bodyHtml: row.body_html ?? "",
+    bodyText: row.body_text ?? "",
+    active: Number(row.is_active) === 1,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function parseStringList(value: string | null): string[] {
+  if (value == null || value.trim() === "") {
+    return [];
+  }
+
+  if (value.trim().startsWith("[")) {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string" && item.trim() !== "") : [];
+    } catch {
+      return [];
+    }
+  }
+
+  return value
+    .split(/[\n,]/)
+    .map((item) => item.trim())
+    .filter((item) => item !== "");
+}
+
+function parseIntegerList(value: string | null): number[] {
+  return parseStringList(value).map((item) => Number.parseInt(item, 10)).filter((item) => Number.isInteger(item));
+}
+
+function parseRecordValue<T extends Record<string, unknown>>(value: string | null): T {
+  if (value == null || value.trim() === "") {
+    return {} as T;
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return typeof parsed === "object" && parsed != null && !Array.isArray(parsed) ? parsed as T : {} as T;
+  } catch {
+    return {} as T;
+  }
+}
+
+function parseArrayValue<T>(value: string | null): T[] {
+  if (value == null || value.trim() === "") {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? parsed as T[] : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseLegacyIndexedArrayValue<T>(value: string | null): T[] {
+  if (value == null || value.trim() === "") {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (Array.isArray(parsed)) {
+      return parsed as T[];
+    }
+
+    if (typeof parsed !== "object" || parsed == null) {
+      return [];
+    }
+
+    const entries = Object.entries(parsed)
+      .map(([key, item]) => ({ index: Number.parseInt(key, 10), item }))
+      .filter((entry) => Number.isInteger(entry.index) && entry.index >= 0)
+      .sort((left, right) => left.index - right.index);
+    if (entries.length === 0) {
+      return [];
+    }
+
+    const result: T[] = [];
+    for (const entry of entries) {
+      result[entry.index] = entry.item as T;
+    }
+
+    return result;
+  } catch {
+    return [];
+  }
+}
+
+type FormSubmissionRow = {
+  id: number;
+  template_id: number;
+  client_id: number;
+  booking_id?: number | null;
+  pet_id?: number | null;
+  template_name?: string | null;
+  template_description?: string | null;
+  template_fields?: string | null;
+  form_type?: string | null;
+  template_is_internal?: number | null;
+  template_show_in_client_portal?: number | null;
+  status?: string | null;
+  client_name?: string | null;
+  client_email?: string | null;
+  client_phone?: string | null;
+  pet_name?: string | null;
+  service_type?: string | null;
+  appointment_datetime?: string | null;
+  submitted_by?: number | null;
+  submitted_by_name?: string | null;
+  reviewed_by?: number | null;
+  reviewed_by_name?: string | null;
+  reviewed_at?: string | null;
+  notes?: string | null;
+  responses?: string | null;
+  submitted_at: string | null;
+  access_token: string | null;
+};
+
+function mapFormSubmissionRow(row: FormSubmissionRow, issuedAt: string): FormSubmission {
+  const appointmentDateTime = row.appointment_datetime?.trim() ?? "";
+  const serviceType = row.service_type?.trim() ?? "";
+  const defaultStatus = row.reviewed_at != null
+    ? "reviewed"
+    : row.submitted_at == null
+      ? "pending"
+      : "submitted";
+
+  return {
+    id: String(row.id),
+    templateId: String(row.template_id),
+    clientId: String(row.client_id),
+    clientName: row.client_name ?? null,
+    bookingId: row.booking_id == null ? null : String(row.booking_id),
+    bookingSummary: appointmentDateTime === "" && serviceType === ""
+      ? null
+      : [serviceType, appointmentDateTime].filter((item) => item !== "").join(" - "),
+    petId: row.pet_id == null ? null : String(row.pet_id),
+    petName: row.pet_name ?? null,
+    templateName: row.template_name ?? null,
+    templateDescription: row.template_description ?? null,
+    templateFields: parseArrayValue<Record<string, unknown>>(row.template_fields ?? null),
+    formType: row.form_type ?? undefined,
+    templateIsInternal: row.template_is_internal == null ? undefined : row.template_is_internal !== 0,
+    templateShowInClientPortal: row.template_show_in_client_portal == null ? undefined : row.template_show_in_client_portal !== 0,
+    status: row.status ?? defaultStatus,
+    submittedByAdminUserId: row.submitted_by == null ? null : String(row.submitted_by),
+    submittedByName: row.submitted_by_name ?? null,
+    reviewedByAdminUserId: row.reviewed_by == null ? null : String(row.reviewed_by),
+    reviewedByName: row.reviewed_by_name ?? null,
+    reviewedAt: row.reviewed_at ?? null,
+    notes: row.notes ?? "",
+    contactName: row.client_name ?? null,
+    contactEmail: row.client_email ?? null,
+    contactPhone: row.client_phone ?? null,
+    responses: parseLegacyIndexedArrayValue<unknown>(row.responses ?? null),
+    submittedAt: row.submitted_at,
+    publicAccess: row.access_token == null ? null : {
+      token: row.access_token,
+      issuedAt,
+      expiresAt: null,
+      legacySourceId: String(row.id)
+    }
+  };
+}
+
+type FormTemplateRow = {
+  id: number;
+  name: string;
+  description: string | null;
+  fields: string | null;
+  form_type: string | null;
+  required_frequency: string | null;
+  appointment_type_id: number | null;
+  is_internal: number | null;
+  show_in_client_portal: number | null;
+  is_active: number | null;
+};
+
+function mapFormTemplateRow(row: FormTemplateRow): FormTemplate {
+  return {
+    id: String(row.id),
+    name: row.name,
+    active: Number(row.is_active ?? 0) === 1,
+    description: row.description ?? "",
+    fields: parseArrayValue<Record<string, unknown>>(row.fields),
+    formType: row.form_type ?? undefined,
+    requiredFrequency: row.required_frequency ?? null,
+    appointmentTypeId: row.appointment_type_id == null ? null : String(row.appointment_type_id),
+    templateIsInternal: row.is_internal == null ? undefined : row.is_internal !== 0,
+    templateShowInClientPortal: row.show_in_client_portal == null ? undefined : row.show_in_client_portal !== 0
+  };
+}
+
+function toAppointmentTypeRecord(row: {
+  id: number;
+  name: string;
+  description: string | null;
+  bullet_points: string | null;
+  admin_user_id: number | null;
+  duration_minutes: number | null;
+  buffer_before_minutes: number | null;
+  buffer_after_minutes: number | null;
+  use_travel_time_buffer: number | null;
+  travel_time_minutes: number | null;
+  advance_booking_min_days: number | null;
+  advance_booking_max_days: number | null;
+  cancellation_notice_hours: number | null;
+  requires_forms: number | null;
+  form_template_ids: string | null;
+  requires_contract: number | null;
+  contract_template_id: number | null;
+  auto_invoice: number | null;
+  invoice_due_days: number | null;
+  invoice_due_timing: string | null;
+  default_amount: number | null;
+  consumes_credits: number | null;
+  credit_count: number | null;
+  is_group_class: number | null;
+  max_participants: number | null;
+  is_active: number | null;
+  public_available: number | null;
+  portal_available: number | null;
+  schedule_type: string | null;
+  specific_date: string | null;
+  specific_dates: string | null;
+  available_days: string | null;
+  available_start_time: string | null;
+  available_end_time: string | null;
+  time_slot_interval: number | null;
+  is_mini_session: number | null;
+  mini_session_location: string | null;
+  mini_session_topic: string | null;
+  is_field_rental: number | null;
+  field_rental_location: string | null;
+  group_class_location: string | null;
+  per_day_schedule: string | null;
+  location_types: string | null;
+  confirmation_template_id: number | null;
+  booking_request_template_id: number | null;
+  invoice_template_id: number | null;
+  reminder_template_id: number | null;
+  cancellation_template_id: number | null;
+  requires_admin_confirmation: number | null;
+  uses_resource: number | null;
+  resource_name: string | null;
+  resource_capacity: number | null;
+  resource_allocation: string | null;
+  unique_link: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}): AppointmentType {
+  return {
+    id: String(row.id),
+    name: row.name,
+    description: row.description ?? "",
+    bulletPoints: parseStringList(row.bullet_points),
+    adminUserId: row.admin_user_id == null ? null : String(row.admin_user_id),
+    durationMinutes: Number(row.duration_minutes ?? 60),
+    bufferBeforeMinutes: Number(row.buffer_before_minutes ?? 0),
+    bufferAfterMinutes: Number(row.buffer_after_minutes ?? 0),
+    useTravelTimeBuffer: Number(row.use_travel_time_buffer ?? 0) === 1,
+    travelTimeMinutes: Number(row.travel_time_minutes ?? 0),
+    advanceBookingMinDays: Number(row.advance_booking_min_days ?? 1),
+    advanceBookingMaxDays: Number(row.advance_booking_max_days ?? 90),
+    cancellationNoticeHours: Number(row.cancellation_notice_hours ?? 0),
+    requiresForms: Number(row.requires_forms ?? 0) === 1,
+    formTemplateIds: parseStringList(row.form_template_ids),
+    requiresContract: Number(row.requires_contract ?? 0) === 1,
+    contractTemplateId: row.contract_template_id == null ? null : String(row.contract_template_id),
+    autoInvoice: Number(row.auto_invoice ?? 0) === 1,
+    invoiceDueDays: Number(row.invoice_due_days ?? 7),
+    invoiceDueTiming: row.invoice_due_timing ?? "after",
+    defaultAmount: Number(row.default_amount ?? 0),
+    consumesCredits: Number(row.consumes_credits ?? 0) === 1,
+    creditCount: Number(row.credit_count ?? 1),
+    isGroupClass: Number(row.is_group_class ?? 0) === 1,
+    maxParticipants: Number(row.max_participants ?? 1),
+    publicAvailable: Number(row.public_available ?? 0) === 1,
+    portalAvailable: Number(row.portal_available ?? 0) === 1,
+    scheduleType: row.schedule_type ?? "recurring",
+    specificDate: row.specific_date,
+    specificDates: parseArrayValue(row.specific_dates),
+    availableDays: parseIntegerList(row.available_days),
+    availableStartTime: row.available_start_time ?? "09:00",
+    availableEndTime: row.available_end_time ?? "17:00",
+    timeSlotInterval: Number(row.time_slot_interval ?? 30),
+    perDaySchedule: parseRecordValue(row.per_day_schedule),
+    isMiniSession: Number(row.is_mini_session ?? 0) === 1,
+    miniSessionLocation: row.mini_session_location ?? "",
+    miniSessionTopic: row.mini_session_topic ?? "",
+    isFieldRental: Number(row.is_field_rental ?? 0) === 1,
+    fieldRentalLocation: row.field_rental_location ?? "",
+    groupClassLocation: row.group_class_location ?? "",
+    locationTypes: parseStringList(row.location_types),
+    confirmationTemplateId: row.confirmation_template_id == null ? null : String(row.confirmation_template_id),
+    bookingRequestTemplateId: row.booking_request_template_id == null ? null : String(row.booking_request_template_id),
+    invoiceTemplateId: row.invoice_template_id == null ? null : String(row.invoice_template_id),
+    reminderTemplateId: row.reminder_template_id == null ? null : String(row.reminder_template_id),
+    cancellationTemplateId: row.cancellation_template_id == null ? null : String(row.cancellation_template_id),
+    requiresAdminConfirmation: Number(row.requires_admin_confirmation ?? 0) === 1,
+    usesResource: Number(row.uses_resource ?? 0) === 1,
+    resourceName: row.resource_name ?? "",
+    resourceCapacity: Number(row.resource_capacity ?? 1),
+    resourceAllocation: row.resource_allocation ?? "per_appointment",
+    uniqueLink: row.unique_link ?? String(row.id),
+    active: Number(row.is_active ?? 1) === 1,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function toScheduledTaskRecord(row: {
+  id: number;
+  task_name: string;
+  task_type: string;
+  schedule_type: string;
+  schedule_value: string | null;
+  is_active: number;
+  last_run: string | null;
+  next_run: string | null;
+}): ScheduledTask {
+  return {
+    id: String(row.id),
+    name: row.task_name,
+    taskType: row.task_type,
+    scheduleType: row.schedule_type,
+    scheduleValue: row.schedule_value ?? "",
+    active: Number(row.is_active) === 1,
+    lastRunAt: row.last_run,
+    nextRunAt: row.next_run
+  };
+}
+
+function toPackageRecord(row: {
+  id: number;
+  name: string;
+  is_active: number;
+  price: number;
+  description?: string | null;
+  bullet_points?: string | null;
+  expiration_days?: number | null;
+  share_token?: string | null;
+  portal_available?: number | null;
+  form_template_id?: number | null;
+  items?: Package["items"];
+}): Package {
   return {
     id: String(row.id),
     name: row.name,
     active: Number(row.is_active) === 1,
-    price: Number(row.price)
+    price: Number(row.price),
+    description: row.description ?? "",
+    bulletPoints: parseStringList(row.bullet_points ?? null),
+    expirationDays: row.expiration_days == null ? null : Number(row.expiration_days),
+    shareToken: row.share_token ?? null,
+    portalAvailable: Number(row.portal_available ?? 0) === 1,
+    formTemplateId: row.form_template_id == null ? null : String(row.form_template_id),
+    items: row.items ?? []
   };
 }
 
@@ -314,6 +983,7 @@ function toPetRecord(row: {
   client_id: number;
   name: string;
   species: string;
+  pet_sitting_notes: string | null;
   is_active: number;
 }): Pet {
   return {
@@ -321,6 +991,7 @@ function toPetRecord(row: {
     clientId: String(row.client_id),
     name: row.name,
     species: row.species,
+    petSittingNotes: row.pet_sitting_notes ?? "",
     archived: Number(row.is_active) !== 1
   };
 }
@@ -427,6 +1098,7 @@ function toCreditRecord(row: {
   id: number;
   client_id: number;
   package_id: number | null;
+  appointment_type_id: number;
   total_credits: number;
   used_credits: number;
 }): Credit {
@@ -434,6 +1106,7 @@ function toCreditRecord(row: {
     id: String(row.id),
     clientId: String(row.client_id),
     packageId: row.package_id == null ? null : String(row.package_id),
+    appointmentTypeId: String(row.appointment_type_id),
     remainingUnits: Math.max(0, Number(row.total_credits) - Number(row.used_credits))
   };
 }
@@ -547,6 +1220,302 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
   const petFileContentLoader = options.petFileContentLoader ?? createPetFileContentLoader(petUploadsBaseDir);
   const petFileContentWriter = options.petFileContentWriter ?? createPetFileContentWriter(petUploadsBaseDir);
   const petFileContentDeleter = options.petFileContentDeleter ?? createPetFileContentDeleter(petUploadsBaseDir);
+  const stripeClient = options.stripeClient ?? createHttpStripeClient(resolveStripeSecretKey);
+
+  async function loadSettingsByKey(keys: string[]): Promise<Record<string, string>> {
+    if (keys.length === 0) {
+      return {};
+    }
+
+    const placeholders = keys.map(() => "?").join(", ");
+    const [rows] = await executor.execute<Array<{
+      setting_key: string;
+      setting_value: string | null;
+    }>>(
+      [
+        "SELECT setting_key, setting_value",
+        "FROM settings",
+        `WHERE setting_key IN (${placeholders})`
+      ].join(" "),
+      keys
+    );
+
+    const values = Object.fromEntries(keys.map((key) => [key, ""]));
+    for (const row of rows) {
+      values[row.setting_key] = row.setting_value ?? "";
+    }
+
+    return values;
+  }
+
+  async function resolveStripeSecretKey(): Promise<string> {
+    const override = process.env.STRIPE_SECRET_KEY?.trim() ?? "";
+    if (override !== "") {
+      return override;
+    }
+
+    const settings = await loadSettingsByKey([
+      "stripe_enabled",
+      "stripe_mode",
+      "stripe_live_secret_key",
+      "stripe_test_secret_key"
+    ]);
+    const stripeEnabled = (settings.stripe_enabled ?? "").trim() === "1";
+    const stripeMode = (settings.stripe_mode ?? "test").trim().toLowerCase() === "live" ? "live" : "test";
+    const secretKey = stripeMode === "live"
+      ? (settings.stripe_live_secret_key ?? "").trim()
+      : (settings.stripe_test_secret_key ?? "").trim();
+
+    if (!stripeEnabled || secretKey === "") {
+      throw new Error("Stripe checkout is not configured.");
+    }
+
+    return secretKey;
+  }
+
+  async function resolveStripeWebhookSecret(): Promise<string> {
+    const override = process.env.STRIPE_WEBHOOK_SECRET?.trim() ?? "";
+    if (override !== "") {
+      return override;
+    }
+
+    const settings = await loadSettingsByKey(["stripe_webhook_secret"]);
+    const webhookSecret = (settings.stripe_webhook_secret ?? "").trim();
+    if (webhookSecret === "") {
+      throw new Error("Stripe webhook secret is not configured.");
+    }
+
+    return webhookSecret;
+  }
+
+  function verifyStripeWebhookSignature(rawBody: string, signature: string, secret: string): void {
+    const parsedSignature = parseStripeSignatureHeader(signature);
+    if (parsedSignature == null) {
+      throw new Error("Invalid Stripe webhook signature header.");
+    }
+
+    const timestampSeconds = Number(parsedSignature.timestamp);
+    if (!Number.isFinite(timestampSeconds)) {
+      throw new Error("Invalid Stripe webhook signature timestamp.");
+    }
+
+    const currentSeconds = Math.floor(Date.parse(now()) / 1000);
+    if (Math.abs(currentSeconds - timestampSeconds) > 300) {
+      throw new Error("Stripe webhook signature timestamp is outside the allowed tolerance.");
+    }
+
+    const expectedSignature = createHmac("sha256", secret)
+      .update(`${parsedSignature.timestamp}.${rawBody}`, "utf8")
+      .digest("hex");
+
+    if (!parsedSignature.signatures.some((candidate) => secureCompare(expectedSignature, candidate))) {
+      throw new Error("Stripe webhook signature verification failed.");
+    }
+  }
+
+  function toSqlTimestamp(timestamp: string): string {
+    return timestamp.slice(0, 19).replace("T", " ");
+  }
+
+  function toSqlDate(timestamp: string): string {
+    return timestamp.slice(0, 10);
+  }
+
+  function buildPackagePurchaseDefaultNote(paymentMethod: "offline" | "credit_card"): string {
+    return paymentMethod === "credit_card"
+      ? "Self-serve package purchase via Stripe checkout"
+      : "Self-serve package purchase via public checkout";
+  }
+
+  function buildPackagePurchaseAuditChannel(paymentMethod: "offline" | "credit_card"): string {
+    return paymentMethod === "credit_card" ? "Stripe checkout" : "Public checkout";
+  }
+
+  function buildPackageInvoiceNotePrefix(clientPackageId: string): string {
+    return `Auto-generated for package purchase #${clientPackageId}`;
+  }
+
+  function buildPackageInvoiceNote(clientPackageId: string, packageName: string): string {
+    const normalizedPackageName = packageName.trim() === "" ? "Package" : packageName.trim();
+    return `${buildPackageInvoiceNotePrefix(clientPackageId)} (${normalizedPackageName})`;
+  }
+
+  function buildPackageInvoiceDescription(packageItem: Package): string {
+    const normalizedName = packageItem.name.trim() === "" ? "Package" : packageItem.name.trim();
+    const normalizedDescription = packageItem.description?.trim() ?? "";
+    return normalizedDescription === "" ? normalizedName : `${normalizedName} - ${normalizedDescription}`;
+  }
+
+  function buildInvoiceNumber(): string {
+    const datePart = toSqlDate(now()).replaceAll("-", "");
+    return `INV-${datePart}-${randomBytes(4).toString("hex")}`;
+  }
+
+  function buildInvoicePayToken(): string {
+    return `pay-${randomBytes(8).toString("hex")}`;
+  }
+
+  function buildStripeCheckoutPaymentNote(sessionId: string | null | undefined): string {
+    const normalizedSessionId = sessionId?.trim() ?? "";
+    return normalizedSessionId === ""
+      ? "Stripe package checkout"
+      : `Stripe Checkout session ${normalizedSessionId}`;
+  }
+
+  async function ensurePackagePurchaseInvoice(input: {
+    clientId: string;
+    clientPackageId: string;
+    packageItem: Package;
+    paymentMethod: "offline" | "credit_card";
+    stripeCheckoutSessionId?: string | null;
+    stripePaymentIntentId?: string | null;
+  }): Promise<void> {
+    const packagePrice = Math.round(Math.max(0, Number(input.packageItem.price ?? 0)) * 100) / 100;
+    const purchaseDate = toSqlDate(now());
+    const paid = input.paymentMethod === "credit_card" || packagePrice <= 0;
+    const invoiceNotePrefix = buildPackageInvoiceNotePrefix(input.clientPackageId);
+    const invoiceNote = buildPackageInvoiceNote(input.clientPackageId, input.packageItem.name);
+
+    const [invoiceRows] = await executor.execute<Array<{ id: number }>>(
+      [
+        "SELECT id",
+        "FROM invoices",
+        "WHERE client_id = ? AND notes LIKE ?",
+        "ORDER BY id DESC",
+        "LIMIT 1"
+      ].join(" "),
+      [input.clientId, `${invoiceNotePrefix}%`]
+    );
+
+    let invoiceId = String(invoiceRows[0]?.id ?? "");
+    if (invoiceId === "") {
+      const [, invoiceResult] = await executor.execute(
+        [
+          "INSERT INTO invoices (",
+          "invoice_number, client_id, issue_date, due_date, subtotal, tax_rate, tax_amount, total_amount, outstanding_amount,",
+          "notes, status, pay_token, payment_method, payment_date, stripe_payment_intent_id",
+          ") VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?)"
+        ].join(" "),
+        [
+          buildInvoiceNumber(),
+          input.clientId,
+          purchaseDate,
+          purchaseDate,
+          packagePrice,
+          packagePrice,
+          paid ? 0 : packagePrice,
+          invoiceNote,
+          paid ? "paid" : "draft",
+          buildInvoicePayToken(),
+          paid && packagePrice > 0 ? "credit_card" : null,
+          paid && packagePrice > 0 ? purchaseDate : null,
+          input.stripePaymentIntentId?.trim() || null
+        ]
+      );
+      invoiceId = String(invoiceResult.insertId ?? 0);
+    }
+
+    const [invoiceItemRows] = await executor.execute<Array<{ id: number }>>(
+      [
+        "SELECT id",
+        "FROM invoice_items",
+        "WHERE invoice_id = ? AND item_type = 'package' AND reference_id = ?",
+        "ORDER BY id DESC",
+        "LIMIT 1"
+      ].join(" "),
+      [invoiceId, input.packageItem.id]
+    );
+
+    if (invoiceItemRows[0] == null) {
+      await executor.execute(
+        [
+          "INSERT INTO invoice_items",
+          "(invoice_id, item_type, reference_id, description, quantity, rate, amount)",
+          "VALUES (?, 'package', ?, ?, 1, ?, ?)"
+        ].join(" "),
+        [
+          invoiceId,
+          input.packageItem.id,
+          buildPackageInvoiceDescription(input.packageItem),
+          packagePrice,
+          packagePrice
+        ]
+      );
+    }
+
+    if (paid && packagePrice > 0) {
+      const normalizedPaymentIntentId = input.stripePaymentIntentId?.trim() ?? "";
+      let paymentExists = false;
+
+      if (normalizedPaymentIntentId !== "") {
+        const [paymentRows] = await executor.execute<Array<{ invoice_id: number }>>(
+          [
+            "SELECT invoice_id",
+            "FROM invoice_payments",
+            "WHERE stripe_payment_intent_id = ?",
+            "LIMIT 1"
+          ].join(" "),
+          [normalizedPaymentIntentId]
+        );
+        paymentExists = Number(paymentRows[0]?.invoice_id ?? 0) === Number(invoiceId);
+      } else {
+        const [paymentRows] = await executor.execute<Array<{ id: number }>>(
+          [
+            "SELECT id",
+            "FROM invoice_payments",
+            "WHERE invoice_id = ? AND payment_method = 'credit_card' AND notes = ?",
+            "ORDER BY id DESC",
+            "LIMIT 1"
+          ].join(" "),
+          [invoiceId, buildStripeCheckoutPaymentNote(input.stripeCheckoutSessionId)]
+        );
+        paymentExists = paymentRows[0] != null;
+      }
+
+      if (!paymentExists) {
+        await executor.execute(
+          [
+            "INSERT INTO invoice_payments",
+            "(invoice_id, amount, payment_date, payment_method, stripe_payment_intent_id, notes)",
+            "VALUES (?, ?, ?, 'credit_card', ?, ?)"
+          ].join(" "),
+          [
+            invoiceId,
+            packagePrice,
+            purchaseDate,
+            normalizedPaymentIntentId === "" ? null : normalizedPaymentIntentId,
+            buildStripeCheckoutPaymentNote(input.stripeCheckoutSessionId)
+          ]
+        );
+      }
+
+      await executor.execute(
+        [
+          "UPDATE invoices",
+          "SET status = 'paid', outstanding_amount = 0, payment_method = 'credit_card',",
+          "payment_date = COALESCE(payment_date, ?),",
+          "stripe_payment_intent_id = COALESCE(NULLIF(?, ''), stripe_payment_intent_id),",
+          "updated_at = CURRENT_TIMESTAMP",
+          "WHERE id = ?"
+        ].join(" "),
+        [purchaseDate, normalizedPaymentIntentId, invoiceId]
+      );
+      return;
+    }
+
+    if (paid) {
+      await executor.execute(
+        "UPDATE invoices SET status = 'paid', outstanding_amount = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        [invoiceId]
+      );
+      return;
+    }
+
+    await executor.execute(
+      "UPDATE invoices SET outstanding_amount = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+      [packagePrice, invoiceId]
+    );
+  }
 
   const publicBooking: PublicBookingDependencies = {
     now,
@@ -610,23 +1579,35 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
       return createIcalToken(input.bookingId, input.issuedAt);
     },
     async saveBooking({ booking, request, client }) {
-      await executor.execute(
-        [
-          "INSERT INTO bookings (",
-          "client_name, client_email, service_type, appointment_date, appointment_time, duration_minutes, status, ical_token, created_at, updated_at",
-          ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
-        ].join(" "),
-        [
-          client.displayName,
-          request.clientEmail,
-          request.serviceId,
-          toAppointmentDate(booking.startsAt),
-          toAppointmentTime(booking.startsAt),
-          toDurationMinutes(booking.startsAt, booking.endsAt),
-          booking.status,
-          booking.icalAccess?.token ?? null
-        ]
-      );
+      await executor.execute("START TRANSACTION");
+      try {
+        await executor.execute(
+          [
+            "INSERT INTO bookings (",
+            "client_name, client_email, service_type, appointment_date, appointment_time, duration_minutes, status, ical_token, created_at, updated_at",
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+          ].join(" "),
+          [
+            client.displayName,
+            request.clientEmail,
+            request.serviceId,
+            toAppointmentDate(booking.startsAt),
+            toAppointmentTime(booking.startsAt),
+            toDurationMinutes(booking.startsAt, booking.endsAt),
+            booking.status,
+            booking.icalAccess?.token ?? null
+          ]
+        );
+        await applyAppointmentBookingTriggers(booking);
+        await executor.execute("COMMIT");
+      } catch (error) {
+        try {
+          await executor.execute("ROLLBACK");
+        } catch {
+          // best effort rollback
+        }
+        throw error;
+      }
     },
     async queueConfirmationEmail(message) {
       await executor.execute(
@@ -651,6 +1632,485 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
     }
   };
 
+  const publicPackages: PublicPackagePurchaseDependencies = {
+    now,
+    async findPublicPackageByToken(token) {
+      const [rows] = await executor.execute<Array<{
+        id: number;
+        name: string;
+        is_active: number;
+        price: number;
+        description: string | null;
+        bullet_points: string | null;
+        expiration_days: number | null;
+        share_token: string | null;
+        portal_available: number | null;
+        form_template_id: number | null;
+      }>>(
+        [
+          "SELECT id, name, COALESCE(is_active, 1) AS is_active, COALESCE(price, 0) AS price,",
+          "description, bullet_points, expiration_days, share_token, portal_available, form_template_id",
+          "FROM packages",
+          "WHERE share_token = ? AND COALESCE(is_active, 1) = 1",
+          "LIMIT 1"
+        ].join(" "),
+        [token]
+      );
+
+      const row = rows[0];
+      return row == null ? null : (await mapPackageRows([row]))[0] ?? null;
+    },
+    async findPublicCheckoutForm(formTemplateId) {
+      const [rows] = await executor.execute<Array<{
+        id: number;
+        name: string;
+        description: string | null;
+        fields: string | null;
+        form_type: string | null;
+        required_frequency: string | null;
+        appointment_type_id: number | null;
+        is_internal: number | null;
+        show_in_client_portal: number | null;
+        is_active: number | null;
+      }>>(
+        [
+          "SELECT id, name, description, fields, form_type, required_frequency, appointment_type_id,",
+          "is_internal, show_in_client_portal, is_active",
+          "FROM form_templates",
+          "WHERE id = ?",
+          "LIMIT 1"
+        ].join(" "),
+        [formTemplateId]
+      );
+
+      const row = rows[0];
+      if (row == null) {
+        return null;
+      }
+
+      return {
+        id: String(row.id),
+        name: row.name,
+        active: Number(row.is_active ?? 0) === 1,
+        description: row.description ?? "",
+        fields: parseArrayValue<Record<string, unknown>>(row.fields),
+        formType: row.form_type ?? undefined,
+        requiredFrequency: row.required_frequency ?? null,
+        appointmentTypeId: row.appointment_type_id == null ? null : String(row.appointment_type_id),
+        templateIsInternal: row.is_internal == null ? undefined : row.is_internal !== 0,
+        templateShowInClientPortal: row.show_in_client_portal == null ? undefined : row.show_in_client_portal !== 0
+      };
+    },
+    async findClientIdByEmail(email) {
+      const [rows] = await executor.execute<Array<{ id: number }>>(
+        [
+          "SELECT id",
+          "FROM clients",
+          "WHERE LOWER(email) = ? AND COALESCE(is_archived, 0) = 0",
+          "ORDER BY updated_at DESC, created_at DESC, id DESC",
+          "LIMIT 1"
+        ].join(" "),
+        [email.trim().toLowerCase()]
+      );
+
+      return rows[0] == null ? null : String(rows[0].id);
+    },
+    async hasSubmittedCheckoutForm(input) {
+      const params: unknown[] = [input.clientId, input.templateId];
+      const clauses = [
+        "SELECT 1",
+        "FROM form_submissions fs",
+        "LEFT JOIN bookings b ON b.id = fs.booking_id",
+        "LEFT JOIN form_templates ft ON ft.id = fs.template_id",
+        "WHERE fs.client_id = ? AND fs.template_id = ? AND fs.status = 'submitted'"
+      ];
+
+      if (input.appointmentTypeId != null && input.appointmentTypeId.trim() !== "") {
+        clauses.push(
+          "AND (b.appointment_type_id = ? OR (fs.booking_id IS NULL AND COALESCE(ft.appointment_type_id, 0) = ?))"
+        );
+        params.push(input.appointmentTypeId, input.appointmentTypeId);
+      }
+
+      if (input.submittedAfter != null) {
+        clauses.push("AND fs.submitted_at IS NOT NULL AND fs.submitted_at >= ?");
+        params.push(input.submittedAfter.slice(0, 19).replace("T", " "));
+      }
+
+      clauses.push("LIMIT 1");
+      const [rows] = await executor.execute<Array<{ 1: number }>>(clauses.join(" "), params);
+      return rows.length > 0;
+    },
+    async createPublicPackagePaymentSession(input) {
+      const session = await stripeClient.createCheckoutSession({
+        successUrl: input.successUrl,
+        cancelUrl: input.cancelUrl,
+        customerEmail: input.buyerEmail,
+        amountTotal: Math.round(Math.max(0, Number(input.packageItem.price ?? 0)) * 100),
+        itemName: input.packageItem.name,
+        itemDescription: input.packageItem.description ?? "",
+        metadata: {
+          public_package_id: input.packageItem.id,
+          public_package_token: input.packageItem.shareToken ?? ""
+        }
+      });
+
+      return {
+        sessionId: session.sessionId,
+        checkoutUrl: session.checkoutUrl
+      };
+    },
+    async storePendingPublicPackagePurchase(input) {
+      await executor.execute(
+        [
+          "INSERT INTO package_pending_purchases (",
+          "package_id, package_token, stripe_checkout_session_id, buyer_name, buyer_email, buyer_phone, notes, form_submission_json, created_at, updated_at",
+          ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+          "ON DUPLICATE KEY UPDATE",
+          "package_token = VALUES(package_token),",
+          "buyer_name = VALUES(buyer_name),",
+          "buyer_email = VALUES(buyer_email),",
+          "buyer_phone = VALUES(buyer_phone),",
+          "notes = VALUES(notes),",
+          "form_submission_json = VALUES(form_submission_json),",
+          "updated_at = CURRENT_TIMESTAMP"
+        ].join(" "),
+        [
+          input.packageId,
+          input.packageToken,
+          input.stripeCheckoutSessionId,
+          input.buyerName,
+          input.buyerEmail.trim().toLowerCase(),
+          input.buyerPhone.trim() === "" ? null : input.buyerPhone.trim(),
+          input.notes.trim() === "" ? null : input.notes.trim(),
+          JSON.stringify(input.formSubmission ?? null)
+        ]
+      );
+    },
+    async findPendingPublicPackagePurchase(packageId, stripeCheckoutSessionId) {
+      const [rows] = await executor.execute<Array<{
+        package_id: number | string;
+        package_token: string;
+        stripe_checkout_session_id: string;
+        buyer_name: string;
+        buyer_email: string;
+        buyer_phone: string | null;
+        notes: string | null;
+        form_submission_json: string | null;
+      }>>(
+        [
+          "SELECT package_id, package_token, stripe_checkout_session_id, buyer_name, buyer_email, buyer_phone, notes, form_submission_json",
+          "FROM package_pending_purchases",
+          "WHERE package_id = ? AND stripe_checkout_session_id = ?",
+          "ORDER BY id DESC",
+          "LIMIT 1"
+        ].join(" "),
+        [packageId, stripeCheckoutSessionId]
+      );
+
+      const row = rows[0];
+      if (row == null) {
+        return null;
+      }
+
+      return {
+        packageId: String(row.package_id),
+        packageToken: row.package_token,
+        stripeCheckoutSessionId: row.stripe_checkout_session_id,
+        buyerName: row.buyer_name,
+        buyerEmail: row.buyer_email,
+        buyerPhone: row.buyer_phone ?? "",
+        notes: row.notes ?? "",
+        formSubmission: row.form_submission_json == null || row.form_submission_json.trim() === ""
+          ? undefined
+          : JSON.parse(row.form_submission_json) as {
+            templateId: string;
+            responses: Array<string | string[]>;
+          }
+      };
+    },
+    async deletePendingPublicPackagePurchase(packageId, stripeCheckoutSessionId) {
+      await executor.execute(
+        "DELETE FROM package_pending_purchases WHERE package_id = ? AND stripe_checkout_session_id = ?",
+        [packageId, stripeCheckoutSessionId]
+      );
+    },
+    async findExistingPublicPackagePurchase(packageId, stripeCheckoutSessionId) {
+      const [rows] = await executor.execute<Array<{
+        id: number;
+        client_id: number;
+      }>>(
+        [
+          "SELECT id, client_id",
+          "FROM client_packages",
+          "WHERE package_id = ? AND stripe_checkout_session_id = ?",
+          "ORDER BY id DESC",
+          "LIMIT 1"
+        ].join(" "),
+        [packageId, stripeCheckoutSessionId]
+      );
+
+      const row = rows[0];
+      return row == null ? null : {
+        clientId: String(row.client_id),
+        clientPackageId: String(row.id)
+      };
+    },
+    async fetchPublicPackagePaymentSession(stripeCheckoutSessionId) {
+      const session = await stripeClient.fetchCheckoutSession(stripeCheckoutSessionId);
+      if (session == null) {
+        return null;
+      }
+
+      return {
+        sessionId: session.sessionId,
+        paymentStatus: session.paymentStatus,
+        amountTotal: session.amountTotal,
+        packageId: session.metadata.public_package_id ?? null,
+        packageToken: session.metadata.public_package_token ?? null,
+        paymentIntentId: session.paymentIntentId
+      };
+    },
+    async finalizePublicPackagePurchase(input) {
+      const buyerName = input.buyerName.trim();
+      const buyerEmail = input.buyerEmail.trim().toLowerCase();
+      const buyerPhone = input.buyerPhone.trim();
+      const notes = input.notes.trim();
+      const paymentMethod = input.paymentMethod ?? "offline";
+      const stripeCheckoutSessionId = input.stripeCheckoutSessionId?.trim() ?? "";
+      const stripePaymentIntentId = input.stripePaymentIntentId?.trim() ?? "";
+
+      if (buyerName === "" || buyerEmail === "") {
+        throw new Error("Buyer name and email are required.");
+      }
+
+      for (const item of input.packageItem.items ?? []) {
+        if (item.appointmentTypeId == null || item.appointmentTypeId.trim() === "") {
+          throw new Error(`Package ${input.packageItem.id} is missing an appointment type for one or more credit items.`);
+        }
+      }
+
+      if (stripeCheckoutSessionId !== "") {
+        const [existingPurchaseRows] = await executor.execute<Array<{
+          id: number;
+          client_id: number;
+        }>>(
+          [
+            "SELECT id, client_id",
+            "FROM client_packages",
+            "WHERE stripe_checkout_session_id = ? AND package_id = ?",
+            "ORDER BY id DESC",
+            "LIMIT 1"
+          ].join(" "),
+          [stripeCheckoutSessionId, input.packageItem.id]
+        );
+
+        const existingPurchase = existingPurchaseRows[0];
+        if (existingPurchase != null) {
+          return {
+            clientId: String(existingPurchase.client_id),
+            clientPackageId: String(existingPurchase.id)
+          };
+        }
+      }
+
+      await executor.execute("START TRANSACTION");
+      try {
+        const [clientRows] = await executor.execute<Array<{
+          id: number;
+          name: string | null;
+          phone: string | null;
+        }>>(
+          [
+            "SELECT id, name, phone",
+            "FROM clients",
+            "WHERE LOWER(email) = ? AND COALESCE(is_archived, 0) = 0",
+            "ORDER BY updated_at DESC, created_at DESC, id DESC",
+            "LIMIT 1"
+          ].join(" "),
+          [buyerEmail]
+        );
+
+        const existingClient = clientRows[0];
+        let clientId: string;
+        if (existingClient != null) {
+          clientId = String(existingClient.id);
+          const nextName = (existingClient.name ?? "").trim() === "" ? buyerName : (existingClient.name ?? buyerName);
+          const nextPhone = (existingClient.phone ?? "").trim() === "" && buyerPhone !== ""
+            ? buyerPhone
+            : existingClient.phone;
+          await executor.execute(
+            "UPDATE clients SET name = ?, phone = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            [nextName, nextPhone, clientId]
+          );
+        } else {
+          const [, clientResult] = await executor.execute(
+            [
+              "INSERT INTO clients (name, email, phone, created_at, updated_at)",
+              "VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            ].join(" "),
+            [buyerName, buyerEmail, buyerPhone === "" ? null : buyerPhone]
+          );
+          clientId = String(clientResult.insertId ?? 0);
+        }
+
+        let expiresAt: string | null = null;
+        if (input.packageItem.expirationDays != null && input.packageItem.expirationDays > 0) {
+          const expirationDate = new Date(now());
+          expirationDate.setUTCDate(expirationDate.getUTCDate() + input.packageItem.expirationDays);
+          expiresAt = expirationDate.toISOString().slice(0, 19).replace("T", " ");
+        }
+
+        const [, purchaseResult] = await executor.execute(
+          [
+            "INSERT INTO client_packages",
+            "(client_id, package_id, package_name, expires_at, is_active, notes, created_by, payment_method, stripe_checkout_session_id)",
+            "VALUES (?, ?, ?, ?, 1, ?, NULL, ?, ?)"
+          ].join(" "),
+          [
+            clientId,
+            input.packageItem.id,
+            input.packageItem.name,
+            expiresAt,
+            notes === "" ? buildPackagePurchaseDefaultNote(paymentMethod) : notes,
+            paymentMethod,
+            stripeCheckoutSessionId === "" ? null : stripeCheckoutSessionId
+          ]
+        );
+
+        const clientPackageId = String(purchaseResult.insertId ?? 0);
+        for (const item of input.packageItem.items ?? []) {
+          await executor.execute(
+            [
+              "INSERT INTO client_package_credits",
+              "(client_package_id, client_id, appointment_type_id, total_credits, used_credits)",
+              "VALUES (?, ?, ?, ?, 0)"
+            ].join(" "),
+            [clientPackageId, clientId, item.appointmentTypeId, item.quantity]
+          );
+        }
+
+        const [creditRows] = await executor.execute<Array<{
+          id: number;
+          appointment_type_id: number;
+          total_credits: number;
+        }>>(
+          [
+            "SELECT id, appointment_type_id, total_credits",
+            "FROM client_package_credits",
+            "WHERE client_package_id = ?",
+            "ORDER BY id ASC"
+          ].join(" "),
+          [clientPackageId]
+        );
+
+        for (const creditRow of creditRows) {
+          await executor.execute(
+            [
+              "INSERT INTO package_credit_transactions",
+              "(client_package_credit_id, client_id, appointment_type_id, transaction_type, amount, notes, created_by)",
+              "VALUES (?, ?, ?, 'purchase', ?, ?, NULL)"
+            ].join(" "),
+            [
+              creditRow.id,
+              clientId,
+              creditRow.appointment_type_id,
+              creditRow.total_credits,
+              `Package '${input.packageItem.name}' purchased via ${buildPackagePurchaseAuditChannel(paymentMethod)}`
+            ]
+          );
+        }
+
+        if (input.formSubmission != null) {
+          await executor.execute(
+            [
+              "INSERT INTO form_submissions",
+              "(client_id, template_id, responses, status, submitted_at)",
+              "VALUES (?, ?, ?, 'submitted', CURRENT_TIMESTAMP)"
+            ].join(" "),
+            [
+              clientId,
+              input.formSubmission.templateId,
+              JSON.stringify(input.formSubmission.responses)
+            ]
+          );
+          await applyFormSubmissionTriggers({
+            clientId,
+            templateId: input.formSubmission.templateId
+          });
+        }
+
+        await ensurePackagePurchaseInvoice({
+          clientId,
+          clientPackageId,
+          packageItem: input.packageItem,
+          paymentMethod,
+          stripeCheckoutSessionId: stripeCheckoutSessionId === "" ? null : stripeCheckoutSessionId,
+          stripePaymentIntentId: stripePaymentIntentId === "" ? null : stripePaymentIntentId
+        });
+
+        await executor.execute("COMMIT");
+        return {
+          clientId,
+          clientPackageId
+        };
+      } catch (error) {
+        try {
+          await executor.execute("ROLLBACK");
+        } catch {
+          // best effort rollback
+        }
+        throw error;
+      }
+    }
+  };
+
+  const publicContact: PublicContactDependencies = {
+    now,
+    verifyCaptcha: captchaVerifier,
+    async findLatestClientByEmail(email) {
+      const [rows] = await executor.execute<Array<{ id: number; notes: string | null }>>(
+        [
+          "SELECT id, notes",
+          "FROM clients",
+          "WHERE email = ?",
+          "ORDER BY updated_at DESC, created_at DESC, id DESC",
+          "LIMIT 1"
+        ].join(" "),
+        [email]
+      );
+
+      const row = rows[0];
+      return row == null ? null : {
+        clientId: String(row.id),
+        notes: row.notes ?? ""
+      };
+    },
+    async updateClientNotes(clientId, notes) {
+      await executor.execute(
+        [
+          "UPDATE clients",
+          "SET notes = ?, updated_at = CURRENT_TIMESTAMP",
+          "WHERE id = ?"
+        ].join(" "),
+        [notes, clientId]
+      );
+    },
+    async createClientLead(input) {
+      const [, result] = await executor.execute(
+        [
+          "INSERT INTO clients (name, email, phone, notes, created_at, updated_at)",
+          "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+        ].join(" "),
+        [input.name, input.email, input.phone, input.notes]
+      );
+
+      return {
+        clientId: String(result.insertId ?? 0)
+      };
+    }
+  };
+
   const integrationCallbacks: IntegrationCallbackDependencies = {
     now,
     generateId: (prefix) => `${prefix}-${randomUUID()}`,
@@ -662,6 +2122,52 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         ].join(" "),
         [input.paymentStatus, input.outstandingAmount, input.invoiceId]
       );
+    },
+    async normalizeStripeCallbackPayload({ payload, rawBody, signature }) {
+      const eventType = typeof payload.type === "string" ? payload.type.trim() : "";
+      const eventObject = typeof payload.object === "string" ? payload.object.trim() : "";
+      if (eventType === "" || eventObject !== "event") {
+        return null;
+      }
+
+      if (rawBody == null || rawBody.trim() === "") {
+        throw new Error("Raw Stripe webhook payload is required.");
+      }
+      if (signature == null || signature.trim() === "") {
+        throw new Error("Stripe webhook signature is required.");
+      }
+
+      verifyStripeWebhookSignature(rawBody, signature, await resolveStripeWebhookSecret());
+
+      const data = typeof payload.data === "object" && payload.data != null && !Array.isArray(payload.data)
+        ? payload.data as Record<string, unknown>
+        : {};
+      const eventPayload = typeof data.object === "object" && data.object != null && !Array.isArray(data.object)
+        ? data.object as Record<string, unknown>
+        : {};
+      const metadata = typeof eventPayload.metadata === "object" && eventPayload.metadata != null && !Array.isArray(eventPayload.metadata)
+        ? eventPayload.metadata as Record<string, unknown>
+        : {};
+      const invoiceId = typeof metadata.invoice_id === "string" ? metadata.invoice_id.trim() : "";
+      const paymentStatus = typeof eventPayload.payment_status === "string" ? eventPayload.payment_status.trim() : "";
+
+      if (
+        (eventType === "checkout.session.completed" || eventType === "checkout.session.async_payment_succeeded")
+        && invoiceId !== ""
+        && paymentStatus === "paid"
+      ) {
+        return {
+          kind: "invoice_update" as const,
+          invoiceId,
+          paymentStatus: "paid" as const,
+          outstandingAmount: 0
+        };
+      }
+
+      return {
+        kind: "ignored" as const,
+        reason: `Unhandled Stripe event: ${eventType || "unknown"}`
+      };
     },
     async applyGoogleCalendarSyncUpdate(input) {
       await executor.execute(
@@ -1385,6 +2891,713 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
     }
   };
 
+  async function persistAppointmentTypeFormLinks(appointmentTypeId: string, formTemplateIds: string[]): Promise<void> {
+    await executor.execute(
+      "DELETE FROM appointment_type_forms WHERE appointment_type_id = ?",
+      [appointmentTypeId]
+    );
+
+    for (const formTemplateId of formTemplateIds) {
+      await executor.execute(
+        "INSERT INTO appointment_type_forms (appointment_type_id, form_template_id) VALUES (?, ?)",
+        [appointmentTypeId, formTemplateId]
+      );
+    }
+  }
+
+  const adminConfiguration: AdminConfigurationDependencies = {
+    async listAdminAppointmentTypes() {
+      const [rows] = await executor.execute<Array<{
+        id: number;
+        name: string;
+        description: string | null;
+        bullet_points: string | null;
+        admin_user_id: number | null;
+        duration_minutes: number | null;
+        buffer_before_minutes: number | null;
+        buffer_after_minutes: number | null;
+        use_travel_time_buffer: number | null;
+        travel_time_minutes: number | null;
+        advance_booking_min_days: number | null;
+        advance_booking_max_days: number | null;
+        cancellation_notice_hours: number | null;
+        requires_forms: number | null;
+        form_template_ids: string | null;
+        requires_contract: number | null;
+        contract_template_id: number | null;
+        auto_invoice: number | null;
+        invoice_due_days: number | null;
+        invoice_due_timing: string | null;
+        default_amount: number | null;
+        consumes_credits: number | null;
+        credit_count: number | null;
+        is_group_class: number | null;
+        max_participants: number | null;
+        is_active: number | null;
+        public_available: number | null;
+        portal_available: number | null;
+        schedule_type: string | null;
+        specific_date: string | null;
+        specific_dates: string | null;
+        available_days: string | null;
+        available_start_time: string | null;
+        available_end_time: string | null;
+        time_slot_interval: number | null;
+        is_mini_session: number | null;
+        mini_session_location: string | null;
+        mini_session_topic: string | null;
+        is_field_rental: number | null;
+        field_rental_location: string | null;
+        group_class_location: string | null;
+        per_day_schedule: string | null;
+        location_types: string | null;
+        confirmation_template_id: number | null;
+        booking_request_template_id: number | null;
+        invoice_template_id: number | null;
+        reminder_template_id: number | null;
+        cancellation_template_id: number | null;
+        requires_admin_confirmation: number | null;
+        uses_resource: number | null;
+        resource_name: string | null;
+        resource_capacity: number | null;
+        resource_allocation: string | null;
+        unique_link: string | null;
+        created_at: string | null;
+        updated_at: string | null;
+      }>>(
+        [
+          "SELECT id, name, description, bullet_points, admin_user_id, duration_minutes, buffer_before_minutes,",
+          "buffer_after_minutes, use_travel_time_buffer, travel_time_minutes, advance_booking_min_days,",
+          "advance_booking_max_days, cancellation_notice_hours, requires_forms,",
+          "COALESCE((SELECT GROUP_CONCAT(form_template_id ORDER BY form_template_id SEPARATOR ',') FROM appointment_type_forms atf WHERE atf.appointment_type_id = appointment_types.id), '') AS form_template_ids,",
+          "requires_contract, contract_template_id, auto_invoice, invoice_due_days, invoice_due_timing,",
+          "default_amount, consumes_credits, credit_count, is_group_class, max_participants,",
+          "is_active, public_available, portal_available, schedule_type, specific_date, specific_dates,",
+          "available_days, available_start_time, available_end_time, time_slot_interval, is_mini_session,",
+          "mini_session_location, mini_session_topic, is_field_rental, field_rental_location, group_class_location,",
+          "per_day_schedule, location_types, confirmation_template_id, booking_request_template_id,",
+          "invoice_template_id, reminder_template_id, cancellation_template_id, requires_admin_confirmation,",
+          "uses_resource, resource_name, resource_capacity, resource_allocation, unique_link, created_at, updated_at",
+          "FROM appointment_types",
+          "ORDER BY is_active DESC, name ASC"
+        ].join(" ")
+      );
+
+      return rows.map((row) => toAppointmentTypeRecord(row));
+    },
+    async findAdminAppointmentTypeById(appointmentTypeId) {
+      const [rows] = await executor.execute<Array<{
+        id: number;
+        name: string;
+        description: string | null;
+        bullet_points: string | null;
+        admin_user_id: number | null;
+        duration_minutes: number | null;
+        buffer_before_minutes: number | null;
+        buffer_after_minutes: number | null;
+        use_travel_time_buffer: number | null;
+        travel_time_minutes: number | null;
+        advance_booking_min_days: number | null;
+        advance_booking_max_days: number | null;
+        cancellation_notice_hours: number | null;
+        requires_forms: number | null;
+        form_template_ids: string | null;
+        requires_contract: number | null;
+        contract_template_id: number | null;
+        auto_invoice: number | null;
+        invoice_due_days: number | null;
+        invoice_due_timing: string | null;
+        default_amount: number | null;
+        consumes_credits: number | null;
+        credit_count: number | null;
+        is_group_class: number | null;
+        max_participants: number | null;
+        is_active: number | null;
+        public_available: number | null;
+        portal_available: number | null;
+        schedule_type: string | null;
+        specific_date: string | null;
+        specific_dates: string | null;
+        available_days: string | null;
+        available_start_time: string | null;
+        available_end_time: string | null;
+        time_slot_interval: number | null;
+        is_mini_session: number | null;
+        mini_session_location: string | null;
+        mini_session_topic: string | null;
+        is_field_rental: number | null;
+        field_rental_location: string | null;
+        group_class_location: string | null;
+        per_day_schedule: string | null;
+        location_types: string | null;
+        confirmation_template_id: number | null;
+        booking_request_template_id: number | null;
+        invoice_template_id: number | null;
+        reminder_template_id: number | null;
+        cancellation_template_id: number | null;
+        requires_admin_confirmation: number | null;
+        uses_resource: number | null;
+        resource_name: string | null;
+        resource_capacity: number | null;
+        resource_allocation: string | null;
+        unique_link: string | null;
+        created_at: string | null;
+        updated_at: string | null;
+      }>>(
+        [
+          "SELECT id, name, description, bullet_points, admin_user_id, duration_minutes, buffer_before_minutes,",
+          "buffer_after_minutes, use_travel_time_buffer, travel_time_minutes, advance_booking_min_days,",
+          "advance_booking_max_days, cancellation_notice_hours, requires_forms,",
+          "COALESCE((SELECT GROUP_CONCAT(form_template_id ORDER BY form_template_id SEPARATOR ',') FROM appointment_type_forms atf WHERE atf.appointment_type_id = appointment_types.id), '') AS form_template_ids,",
+          "requires_contract, contract_template_id, auto_invoice, invoice_due_days, invoice_due_timing,",
+          "default_amount, consumes_credits, credit_count, is_group_class, max_participants,",
+          "is_active, public_available, portal_available, schedule_type, specific_date, specific_dates,",
+          "available_days, available_start_time, available_end_time, time_slot_interval, is_mini_session,",
+          "mini_session_location, mini_session_topic, is_field_rental, field_rental_location, group_class_location,",
+          "per_day_schedule, location_types, confirmation_template_id, booking_request_template_id,",
+          "invoice_template_id, reminder_template_id, cancellation_template_id, requires_admin_confirmation,",
+          "uses_resource, resource_name, resource_capacity, resource_allocation, unique_link, created_at, updated_at",
+          "FROM appointment_types",
+          "WHERE id = ?",
+          "LIMIT 1"
+        ].join(" "),
+        [appointmentTypeId]
+      );
+
+      const row = rows[0];
+      return row == null ? null : toAppointmentTypeRecord(row);
+    },
+    async createAdminAppointmentType(_adminUserId, input) {
+      const createdAt = now();
+      const [, result] = await executor.execute(
+        [
+          "INSERT INTO appointment_types",
+          "(",
+          "name, description, bullet_points, admin_user_id, duration_minutes, buffer_before_minutes, buffer_after_minutes,",
+          "use_travel_time_buffer, travel_time_minutes, advance_booking_min_days, advance_booking_max_days, cancellation_notice_hours,",
+          "requires_forms, requires_contract, contract_template_id, auto_invoice, invoice_due_days, invoice_due_timing, default_amount,",
+          "consumes_credits, credit_count, is_group_class, max_participants, is_active, public_available, portal_available, schedule_type,",
+          "specific_date, specific_dates, available_days, available_start_time, available_end_time, time_slot_interval, is_mini_session,",
+          "mini_session_location, mini_session_topic, is_field_rental, field_rental_location, group_class_location, per_day_schedule,",
+          "location_types, confirmation_template_id, booking_request_template_id, invoice_template_id, reminder_template_id,",
+          "cancellation_template_id, requires_admin_confirmation, uses_resource, resource_name, resource_capacity, resource_allocation,",
+          "unique_link, created_at, updated_at",
+          ") VALUES (",
+          "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?",
+          ")"
+        ].join(" "),
+        [
+          input.name,
+          input.description,
+          input.bulletPoints.join("\n"),
+          input.adminUserId,
+          input.durationMinutes,
+          input.bufferBeforeMinutes,
+          input.bufferAfterMinutes,
+          input.useTravelTimeBuffer ? 1 : 0,
+          input.travelTimeMinutes,
+          input.advanceBookingMinDays,
+          input.advanceBookingMaxDays,
+          input.cancellationNoticeHours,
+          input.requiresForms ? 1 : 0,
+          input.requiresContract ? 1 : 0,
+          input.contractTemplateId,
+          input.autoInvoice ? 1 : 0,
+          input.invoiceDueDays,
+          input.invoiceDueTiming,
+          input.defaultAmount,
+          input.consumesCredits ? 1 : 0,
+          input.creditCount,
+          input.isGroupClass ? 1 : 0,
+          input.maxParticipants,
+          input.active ? 1 : 0,
+          input.publicAvailable ? 1 : 0,
+          input.portalAvailable ? 1 : 0,
+          input.scheduleType,
+          input.specificDate,
+          JSON.stringify(input.specificDates),
+          JSON.stringify(input.availableDays),
+          input.availableStartTime,
+          input.availableEndTime,
+          input.timeSlotInterval,
+          input.isMiniSession ? 1 : 0,
+          input.miniSessionLocation,
+          input.miniSessionTopic,
+          input.isFieldRental ? 1 : 0,
+          input.fieldRentalLocation,
+          input.groupClassLocation,
+          JSON.stringify(input.perDaySchedule),
+          JSON.stringify(input.locationTypes),
+          input.confirmationTemplateId,
+          input.bookingRequestTemplateId,
+          input.invoiceTemplateId,
+          input.reminderTemplateId,
+          input.cancellationTemplateId,
+          input.requiresAdminConfirmation ? 1 : 0,
+          input.usesResource ? 1 : 0,
+          input.resourceName,
+          input.resourceCapacity,
+          input.resourceAllocation,
+          input.uniqueLink,
+          createdAt,
+          createdAt
+        ]
+      );
+
+      const appointmentTypeId = String(result.insertId ?? `appointment-type-${randomUUID()}`);
+      await persistAppointmentTypeFormLinks(appointmentTypeId, input.formTemplateIds);
+
+      return {
+        id: appointmentTypeId,
+        ...input,
+        createdAt,
+        updatedAt: createdAt
+      };
+    },
+    async updateAdminAppointmentType(appointmentTypeId, _adminUserId, input) {
+      const updatedAt = now();
+      const [, result] = await executor.execute(
+        [
+          "UPDATE appointment_types SET",
+          "name = ?, description = ?, bullet_points = ?, admin_user_id = ?, duration_minutes = ?, buffer_before_minutes = ?, buffer_after_minutes = ?,",
+          "use_travel_time_buffer = ?, travel_time_minutes = ?, advance_booking_min_days = ?, advance_booking_max_days = ?, cancellation_notice_hours = ?,",
+          "requires_forms = ?, requires_contract = ?, contract_template_id = ?, auto_invoice = ?, invoice_due_days = ?, invoice_due_timing = ?, default_amount = ?,",
+          "consumes_credits = ?, credit_count = ?, is_group_class = ?, max_participants = ?, is_active = ?, public_available = ?, portal_available = ?, schedule_type = ?,",
+          "specific_date = ?, specific_dates = ?, available_days = ?, available_start_time = ?, available_end_time = ?, time_slot_interval = ?, is_mini_session = ?,",
+          "mini_session_location = ?, mini_session_topic = ?, is_field_rental = ?, field_rental_location = ?, group_class_location = ?, per_day_schedule = ?,",
+          "location_types = ?, confirmation_template_id = ?, booking_request_template_id = ?, invoice_template_id = ?, reminder_template_id = ?,",
+          "cancellation_template_id = ?, requires_admin_confirmation = ?, uses_resource = ?, resource_name = ?, resource_capacity = ?, resource_allocation = ?,",
+          "unique_link = ?, updated_at = CURRENT_TIMESTAMP",
+          "WHERE id = ?"
+        ].join(" "),
+        [
+          input.name,
+          input.description,
+          input.bulletPoints.join("\n"),
+          input.adminUserId,
+          input.durationMinutes,
+          input.bufferBeforeMinutes,
+          input.bufferAfterMinutes,
+          input.useTravelTimeBuffer ? 1 : 0,
+          input.travelTimeMinutes,
+          input.advanceBookingMinDays,
+          input.advanceBookingMaxDays,
+          input.cancellationNoticeHours,
+          input.requiresForms ? 1 : 0,
+          input.requiresContract ? 1 : 0,
+          input.contractTemplateId,
+          input.autoInvoice ? 1 : 0,
+          input.invoiceDueDays,
+          input.invoiceDueTiming,
+          input.defaultAmount,
+          input.consumesCredits ? 1 : 0,
+          input.creditCount,
+          input.isGroupClass ? 1 : 0,
+          input.maxParticipants,
+          input.active ? 1 : 0,
+          input.publicAvailable ? 1 : 0,
+          input.portalAvailable ? 1 : 0,
+          input.scheduleType,
+          input.specificDate,
+          JSON.stringify(input.specificDates),
+          JSON.stringify(input.availableDays),
+          input.availableStartTime,
+          input.availableEndTime,
+          input.timeSlotInterval,
+          input.isMiniSession ? 1 : 0,
+          input.miniSessionLocation,
+          input.miniSessionTopic,
+          input.isFieldRental ? 1 : 0,
+          input.fieldRentalLocation,
+          input.groupClassLocation,
+          JSON.stringify(input.perDaySchedule),
+          JSON.stringify(input.locationTypes),
+          input.confirmationTemplateId,
+          input.bookingRequestTemplateId,
+          input.invoiceTemplateId,
+          input.reminderTemplateId,
+          input.cancellationTemplateId,
+          input.requiresAdminConfirmation ? 1 : 0,
+          input.usesResource ? 1 : 0,
+          input.resourceName,
+          input.resourceCapacity,
+          input.resourceAllocation,
+          input.uniqueLink,
+          appointmentTypeId
+        ]
+      );
+
+      if (Number(result.affectedRows ?? 0) < 1) {
+        return null;
+      }
+
+      await persistAppointmentTypeFormLinks(appointmentTypeId, input.formTemplateIds);
+
+      return {
+        id: appointmentTypeId,
+        ...input,
+        createdAt: null,
+        updatedAt
+      };
+    },
+    async deleteAdminAppointmentType(appointmentTypeId) {
+      await executor.execute(
+        "DELETE FROM appointment_type_forms WHERE appointment_type_id = ?",
+        [appointmentTypeId]
+      );
+      const [, result] = await executor.execute(
+        "DELETE FROM appointment_types WHERE id = ?",
+        [appointmentTypeId]
+      );
+
+      return Number(result.affectedRows ?? 0) > 0;
+    },
+    async listAdminFormTemplates() {
+      const [rows] = await executor.execute<FormTemplateRow[]>(
+        [
+          "SELECT id, name, description, fields, form_type, required_frequency, appointment_type_id,",
+          "is_internal, show_in_client_portal, COALESCE(is_active, 1) AS is_active",
+          "FROM form_templates",
+          "ORDER BY COALESCE(is_active, 1) DESC, created_at DESC, id DESC"
+        ].join(" ")
+      );
+
+      return rows.map((row) => mapFormTemplateRow(row));
+    },
+    async findAdminFormTemplateById(templateId) {
+      const [rows] = await executor.execute<FormTemplateRow[]>(
+        [
+          "SELECT id, name, description, fields, form_type, required_frequency, appointment_type_id,",
+          "is_internal, show_in_client_portal, COALESCE(is_active, 1) AS is_active",
+          "FROM form_templates",
+          "WHERE id = ?",
+          "LIMIT 1"
+        ].join(" "),
+        [templateId]
+      );
+
+      const row = rows[0];
+      return row == null ? null : mapFormTemplateRow(row);
+    },
+    async createAdminFormTemplate(_adminUserId, input) {
+      const createdAt = now();
+      const [, result] = await executor.execute(
+        [
+          "INSERT INTO form_templates",
+          "(name, description, fields, form_type, required_frequency, appointment_type_id, is_internal, show_in_client_portal, is_active, created_at, updated_at)",
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        ].join(" "),
+        [
+          input.name,
+          input.description,
+          JSON.stringify(input.fields ?? []),
+          input.formType,
+          input.requiredFrequency,
+          input.appointmentTypeId,
+          input.templateIsInternal == null ? null : (input.templateIsInternal ? 1 : 0),
+          input.templateShowInClientPortal == null ? null : (input.templateShowInClientPortal ? 1 : 0),
+          input.active ? 1 : 0,
+          createdAt,
+          createdAt
+        ]
+      );
+
+      const createdId = String(result.insertId ?? "");
+      const created = createdId === "" ? null : await adminConfiguration.findAdminFormTemplateById(createdId);
+      if (created == null) {
+        throw new Error("Failed to load newly created form template.");
+      }
+
+      return created;
+    },
+    async updateAdminFormTemplate(templateId, _adminUserId, input) {
+      const updatedAt = now();
+      const [, result] = await executor.execute(
+        [
+          "UPDATE form_templates",
+          "SET name = ?, description = ?, fields = ?, form_type = ?, required_frequency = ?, appointment_type_id = ?,",
+          "is_internal = ?, show_in_client_portal = ?, is_active = ?, updated_at = ?",
+          "WHERE id = ?"
+        ].join(" "),
+        [
+          input.name,
+          input.description,
+          JSON.stringify(input.fields ?? []),
+          input.formType,
+          input.requiredFrequency,
+          input.appointmentTypeId,
+          input.templateIsInternal == null ? null : (input.templateIsInternal ? 1 : 0),
+          input.templateShowInClientPortal == null ? null : (input.templateShowInClientPortal ? 1 : 0),
+          input.active ? 1 : 0,
+          updatedAt,
+          templateId
+        ]
+      );
+
+      if (Number(result.affectedRows ?? 0) < 1) {
+        return null;
+      }
+
+      return adminConfiguration.findAdminFormTemplateById(templateId);
+    },
+    async countAdminFormTemplateSubmissions(templateId) {
+      const [rows] = await executor.execute<Array<{ submission_count: number }>>(
+        [
+          "SELECT COUNT(*) AS submission_count",
+          "FROM form_submissions",
+          "WHERE template_id = ?"
+        ].join(" "),
+        [templateId]
+      );
+
+      return Number(rows[0]?.submission_count ?? 0);
+    },
+    async deleteAdminFormTemplate(templateId) {
+      await executor.execute("START TRANSACTION");
+
+      try {
+        await executor.execute(
+          "DELETE FROM appointment_type_forms WHERE form_template_id = ?",
+          [templateId]
+        );
+        await executor.execute(
+          "DELETE FROM workflow_triggers WHERE form_template_id = ?",
+          [templateId]
+        );
+        const [, result] = await executor.execute(
+          "DELETE FROM form_templates WHERE id = ?",
+          [templateId]
+        );
+
+        await executor.execute("COMMIT");
+        return Number(result.affectedRows ?? 0) > 0;
+      } catch (error) {
+        try {
+          await executor.execute("ROLLBACK");
+        } catch {
+          // Ignore rollback failures and surface the original error.
+        }
+        throw error;
+      }
+    },
+    async listAdminEmailTemplates() {
+      const [rows] = await executor.execute<Array<{
+        id: number;
+        name: string;
+        template_type: string;
+        subject: string;
+        body_html: string | null;
+        body_text: string | null;
+        is_active: number;
+        created_at: string | null;
+        updated_at: string | null;
+      }>>(
+        [
+          "SELECT id, name, template_type, subject, body_html, body_text, is_active, created_at, updated_at",
+          "FROM email_templates",
+          "ORDER BY name ASC"
+        ].join(" ")
+      );
+
+      return rows.map((row) => toEmailTemplateRecord(row));
+    },
+    async findAdminEmailTemplateById(templateId) {
+      const [rows] = await executor.execute<Array<{
+        id: number;
+        name: string;
+        template_type: string;
+        subject: string;
+        body_html: string | null;
+        body_text: string | null;
+        is_active: number;
+        created_at: string | null;
+        updated_at: string | null;
+      }>>(
+        [
+          "SELECT id, name, template_type, subject, body_html, body_text, is_active, created_at, updated_at",
+          "FROM email_templates",
+          "WHERE id = ?",
+          "LIMIT 1"
+        ].join(" "),
+        [templateId]
+      );
+
+      const row = rows[0];
+      return row == null ? null : toEmailTemplateRecord(row);
+    },
+    async createAdminEmailTemplate(_adminUserId, input) {
+      const createdAt = now();
+      const [, result] = await executor.execute(
+        [
+          "INSERT INTO email_templates",
+          "(name, template_type, subject, body_html, body_text, variables, is_active, created_at, updated_at)",
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        ].join(" "),
+        [
+          input.name,
+          input.templateType,
+          input.subject,
+          input.bodyHtml,
+          input.bodyText,
+          "",
+          input.active ? 1 : 0,
+          createdAt,
+          createdAt
+        ]
+      );
+
+      return {
+        id: String(result.insertId ?? `email-template-${randomUUID()}`),
+        name: input.name,
+        templateType: input.templateType,
+        subject: input.subject,
+        bodyHtml: input.bodyHtml,
+        bodyText: input.bodyText,
+        active: input.active,
+        createdAt,
+        updatedAt: createdAt
+      };
+    },
+    async updateAdminEmailTemplate(templateId, _adminUserId, input) {
+      const updatedAt = now();
+      const [, result] = await executor.execute(
+        [
+          "UPDATE email_templates SET",
+          "name = ?, template_type = ?, subject = ?, body_html = ?, body_text = ?, variables = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP",
+          "WHERE id = ?"
+        ].join(" "),
+        [
+          input.name,
+          input.templateType,
+          input.subject,
+          input.bodyHtml,
+          input.bodyText,
+          "",
+          input.active ? 1 : 0,
+          templateId
+        ]
+      );
+
+      if (Number(result.affectedRows ?? 0) < 1) {
+        return null;
+      }
+
+      return {
+        id: templateId,
+        name: input.name,
+        templateType: input.templateType,
+        subject: input.subject,
+        bodyHtml: input.bodyHtml,
+        bodyText: input.bodyText,
+        active: input.active,
+        createdAt: null,
+        updatedAt
+      };
+    },
+    async listAdminScheduledTasks() {
+      const [rows] = await executor.execute<Array<{
+        id: number;
+        task_name: string;
+        task_type: string;
+        schedule_type: string;
+        schedule_value: string | null;
+        is_active: number;
+        last_run: string | null;
+        next_run: string | null;
+      }>>(
+        [
+          "SELECT id, task_name, task_type, schedule_type, schedule_value, is_active, last_run, next_run",
+          "FROM scheduled_tasks",
+          "ORDER BY is_active DESC, task_name ASC"
+        ].join(" ")
+      );
+
+      return rows.map((row) => toScheduledTaskRecord(row));
+    },
+    async findAdminScheduledTaskById(taskId) {
+      const [rows] = await executor.execute<Array<{
+        id: number;
+        task_name: string;
+        task_type: string;
+        schedule_type: string;
+        schedule_value: string | null;
+        is_active: number;
+        last_run: string | null;
+        next_run: string | null;
+      }>>(
+        [
+          "SELECT id, task_name, task_type, schedule_type, schedule_value, is_active, last_run, next_run",
+          "FROM scheduled_tasks",
+          "WHERE id = ?",
+          "LIMIT 1"
+        ].join(" "),
+        [taskId]
+      );
+
+      const row = rows[0];
+      return row == null ? null : toScheduledTaskRecord(row);
+    },
+    async createAdminScheduledTask(_adminUserId, input) {
+      const [, result] = await executor.execute(
+        [
+          "INSERT INTO scheduled_tasks",
+          "(task_name, task_type, schedule_type, schedule_value, is_active)",
+          "VALUES (?, ?, ?, ?, ?)"
+        ].join(" "),
+        [
+          input.name,
+          input.taskType,
+          input.scheduleType,
+          input.scheduleValue,
+          input.active ? 1 : 0
+        ]
+      );
+
+      return {
+        id: String(result.insertId ?? `scheduled-task-${randomUUID()}`),
+        name: input.name,
+        taskType: input.taskType,
+        scheduleType: input.scheduleType,
+        scheduleValue: input.scheduleValue,
+        active: input.active,
+        lastRunAt: null,
+        nextRunAt: null
+      };
+    },
+    async updateAdminScheduledTask(taskId, _adminUserId, input) {
+      const [, result] = await executor.execute(
+        [
+          "UPDATE scheduled_tasks SET",
+          "task_name = ?, task_type = ?, schedule_type = ?, schedule_value = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP",
+          "WHERE id = ?"
+        ].join(" "),
+        [
+          input.name,
+          input.taskType,
+          input.scheduleType,
+          input.scheduleValue,
+          input.active ? 1 : 0,
+          taskId
+        ]
+      );
+
+      if (Number(result.affectedRows ?? 0) < 1) {
+        return null;
+      }
+
+      return {
+        id: taskId,
+        name: input.name,
+        taskType: input.taskType,
+        scheduleType: input.scheduleType,
+        scheduleValue: input.scheduleValue,
+        active: input.active,
+        lastRunAt: null,
+        nextRunAt: null
+      };
+    }
+  };
+
   const petFiles: PetFileManagementDependencies = {
     now,
     async createPortalPetFile(clientId, petId, input) {
@@ -1683,6 +3896,14 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
 
       return content.findAdminBlogPostById(postId);
     },
+    async deleteAdminBlogPost(postId) {
+      const [, result] = await executor.execute(
+        "DELETE FROM blog_posts WHERE id = ?",
+        [postId]
+      );
+
+      return Number(result.affectedRows ?? 0) > 0;
+    },
     async listAdminSitePages() {
       const [rows] = await executor.execute<Array<{
         id: number;
@@ -1839,9 +4060,17 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         throw error;
       }
     },
+    async deleteAdminSitePage(pageId) {
+      const [, result] = await executor.execute(
+        "DELETE FROM site_pages WHERE id = ?",
+        [pageId]
+      );
+
+      return Number(result.affectedRows ?? 0) > 0;
+    },
     async listAdminSettings() {
       const [rows] = await executor.execute<Array<{
-        id: number;
+        id: string;
         setting_key: string;
         setting_value: string | null;
         setting_type: string;
@@ -1852,7 +4081,7 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         updated_at: string;
       }>>(
         [
-          "SELECT id, setting_key, setting_value, setting_type, category, label, description, is_secret, updated_at",
+          "SELECT setting_key AS id, setting_key, setting_value, setting_type, category, label, description, is_secret, updated_at",
           "FROM settings",
           "ORDER BY category ASC, label ASC"
         ].join(" ")
@@ -1862,7 +4091,7 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
     },
     async findAdminSettingByKey(key) {
       const [rows] = await executor.execute<Array<{
-        id: number;
+        id: string;
         setting_key: string;
         setting_value: string | null;
         setting_type: string;
@@ -1873,7 +4102,7 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         updated_at: string;
       }>>(
         [
-          "SELECT id, setting_key, setting_value, setting_type, category, label, description, is_secret, updated_at",
+          "SELECT setting_key AS id, setting_key, setting_value, setting_type, category, label, description, is_secret, updated_at",
           "FROM settings",
           "WHERE setting_key = ?",
           "LIMIT 1"
@@ -1899,6 +4128,130 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
       }
 
       return content.findAdminSettingByKey(key);
+    },
+    async findAdminSettingsUserByActorId(actorId) {
+      const [rows] = await executor.execute<Array<{
+        id: number;
+        username: string;
+        email: string | null;
+        account_type: string | null;
+        can_manage_admin_users: number | null;
+        can_manage_api_keys: number | null;
+      }>>(
+        [
+          "SELECT id, username, email, account_type, can_manage_admin_users, can_manage_api_keys",
+          "FROM admin_users",
+          "WHERE id = ?",
+          "LIMIT 1"
+        ].join(" "),
+        [actorId]
+      );
+
+      const row = rows[0];
+      return row == null ? null : toAdminSettingsUserRecord(row);
+    },
+    async listAdminSettingsUsers() {
+      const [rows] = await executor.execute<Array<{
+        id: number;
+        username: string;
+        email: string | null;
+        account_type: string | null;
+        can_manage_admin_users: number | null;
+        can_manage_api_keys: number | null;
+      }>>(
+        [
+          "SELECT id, username, email, account_type, can_manage_admin_users, can_manage_api_keys",
+          "FROM admin_users",
+          "ORDER BY CASE WHEN username = 'admin' OR account_type IN ('main', 'owner') THEN 0 ELSE 1 END, username ASC, email ASC"
+        ].join(" ")
+      );
+
+      return rows.map(toAdminSettingsUserRecord);
+    },
+    async findAdminSettingsUserByUsername(username) {
+      const [rows] = await executor.execute<Array<{
+        id: number;
+        username: string;
+        email: string | null;
+        account_type: string | null;
+        can_manage_admin_users: number | null;
+        can_manage_api_keys: number | null;
+      }>>(
+        [
+          "SELECT id, username, email, account_type, can_manage_admin_users, can_manage_api_keys",
+          "FROM admin_users",
+          "WHERE LOWER(username) = LOWER(?)",
+          "LIMIT 1"
+        ].join(" "),
+        [username]
+      );
+
+      const row = rows[0];
+      return row == null ? null : toAdminSettingsUserRecord(row);
+    },
+    async createAdminSettingsUser(input) {
+      const passwordHash = await hash(input.password, 10);
+      const [, result] = await executor.execute(
+        [
+          "INSERT INTO admin_users (username, password_hash, email, account_type, can_manage_admin_users, can_manage_api_keys)",
+          "VALUES (?, ?, ?, ?, 0, 0)"
+        ].join(" "),
+        [input.username, passwordHash, input.email, input.accountType]
+      );
+
+      return (await content.findAdminSettingsUserByActorId(String(result.insertId ?? 0))) ?? {
+        actorId: String(result.insertId ?? 0),
+        username: input.username,
+        email: input.email,
+        accountType: input.accountType,
+        role: input.accountType === "accountant" ? "accountant" : "admin",
+        isMainAccount: false,
+        canManageAdminUsers: false,
+        canManageApiKeys: false,
+        active: true
+      };
+    },
+    async updateAdminSettingsUserPermissions(actorId, input) {
+      const [, result] = await executor.execute(
+        [
+          "UPDATE admin_users",
+          "SET can_manage_admin_users = ?, can_manage_api_keys = ?",
+          "WHERE id = ?"
+        ].join(" "),
+        [input.canManageAdminUsers ? 1 : 0, input.canManageApiKeys ? 1 : 0, actorId]
+      );
+
+      if (Number(result.affectedRows ?? 0) === 0) {
+        return null;
+      }
+
+      return content.findAdminSettingsUserByActorId(actorId);
+    },
+    async deleteAdminSettingsUser(actorId) {
+      await executor.execute("START TRANSACTION");
+      try {
+        await executor.execute(
+          "UPDATE appointment_types SET admin_user_id = NULL WHERE admin_user_id = ?",
+          [actorId]
+        );
+        await executor.execute(
+          "UPDATE bookings SET admin_user_id = NULL WHERE admin_user_id = ?",
+          [actorId]
+        );
+        const [, result] = await executor.execute(
+          "DELETE FROM admin_users WHERE id = ?",
+          [actorId]
+        );
+        await executor.execute("COMMIT");
+        return Number(result.affectedRows ?? 0) > 0;
+      } catch (error) {
+        try {
+          await executor.execute("ROLLBACK");
+        } catch {
+          // best effort rollback
+        }
+        throw error;
+      }
     }
   };
 
@@ -2120,6 +4473,62 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
     }
   };
 
+  async function loadPackageItemsByPackageIds(packageIds: string[]): Promise<Map<string, NonNullable<Package["items"]>>> {
+    if (packageIds.length === 0) {
+      return new Map();
+    }
+
+    const placeholders = packageIds.map(() => "?").join(", ");
+    const [rows] = await executor.execute<Array<{
+      package_id: number;
+      appointment_type_id: number;
+      quantity: number;
+      appointment_type_name: string;
+    }>>(
+      [
+        "SELECT pi.package_id, pi.appointment_type_id, pi.quantity, at.name AS appointment_type_name",
+        "FROM package_items pi",
+        "JOIN appointment_types at ON at.id = pi.appointment_type_id",
+        `WHERE pi.package_id IN (${placeholders})`,
+        "ORDER BY pi.package_id ASC, at.name ASC"
+      ].join(" "),
+      packageIds
+    );
+
+    const itemsByPackageId = new Map<string, NonNullable<Package["items"]>>();
+    for (const row of rows) {
+      const packageId = String(row.package_id);
+      const items = itemsByPackageId.get(packageId) ?? [];
+      items.push({
+        appointmentTypeId: String(row.appointment_type_id),
+        appointmentTypeName: row.appointment_type_name,
+        quantity: Number(row.quantity)
+      });
+      itemsByPackageId.set(packageId, items);
+    }
+
+    return itemsByPackageId;
+  }
+
+  async function mapPackageRows<T extends {
+    id: number;
+    name: string;
+    is_active: number;
+    price: number;
+    description: string | null;
+    bullet_points: string | null;
+    expiration_days: number | null;
+    share_token: string | null;
+    portal_available: number | null;
+    form_template_id: number | null;
+  }>(rows: T[]): Promise<Package[]> {
+    const itemsByPackageId = await loadPackageItemsByPackageIds(rows.map((row) => String(row.id)));
+    return rows.map((row) => toPackageRecord({
+      ...row,
+      items: itemsByPackageId.get(String(row.id)) ?? []
+    }));
+  }
+
   const portalResources: PortalResourceReadDependencies = {
     listPortalBookings: portalSummary.listBookingsForPortalActor,
     async findPortalBookingById(clientId, bookingId) {
@@ -2151,10 +4560,11 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         client_id: number;
         name: string;
         species: string;
+        pet_sitting_notes: string | null;
         is_active: number;
       }>>(
         [
-          "SELECT id, client_id, name, species, COALESCE(is_active, 1) AS is_active",
+          "SELECT id, client_id, name, species, pet_sitting_notes, COALESCE(is_active, 1) AS is_active",
           "FROM pets",
           "WHERE client_id = ?",
           "ORDER BY name ASC, id ASC",
@@ -2171,10 +4581,11 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         client_id: number;
         name: string;
         species: string;
+        pet_sitting_notes: string | null;
         is_active: number;
       }>>(
         [
-          "SELECT id, client_id, name, species, COALESCE(is_active, 1) AS is_active",
+          "SELECT id, client_id, name, species, pet_sitting_notes, COALESCE(is_active, 1) AS is_active",
           "FROM pets",
           "WHERE client_id = ? AND id = ?",
           "LIMIT 1"
@@ -2428,16 +4839,14 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
       };
     },
     async listPortalForms(clientId) {
-      const [rows] = await executor.execute<Array<{
-        id: number;
-        template_id: number;
-        client_id: number;
-        submitted_at: string | null;
-        access_token: string | null;
-      }>>(
+      const [rows] = await executor.execute<FormSubmissionRow[]>(
         [
-          "SELECT id, template_id, client_id, submitted_at, access_token",
-          "FROM form_submissions",
+          "SELECT fs.id, fs.template_id, fs.client_id, ft.name AS template_name,",
+          "ft.form_type, ft.is_internal AS template_is_internal,",
+          "ft.show_in_client_portal AS template_show_in_client_portal,",
+          "fs.submitted_at, fs.access_token",
+          "FROM form_submissions fs",
+          "LEFT JOIN form_templates ft ON ft.id = fs.template_id",
           "WHERE client_id = ?",
           "ORDER BY id DESC",
           "LIMIT 20"
@@ -2449,6 +4858,10 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         id: String(row.id),
         templateId: String(row.template_id),
         clientId: String(row.client_id),
+        templateName: row.template_name ?? null,
+        formType: row.form_type ?? undefined,
+        templateIsInternal: row.template_is_internal == null ? undefined : row.template_is_internal !== 0,
+        templateShowInClientPortal: row.template_show_in_client_portal == null ? undefined : row.template_show_in_client_portal !== 0,
         submittedAt: row.submitted_at,
         publicAccess: row.access_token == null ? null : {
           token: row.access_token,
@@ -2459,35 +4872,60 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
       }));
     },
     async findPortalFormById(clientId, formId) {
-      const [rows] = await executor.execute<Array<{
-        id: number;
-        template_id: number;
-        client_id: number;
-        submitted_at: string | null;
-        access_token: string | null;
-      }>>(
+      const [rows] = await executor.execute<FormSubmissionRow[]>(
         [
-          "SELECT id, template_id, client_id, submitted_at, access_token",
-          "FROM form_submissions",
-          "WHERE client_id = ? AND id = ?",
+          "SELECT fs.id, fs.template_id, fs.client_id, ft.name AS template_name,",
+          "ft.description AS template_description, ft.fields AS template_fields,",
+          "ft.form_type, ft.is_internal AS template_is_internal,",
+          "ft.show_in_client_portal AS template_show_in_client_portal,",
+          "c.name AS client_name, c.email AS client_email, c.phone AS client_phone,",
+          "fs.responses, fs.submitted_at, fs.access_token",
+          "FROM form_submissions fs",
+          "LEFT JOIN form_templates ft ON ft.id = fs.template_id",
+          "LEFT JOIN clients c ON c.id = fs.client_id",
+          "WHERE fs.client_id = ? AND fs.id = ?",
           "LIMIT 1"
         ].join(" "),
         [clientId, formId]
       );
 
       const row = rows[0];
-      return row == null ? null : {
+      return row == null ? null : mapFormSubmissionRow(row, now());
+    },
+    async listPortalNotifications(clientId) {
+      const [rows] = await executor.execute<Array<{
+        id: number;
+        recipient_id: number;
+        entity_type: string;
+        entity_id: number | null;
+        title: string;
+        message: string | null;
+        url: string;
+        is_read: number;
+        created_at: string;
+      }>>(
+        [
+          "SELECT id, recipient_id, entity_type, entity_id, title, message, url, is_read, created_at",
+          "FROM notifications",
+          "WHERE audience = 'portal' AND recipient_id = ? AND deleted_at IS NULL",
+          "ORDER BY created_at DESC, id DESC",
+          "LIMIT 50"
+        ].join(" "),
+        [clientId]
+      );
+
+      return rows.map((row) => ({
         id: String(row.id),
-        templateId: String(row.template_id),
-        clientId: String(row.client_id),
-        submittedAt: row.submitted_at,
-        publicAccess: row.access_token == null ? null : {
-          token: row.access_token,
-          issuedAt: now(),
-          expiresAt: null,
-          legacySourceId: String(row.id)
-        }
-      };
+        clientId: String(row.recipient_id),
+        channel: "portal" as const,
+        entityType: row.entity_type,
+        entityId: row.entity_id == null ? null : String(row.entity_id),
+        subject: row.title,
+        message: row.message ?? "",
+        url: row.url,
+        isRead: row.is_read !== 0,
+        createdAt: row.created_at
+      }));
     },
     async listPortalPackages(clientId) {
       const [rows] = await executor.execute<Array<{
@@ -2495,9 +4933,16 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         name: string;
         is_active: number;
         price: number;
+        description: string | null;
+        bullet_points: string | null;
+        expiration_days: number | null;
+        share_token: string | null;
+        portal_available: number | null;
+        form_template_id: number | null;
       }>>(
         [
-          "SELECT DISTINCT p.id, p.name, COALESCE(p.is_active, 1) AS is_active, COALESCE(p.price, 0) AS price",
+          "SELECT DISTINCT p.id, p.name, COALESCE(p.is_active, 1) AS is_active, COALESCE(p.price, 0) AS price,",
+          "p.description, p.bullet_points, p.expiration_days, p.share_token, p.portal_available, p.form_template_id",
           "FROM packages p",
           "JOIN client_packages cp ON cp.package_id = p.id",
           "JOIN client_package_credits cpc ON cpc.client_package_id = cp.id",
@@ -2508,7 +4953,7 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         [clientId]
       );
 
-      return rows.map((row) => toPackageRecord(row));
+      return mapPackageRows(rows);
     },
     async findPortalPackageById(clientId, packageId) {
       const [rows] = await executor.execute<Array<{
@@ -2516,9 +4961,16 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         name: string;
         is_active: number;
         price: number;
+        description: string | null;
+        bullet_points: string | null;
+        expiration_days: number | null;
+        share_token: string | null;
+        portal_available: number | null;
+        form_template_id: number | null;
       }>>(
         [
-          "SELECT DISTINCT p.id, p.name, COALESCE(p.is_active, 1) AS is_active, COALESCE(p.price, 0) AS price",
+          "SELECT DISTINCT p.id, p.name, COALESCE(p.is_active, 1) AS is_active, COALESCE(p.price, 0) AS price,",
+          "p.description, p.bullet_points, p.expiration_days, p.share_token, p.portal_available, p.form_template_id",
           "FROM packages p",
           "JOIN client_packages cp ON cp.package_id = p.id",
           "JOIN client_package_credits cpc ON cpc.client_package_id = cp.id",
@@ -2529,18 +4981,19 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
       );
 
       const row = rows[0];
-      return row == null ? null : toPackageRecord(row);
+      return row == null ? null : (await mapPackageRows([row]))[0] ?? null;
     },
     async listPortalCredits(clientId) {
       const [rows] = await executor.execute<Array<{
         id: number;
         client_id: number;
         package_id: number | null;
+        appointment_type_id: number;
         total_credits: number;
         used_credits: number;
       }>>(
         [
-          "SELECT cpc.id, cpc.client_id, cp.package_id, cpc.total_credits, cpc.used_credits",
+          "SELECT cpc.id, cpc.client_id, cp.package_id, cpc.appointment_type_id, cpc.total_credits, cpc.used_credits",
           "FROM client_package_credits cpc",
           "JOIN client_packages cp ON cp.id = cpc.client_package_id",
           "WHERE cpc.client_id = ? AND COALESCE(cp.is_active, 1) = 1",
@@ -2557,11 +5010,12 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         id: number;
         client_id: number;
         package_id: number | null;
+        appointment_type_id: number;
         total_credits: number;
         used_credits: number;
       }>>(
         [
-          "SELECT cpc.id, cpc.client_id, cp.package_id, cpc.total_credits, cpc.used_credits",
+          "SELECT cpc.id, cpc.client_id, cp.package_id, cpc.appointment_type_id, cpc.total_credits, cpc.used_credits",
           "FROM client_package_credits cpc",
           "JOIN client_packages cp ON cp.id = cpc.client_package_id",
           "WHERE cpc.client_id = ? AND cpc.id = ? AND COALESCE(cp.is_active, 1) = 1",
@@ -2608,10 +5062,11 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         client_id: number;
         name: string;
         species: string;
+        pet_sitting_notes: string | null;
         is_active: number;
       }>>(
         [
-          "SELECT id, client_id, name, species, COALESCE(is_active, 1) AS is_active",
+          "SELECT id, client_id, name, species, pet_sitting_notes, COALESCE(is_active, 1) AS is_active",
           "FROM pets",
           "ORDER BY name ASC, id ASC",
           "LIMIT 100"
@@ -2626,10 +5081,11 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         client_id: number;
         name: string;
         species: string;
+        pet_sitting_notes: string | null;
         is_active: number;
       }>>(
         [
-          "SELECT id, client_id, name, species, COALESCE(is_active, 1) AS is_active",
+          "SELECT id, client_id, name, species, pet_sitting_notes, COALESCE(is_active, 1) AS is_active",
           "FROM pets",
           "WHERE id = ?",
           "LIMIT 1"
@@ -2948,65 +5404,170 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         }
       };
     },
-    async listAdminForms() {
-      const [rows] = await executor.execute<Array<{
-        id: number;
-        template_id: number;
-        client_id: number;
-        submitted_at: string | null;
-        access_token: string | null;
-      }>>(
+    async listAdminFormsByTemplate(templateId) {
+      const [rows] = await executor.execute<FormSubmissionRow[]>(
         [
-          "SELECT id, template_id, client_id, submitted_at, access_token",
-          "FROM form_submissions",
-          "ORDER BY id DESC",
-          "LIMIT 50"
+          "SELECT fs.id, fs.template_id, fs.client_id, fs.booking_id, fs.pet_id,",
+          "ft.name AS template_name, ft.description AS template_description, ft.fields AS template_fields,",
+          "ft.form_type, ft.is_internal AS template_is_internal,",
+          "ft.show_in_client_portal AS template_show_in_client_portal,",
+          "fs.status, fs.notes, fs.submitted_by, fs.reviewed_by, fs.reviewed_at,",
+          "c.name AS client_name, c.email AS client_email, c.phone AS client_phone,",
+          "p.name AS pet_name,",
+          "CONCAT_WS(' ', b.appointment_date, b.appointment_time) AS appointment_datetime,",
+          "b.service_type,",
+          "au.username AS submitted_by_name, au2.username AS reviewed_by_name,",
+          "fs.responses, fs.submitted_at, fs.access_token",
+          "FROM form_submissions fs",
+          "LEFT JOIN form_templates ft ON ft.id = fs.template_id",
+          "LEFT JOIN clients c ON c.id = fs.client_id",
+          "LEFT JOIN pets p ON p.id = fs.pet_id",
+          "LEFT JOIN bookings b ON b.id = fs.booking_id",
+          "LEFT JOIN admin_users au ON au.id = fs.submitted_by",
+          "LEFT JOIN admin_users au2 ON au2.id = fs.reviewed_by",
+          "WHERE fs.template_id = ?",
+          "ORDER BY fs.submitted_at DESC, fs.id DESC"
+        ].join(" "),
+        [templateId]
+      );
+
+      return rows.map((row) => mapFormSubmissionRow(row, now()));
+    },
+    async listAdminForms() {
+      const [rows] = await executor.execute<FormSubmissionRow[]>(
+        [
+          "SELECT fs.id, fs.template_id, fs.client_id, fs.booking_id, fs.pet_id,",
+          "ft.name AS template_name, ft.description AS template_description, ft.fields AS template_fields,",
+          "ft.form_type, ft.is_internal AS template_is_internal,",
+          "ft.show_in_client_portal AS template_show_in_client_portal,",
+          "fs.status, fs.notes, fs.submitted_by, fs.reviewed_by, fs.reviewed_at,",
+          "c.name AS client_name, c.email AS client_email, c.phone AS client_phone,",
+          "p.name AS pet_name,",
+          "CONCAT_WS(' ', b.appointment_date, b.appointment_time) AS appointment_datetime,",
+          "b.service_type,",
+          "au.username AS submitted_by_name, au2.username AS reviewed_by_name,",
+          "fs.responses, fs.submitted_at, fs.access_token",
+          "FROM form_submissions fs",
+          "LEFT JOIN form_templates ft ON ft.id = fs.template_id",
+          "LEFT JOIN clients c ON c.id = fs.client_id",
+          "LEFT JOIN pets p ON p.id = fs.pet_id",
+          "LEFT JOIN bookings b ON b.id = fs.booking_id",
+          "LEFT JOIN admin_users au ON au.id = fs.submitted_by",
+          "LEFT JOIN admin_users au2 ON au2.id = fs.reviewed_by",
+          "ORDER BY fs.submitted_at DESC, fs.id DESC"
         ].join(" ")
       );
 
-      return rows.map((row) => ({
-        id: String(row.id),
-        templateId: String(row.template_id),
-        clientId: String(row.client_id),
-        submittedAt: row.submitted_at,
-        publicAccess: row.access_token == null ? null : {
-          token: row.access_token,
-          issuedAt: now(),
-          expiresAt: null,
-          legacySourceId: String(row.id)
-        }
-      }));
+      return rows.map((row) => mapFormSubmissionRow(row, now()));
     },
     async findAdminFormById(formId) {
-      const [rows] = await executor.execute<Array<{
-        id: number;
-        template_id: number;
-        client_id: number;
-        submitted_at: string | null;
-        access_token: string | null;
-      }>>(
+      const [rows] = await executor.execute<FormSubmissionRow[]>(
         [
-          "SELECT id, template_id, client_id, submitted_at, access_token",
-          "FROM form_submissions",
-          "WHERE id = ?",
+          "SELECT fs.id, fs.template_id, fs.client_id, fs.booking_id, fs.pet_id,",
+          "ft.name AS template_name,",
+          "ft.description AS template_description, ft.fields AS template_fields,",
+          "ft.form_type, ft.is_internal AS template_is_internal,",
+          "ft.show_in_client_portal AS template_show_in_client_portal,",
+          "fs.status, fs.notes, fs.submitted_by, fs.reviewed_by, fs.reviewed_at,",
+          "c.name AS client_name, c.email AS client_email, c.phone AS client_phone,",
+          "p.name AS pet_name,",
+          "CONCAT_WS(' ', b.appointment_date, b.appointment_time) AS appointment_datetime,",
+          "b.service_type,",
+          "au.username AS submitted_by_name, au2.username AS reviewed_by_name,",
+          "fs.responses, fs.submitted_at, fs.access_token",
+          "FROM form_submissions fs",
+          "LEFT JOIN form_templates ft ON ft.id = fs.template_id",
+          "LEFT JOIN clients c ON c.id = fs.client_id",
+          "LEFT JOIN pets p ON p.id = fs.pet_id",
+          "LEFT JOIN bookings b ON b.id = fs.booking_id",
+          "LEFT JOIN admin_users au ON au.id = fs.submitted_by",
+          "LEFT JOIN admin_users au2 ON au2.id = fs.reviewed_by",
+          "WHERE fs.id = ?",
           "LIMIT 1"
         ].join(" "),
         [formId]
       );
 
       const row = rows[0];
-      return row == null ? null : {
-        id: String(row.id),
-        templateId: String(row.template_id),
-        clientId: String(row.client_id),
-        submittedAt: row.submitted_at,
-        publicAccess: row.access_token == null ? null : {
-          token: row.access_token,
-          issuedAt: now(),
-          expiresAt: null,
-          legacySourceId: String(row.id)
+      return row == null ? null : mapFormSubmissionRow(row, now());
+    },
+    async createAdminFormRequest(input) {
+      const template = await adminConfiguration.findAdminFormTemplateById(input.templateId);
+      if (template == null || !template.active) {
+        return null;
+      }
+
+      const client = await this.findAdminClientById(input.clientId);
+      if (client == null || client.archived) {
+        return null;
+      }
+
+      if (input.bookingId != null) {
+        const booking = await this.findAdminBookingById(input.bookingId);
+        if (booking == null) {
+          return null;
         }
-      };
+      }
+
+      if (input.petId != null) {
+        const pet = await this.findAdminPetById(input.petId);
+        if (pet == null) {
+          return null;
+        }
+      }
+
+      const [, result] = await executor.execute<unknown[]>(
+        [
+          "INSERT INTO form_submissions",
+          "(client_id, template_id, booking_id, pet_id, responses, status, sent_at, access_token)",
+          "VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)"
+        ].join(" "),
+        [
+          input.clientId,
+          input.templateId,
+          input.bookingId ?? null,
+          input.petId ?? null,
+          "{}",
+          input.sentAt ?? null,
+          randomBytes(16).toString("hex")
+        ]
+      );
+
+      const createdId = String(result.insertId ?? "");
+      return createdId === "" ? null : this.findAdminFormById(createdId);
+    },
+    async reviewAdminForm(formId, adminUserId, notes) {
+      const normalizedNotes = notes.trim();
+      const [, result] = await executor.execute<unknown[]>(
+        [
+          "UPDATE form_submissions",
+          "SET status = 'reviewed', reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP, notes = ?",
+          "WHERE id = ?"
+        ].join(" "),
+        [adminUserId, normalizedNotes === "" ? null : normalizedNotes, formId]
+      );
+
+      if (result.affectedRows === 0) {
+        return null;
+      }
+
+      return this.findAdminFormById(formId);
+    },
+    async unreviewAdminForm(formId) {
+      const [, result] = await executor.execute<unknown[]>(
+        [
+          "UPDATE form_submissions",
+          "SET status = 'submitted', reviewed_by = NULL, reviewed_at = NULL",
+          "WHERE id = ?"
+        ].join(" "),
+        [formId]
+      );
+
+      if (result.affectedRows === 0) {
+        return null;
+      }
+
+      return this.findAdminFormById(formId);
     },
     async listAdminPackages() {
       const [rows] = await executor.execute<Array<{
@@ -3014,16 +5575,23 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         name: string;
         is_active: number;
         price: number;
+        description: string | null;
+        bullet_points: string | null;
+        expiration_days: number | null;
+        share_token: string | null;
+        portal_available: number | null;
+        form_template_id: number | null;
       }>>(
         [
-          "SELECT id, name, COALESCE(is_active, 1) AS is_active, COALESCE(price, 0) AS price",
+          "SELECT id, name, COALESCE(is_active, 1) AS is_active, COALESCE(price, 0) AS price,",
+          "description, bullet_points, expiration_days, share_token, portal_available, form_template_id",
           "FROM packages",
           "ORDER BY updated_at DESC, id DESC",
           "LIMIT 50"
         ].join(" ")
       );
 
-      return rows.map((row) => toPackageRecord(row));
+      return mapPackageRows(rows);
     },
     async findAdminPackageById(packageId) {
       const [rows] = await executor.execute<Array<{
@@ -3031,9 +5599,16 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         name: string;
         is_active: number;
         price: number;
+        description: string | null;
+        bullet_points: string | null;
+        expiration_days: number | null;
+        share_token: string | null;
+        portal_available: number | null;
+        form_template_id: number | null;
       }>>(
         [
-          "SELECT id, name, COALESCE(is_active, 1) AS is_active, COALESCE(price, 0) AS price",
+          "SELECT id, name, COALESCE(is_active, 1) AS is_active, COALESCE(price, 0) AS price,",
+          "description, bullet_points, expiration_days, share_token, portal_available, form_template_id",
           "FROM packages",
           "WHERE id = ?",
           "LIMIT 1"
@@ -3042,18 +5617,19 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
       );
 
       const row = rows[0];
-      return row == null ? null : toPackageRecord(row);
+      return row == null ? null : (await mapPackageRows([row]))[0] ?? null;
     },
     async listAdminCredits() {
       const [rows] = await executor.execute<Array<{
         id: number;
         client_id: number;
         package_id: number | null;
+        appointment_type_id: number;
         total_credits: number;
         used_credits: number;
       }>>(
         [
-          "SELECT cpc.id, cpc.client_id, cp.package_id, cpc.total_credits, cpc.used_credits",
+          "SELECT cpc.id, cpc.client_id, cp.package_id, cpc.appointment_type_id, cpc.total_credits, cpc.used_credits",
           "FROM client_package_credits cpc",
           "JOIN client_packages cp ON cp.id = cpc.client_package_id",
           "ORDER BY cpc.updated_at DESC, cpc.id DESC",
@@ -3068,11 +5644,12 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         id: number;
         client_id: number;
         package_id: number | null;
+        appointment_type_id: number;
         total_credits: number;
         used_credits: number;
       }>>(
         [
-          "SELECT cpc.id, cpc.client_id, cp.package_id, cpc.total_credits, cpc.used_credits",
+          "SELECT cpc.id, cpc.client_id, cp.package_id, cpc.appointment_type_id, cpc.total_credits, cpc.used_credits",
           "FROM client_package_credits cpc",
           "JOIN client_packages cp ON cp.id = cpc.client_package_id",
           "WHERE cpc.id = ?",
@@ -3336,7 +5913,7 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
       await executor.execute(
         [
           "UPDATE quotes",
-          "SET status = 'accepted'",
+          "SET status = 'accepted', accepted_at = CURRENT_TIMESTAMP",
           "WHERE client_id = ? AND id = ? AND status IN ('draft', 'sent')"
         ].join(" "),
         [clientId, quoteId]
@@ -3348,7 +5925,7 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
       await executor.execute(
         [
           "UPDATE contracts",
-          "SET status = 'signed', signed_at = CURRENT_TIMESTAMP",
+          "SET status = 'signed', signed_date = CURRENT_TIMESTAMP",
           "WHERE client_id = ? AND id = ? AND status = 'sent'"
         ].join(" "),
         [clientId, contractId]
@@ -3357,16 +5934,46 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
       return await portalResources.findPortalContractById(clientId, contractId);
     },
     async submitPortalForm(clientId, formId) {
-      await executor.execute(
-        [
-          "UPDATE form_submissions",
-          "SET submitted_at = CURRENT_TIMESTAMP",
-          "WHERE client_id = ? AND id = ? AND submitted_at IS NULL"
-        ].join(" "),
-        [clientId, formId]
-      );
+      await executor.execute("START TRANSACTION");
+      try {
+        const [, result] = await executor.execute(
+          [
+            "UPDATE form_submissions",
+            "SET status = 'submitted', submitted_at = CURRENT_TIMESTAMP",
+            "WHERE client_id = ? AND id = ? AND submitted_at IS NULL"
+          ].join(" "),
+          [clientId, formId]
+        );
 
-      return await portalResources.findPortalFormById(clientId, formId);
+        if (Number(result.affectedRows ?? 0) > 0) {
+          const [submissionRows] = await executor.execute<Array<{ template_id: string | number | null }>>(
+            [
+              "SELECT template_id",
+              "FROM form_submissions",
+              "WHERE client_id = ? AND id = ?",
+              "LIMIT 1"
+            ].join(" "),
+            [clientId, formId]
+          );
+          const templateId = submissionRows[0]?.template_id;
+          if (templateId != null && String(templateId).trim() !== "") {
+            await applyFormSubmissionTriggers({
+              clientId,
+              templateId: String(templateId)
+            });
+          }
+        }
+
+        await executor.execute("COMMIT");
+        return await portalResources.findPortalFormById(clientId, formId);
+      } catch (error) {
+        try {
+          await executor.execute("ROLLBACK");
+        } catch {
+          // best effort rollback
+        }
+        throw error;
+      }
     },
     async createInvoicePaymentSession(clientId, invoiceId, input) {
       const invoice = await portalResources.findPortalInvoiceById(clientId, invoiceId);
@@ -3374,109 +5981,1239 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         return null;
       }
 
+      if (invoice.outstandingAmount <= 0 || invoice.status === "paid" || invoice.status === "void") {
+        return {
+          invoice,
+          paymentSession: {
+            provider: "stripe" as const,
+            checkoutUrl: input.cancelUrl,
+            expiresAt: null
+          }
+        };
+      }
+
+      const [clientRows] = await executor.execute<Array<{ email: string | null }>>(
+        [
+          "SELECT email",
+          "FROM clients",
+          "WHERE id = ?",
+          "LIMIT 1"
+        ].join(" "),
+        [clientId]
+      );
+      const session = await stripeClient.createCheckoutSession({
+        successUrl: input.returnUrl,
+        cancelUrl: input.cancelUrl,
+        customerEmail: clientRows[0]?.email ?? null,
+        amountTotal: Math.round(Math.max(0, invoice.outstandingAmount) * 100),
+        itemName: `Invoice ${invoice.id}`,
+        itemDescription: `Brook's Dog Training Academy invoice ${invoice.id}`,
+        metadata: {
+          invoice_id: invoice.id,
+          client_id: clientId
+        }
+      });
+
       return {
         invoice,
         paymentSession: {
           provider: "stripe" as const,
-          checkoutUrl: `${input.returnUrl}?invoice=${encodeURIComponent(invoiceId)}`,
-          expiresAt: new Date(Date.parse(now()) + 60 * 60 * 1000).toISOString()
+          checkoutUrl: session.checkoutUrl,
+          expiresAt: session.expiresAt
         }
       };
     }
   };
 
-  const publicDocuments: PublicDocumentAccessDependencies = {
-    now,
-    async findPublicQuoteById(quoteId) {
+  function parseWorkflowDelayToMinutes(delayValue: string | null | undefined): number {
+    if (delayValue == null || delayValue.trim() === "") {
+      return 0;
+    }
+
+    const normalizedDelayValue = delayValue.trim();
+    const matched = /^(\d+)\s*(minute|hour|day|week)s?$/i.exec(normalizedDelayValue);
+    if (matched != null) {
+      const amount = Number.parseInt(matched[1] ?? "0", 10);
+      const unit = (matched[2] ?? "").toLowerCase();
+
+      switch (unit) {
+        case "minute":
+          return amount;
+        case "hour":
+          return amount * 60;
+        case "day":
+          return amount * 60 * 24;
+        case "week":
+          return amount * 60 * 24 * 7;
+        default:
+          return 0;
+      }
+    }
+
+    if (/^\d+$/.test(normalizedDelayValue)) {
+      return Number.parseInt(normalizedDelayValue, 10);
+    }
+
+    return 0;
+  }
+
+  async function getWorkflowProcessorIntervalMinutes(): Promise<number> {
+    const [rows] = await executor.execute<Array<{
+      schedule_type: string;
+      schedule_value: string | null;
+    }>>(
+      [
+        "SELECT schedule_type, schedule_value",
+        "FROM scheduled_tasks",
+        "WHERE COALESCE(is_active, 1) = 1",
+        "AND task_type IN ('workflow_processor', 'workflow')"
+      ].join(" ")
+    );
+
+    if (rows.length === 0) {
+      return 60;
+    }
+
+    const intervals = rows.map((row) => {
+      switch (row.schedule_type) {
+        case "interval":
+          return Math.max(1, Number.parseInt(row.schedule_value ?? "60", 10) || 60);
+        case "hourly":
+          return 60;
+        case "daily":
+          return 60 * 24;
+        case "weekly":
+          return 60 * 24 * 7;
+        case "monthly":
+          return 60 * 24 * 30;
+        case "custom": {
+          const value = (row.schedule_value ?? "").trim();
+          const minuteMatch = /^\*\/(\d+)\s+\*\s+\*\s+\*\s+\*$/.exec(value);
+          if (minuteMatch != null) {
+            return Math.max(1, Number.parseInt(minuteMatch[1] ?? "60", 10));
+          }
+          const hourMatch = /^\d+\s+\*\/(\d+)\s+\*\s+\*\s+\*$/.exec(value);
+          if (hourMatch != null) {
+            return Math.max(1, Number.parseInt(hourMatch[1] ?? "1", 10)) * 60;
+          }
+          return 60;
+        }
+        default:
+          return 60;
+      }
+    });
+
+    return Math.min(...intervals);
+  }
+
+  type WorkflowStepRow = {
+    workflow_step_id: string;
+    workflow_id: string;
+    step_order: number;
+    step_name: string;
+    email_subject: string;
+    email_body_html: string;
+    email_body_text: string | null;
+    delay_type: WorkflowStep["delayType"];
+    delay_value: string | null;
+    scheduled_date: string | null;
+    attach_contract_id: string | null;
+    attach_form_id: string | null;
+    attach_quote_id: string | null;
+    attach_invoice_id: string | null;
+    include_appointment_link: number;
+    appointment_type_id: string | null;
+    created_at: string | null;
+    updated_at: string | null;
+  };
+
+  type WorkflowTriggerRow = {
+    workflow_trigger_id: string;
+    workflow_id: string;
+    trigger_type: WorkflowAutoEnrollmentTrigger["triggerType"];
+    appointment_type_id: string | null;
+    form_template_id: string | null;
+    active: number;
+    created_at: string | null;
+    appointment_type_name?: string | null;
+    form_template_name?: string | null;
+  };
+
+  function toWorkflowStepItem(row: WorkflowStepRow): WorkflowStep {
+    return {
+      id: row.workflow_step_id,
+      workflowId: row.workflow_id,
+      stepOrder: Number(row.step_order),
+      stepName: row.step_name,
+      emailSubject: row.email_subject,
+      emailBodyHtml: row.email_body_html,
+      emailBodyText: row.email_body_text,
+      delayType: row.delay_type,
+      delayValue: row.delay_value,
+      scheduledDate: row.scheduled_date,
+      attachContractId: row.attach_contract_id,
+      attachFormId: row.attach_form_id,
+      attachQuoteId: row.attach_quote_id,
+      attachInvoiceId: row.attach_invoice_id,
+      includeAppointmentLink: Number(row.include_appointment_link) === 1,
+      appointmentTypeId: row.appointment_type_id,
+      createdAt: row.created_at ?? undefined,
+      updatedAt: row.updated_at ?? undefined
+    };
+  }
+
+  function toWorkflowTriggerItem(row: WorkflowTriggerRow) {
+    return {
+      id: row.workflow_trigger_id,
+      workflowId: row.workflow_id,
+      triggerType: row.trigger_type,
+      appointmentTypeId: row.appointment_type_id,
+      formTemplateId: row.form_template_id,
+      active: Number(row.active) === 1,
+      createdAt: row.created_at ?? undefined,
+      appointmentTypeName: row.appointment_type_name ?? null,
+      formTemplateName: row.form_template_name ?? null
+    };
+  }
+
+  async function listWorkflowStepsForWorkflow(workflowId: string): Promise<WorkflowStep[]> {
+    const [rows] = await executor.execute<Array<WorkflowStepRow>>(
+      [
+        "SELECT workflow_step_id, workflow_id, step_order, step_name, email_subject, email_body_html, email_body_text,",
+        "delay_type, delay_value, scheduled_date, attach_contract_id, attach_form_id, attach_quote_id, attach_invoice_id,",
+        "include_appointment_link, appointment_type_id, created_at, updated_at",
+        "FROM workflow_steps",
+        "WHERE workflow_id = ?",
+        "ORDER BY step_order ASC"
+      ].join(" "),
+      [workflowId]
+    );
+
+    return rows.map((row) => toWorkflowStepItem(row));
+  }
+
+  async function findWorkflowStepById(workflowId: string, stepId: string): Promise<WorkflowStep | null> {
+    const [rows] = await executor.execute<Array<WorkflowStepRow>>(
+      [
+        "SELECT workflow_step_id, workflow_id, step_order, step_name, email_subject, email_body_html, email_body_text,",
+        "delay_type, delay_value, scheduled_date, attach_contract_id, attach_form_id, attach_quote_id, attach_invoice_id,",
+        "include_appointment_link, appointment_type_id, created_at, updated_at",
+        "FROM workflow_steps",
+        "WHERE workflow_id = ? AND workflow_step_id = ?",
+        "LIMIT 1"
+      ].join(" "),
+      [workflowId, stepId]
+    );
+
+    const row = rows[0];
+    return row == null ? null : toWorkflowStepItem(row);
+  }
+
+  async function listWorkflowTriggersForWorkflow(workflowId: string) {
+    const [rows] = await executor.execute<Array<WorkflowTriggerRow>>(
+      [
+        "SELECT wt.workflow_trigger_id, wt.workflow_id, wt.trigger_type, wt.appointment_type_id, wt.form_template_id, wt.active, wt.created_at,",
+        "at.name AS appointment_type_name, ft.name AS form_template_name",
+        "FROM workflow_triggers wt",
+        "LEFT JOIN appointment_types at ON at.id = wt.appointment_type_id",
+        "LEFT JOIN form_templates ft ON ft.id = wt.form_template_id",
+        "WHERE wt.workflow_id = ?",
+        "ORDER BY wt.created_at ASC, wt.workflow_trigger_id ASC"
+      ].join(" "),
+      [workflowId]
+    );
+
+    return rows.map((row) => toWorkflowTriggerItem(row));
+  }
+
+  function calculateWorkflowStepScheduledFor(
+    step: WorkflowStep,
+    enrolledAt: string,
+    previousScheduledFor: string | null
+  ): string {
+    switch (step.delayType) {
+      case "immediate":
+        return enrolledAt;
+      case "after_enrollment":
+        return new Date(Date.parse(enrolledAt) + parseWorkflowDelayToMinutes(step.delayValue ?? null) * 60_000).toISOString();
+      case "after_previous": {
+        const baseTimestamp = previousScheduledFor ?? enrolledAt;
+        return new Date(Date.parse(baseTimestamp) + parseWorkflowDelayToMinutes(step.delayValue ?? null) * 60_000).toISOString();
+      }
+      case "specific_date":
+        return step.scheduledDate ?? enrolledAt;
+      default:
+        return enrolledAt;
+    }
+  }
+
+  async function refreshWorkflowEnrollmentProgress(enrollmentId: string): Promise<void> {
+    const [enrollmentRows] = await executor.execute<Array<{
+      status: WorkflowEnrollment["status"] | null;
+      completed_at: string | null;
+    }>>(
+      [
+        "SELECT status, completed_at",
+        "FROM workflow_enrollments",
+        "WHERE workflow_enrollment_id = ?",
+        "LIMIT 1"
+      ].join(" "),
+      [enrollmentId]
+    );
+    const enrollment = enrollmentRows[0];
+    if (enrollment == null) {
+      return;
+    }
+
+    const [pendingRows] = await executor.execute<Array<{ scheduled_for: string }>>(
+      [
+        "SELECT scheduled_for",
+        "FROM workflow_step_executions",
+        "WHERE enrollment_id = ? AND status = 'pending' AND executed_at IS NULL",
+        "ORDER BY scheduled_for ASC"
+      ].join(" "),
+      [enrollmentId]
+    );
+
+    const nextPending = pendingRows[0]?.scheduled_for ?? null;
+    if (nextPending != null) {
+      await executor.execute(
+        "UPDATE workflow_enrollments SET next_run_at = ? WHERE workflow_enrollment_id = ?",
+        [nextPending, enrollmentId]
+      );
+      return;
+    }
+
+    if ((enrollment.status ?? "active") === "active") {
+      await executor.execute(
+        "UPDATE workflow_enrollments SET next_run_at = NULL, completed_at = COALESCE(completed_at, ?), status = 'completed' WHERE workflow_enrollment_id = ?",
+        [now(), enrollmentId]
+      );
+      return;
+    }
+
+    await executor.execute(
+      "UPDATE workflow_enrollments SET next_run_at = NULL WHERE workflow_enrollment_id = ?",
+      [enrollmentId]
+    );
+  }
+
+  async function scheduleWorkflowStepExecutions(enrollment: {
+    id: string;
+    workflowId: string;
+    enrolledAt: string;
+  }): Promise<void> {
+    const steps = await listWorkflowStepsForWorkflow(enrollment.workflowId);
+    let previousScheduledFor: string | null = null;
+    let nextRunAt = enrollment.enrolledAt;
+
+    for (const step of steps) {
+      const scheduledFor = calculateWorkflowStepScheduledFor(step, enrollment.enrolledAt, previousScheduledFor);
+      await executor.execute(
+        [
+          "INSERT INTO workflow_step_executions",
+          "(workflow_step_execution_id, enrollment_id, step_id, scheduled_for, executed_at, status, error_message, created_at)",
+          "VALUES (?, ?, ?, ?, NULL, 'pending', NULL, ?)"
+        ].join(" "),
+        [`workflow-step-execution-${randomUUID()}`, enrollment.id, step.id, scheduledFor, now()]
+      );
+
+      if (previousScheduledFor == null) {
+        nextRunAt = scheduledFor;
+      }
+      previousScheduledFor = scheduledFor;
+    }
+
+    await executor.execute(
+      "UPDATE workflow_enrollments SET next_run_at = ? WHERE workflow_enrollment_id = ?",
+      [nextRunAt, enrollment.id]
+    );
+  }
+
+  async function enrollWorkflowClientsInternal(
+    workflowId: string,
+    clientIds: string[],
+    adminUserId: string | null
+  ): Promise<void> {
+    for (const clientId of clientIds) {
+      const [existingRows] = await executor.execute<Array<{ workflow_enrollment_id: string }>>(
+        [
+          "SELECT workflow_enrollment_id FROM workflow_enrollments",
+          "WHERE workflow_id = ? AND client_id = ?",
+          "AND COALESCE(status, 'active') = 'active'",
+          "AND completed_at IS NULL",
+          "LIMIT 1"
+        ].join(" "),
+        [workflowId, clientId]
+      );
+      if (existingRows[0] != null) {
+        continue;
+      }
+
+      const enrolledAt = now();
+      const enrollmentId = `workflow-enrollment-${randomUUID()}`;
+      await executor.execute(
+        [
+          "INSERT INTO workflow_enrollments",
+          "(workflow_enrollment_id, workflow_id, client_id, enrolled_at, next_run_at, completed_at, status, enrolled_by, cancelled_at, created_at)",
+          "VALUES (?, ?, ?, ?, ?, NULL, 'active', ?, NULL, CURRENT_TIMESTAMP)"
+        ].join(" "),
+        [enrollmentId, workflowId, clientId, enrolledAt, enrolledAt, adminUserId]
+      );
+      await scheduleWorkflowStepExecutions({
+        id: enrollmentId,
+        workflowId,
+        enrolledAt
+      });
+    }
+  }
+
+  async function applyAppointmentBookingTriggers(booking: Booking): Promise<void> {
+    if (booking.clientId.trim() === "" || booking.serviceId.trim() === "") {
+      return;
+    }
+
+    const [rows] = await executor.execute<Array<{ workflow_id: string }>>(
+      [
+        "SELECT DISTINCT wt.workflow_id",
+        "FROM workflow_triggers wt",
+        "INNER JOIN workflows w ON w.workflow_id = wt.workflow_id",
+        "WHERE wt.trigger_type = 'appointment_booking'",
+        "AND wt.active = 1",
+        "AND w.active = 1",
+        "AND wt.appointment_type_id = ?"
+      ].join(" "),
+      [booking.serviceId]
+    );
+
+    for (const row of rows) {
+      await enrollWorkflowClientsInternal(row.workflow_id, [booking.clientId], null);
+    }
+  }
+
+  async function applyFormSubmissionTriggers(submission: Pick<FormSubmission, "clientId" | "templateId">): Promise<void> {
+    if (submission.clientId.trim() === "" || submission.templateId.trim() === "") {
+      return;
+    }
+
+    const [rows] = await executor.execute<Array<{ workflow_id: string }>>(
+      [
+        "SELECT DISTINCT wt.workflow_id",
+        "FROM workflow_triggers wt",
+        "INNER JOIN workflows w ON w.workflow_id = wt.workflow_id",
+        "WHERE wt.trigger_type = 'form_submission'",
+        "AND wt.active = 1",
+        "AND w.active = 1",
+        "AND wt.form_template_id = ?"
+      ].join(" "),
+      [submission.templateId]
+    );
+
+    for (const row of rows) {
+      await enrollWorkflowClientsInternal(row.workflow_id, [submission.clientId], null);
+    }
+  }
+
+  const workflows: WorkflowManagementDependencies = {
+    async listAdminWorkflows() {
       const [rows] = await executor.execute<Array<{
-        id: number;
-        client_id: number;
-        status: Quote["status"];
-        total_amount: number;
-        access_token: string | null;
+        workflow_id: string;
+        workflow_name: string;
+        workflow_description: string | null;
+        workflow_trigger: Workflow["trigger"];
+        active: number;
+        created_at: string | null;
+        enrollment_count: number;
+        active_enrollment_count: number;
+        trigger_count: number;
       }>>(
         [
-          "SELECT id, client_id, status, total_amount, access_token",
-          "FROM quotes",
-          "WHERE id = ?",
+          "SELECT w.workflow_id, w.workflow_name, w.workflow_description, w.workflow_trigger, w.active, w.created_at,",
+          "COUNT(DISTINCT we.workflow_enrollment_id) AS enrollment_count,",
+          "COUNT(DISTINCT CASE WHEN COALESCE(we.status, 'active') = 'active' AND we.completed_at IS NULL THEN we.workflow_enrollment_id END) AS active_enrollment_count,",
+          "COUNT(DISTINCT wt.workflow_trigger_id) AS trigger_count",
+          "FROM workflows w",
+          "LEFT JOIN workflow_enrollments we ON we.workflow_id = w.workflow_id",
+          "LEFT JOIN workflow_triggers wt ON wt.workflow_id = w.workflow_id",
+          "GROUP BY w.workflow_id, w.workflow_name, w.workflow_description, w.workflow_trigger, w.active, w.created_at",
+          "ORDER BY w.workflow_name ASC"
+        ].join(" ")
+      );
+
+      return rows.map((row) => ({
+        id: row.workflow_id,
+        name: row.workflow_name,
+        description: row.workflow_description ?? "",
+        trigger: row.workflow_trigger,
+        active: Number(row.active) === 1,
+        createdAt: row.created_at ?? now(),
+        enrollmentCount: Number(row.enrollment_count ?? 0),
+        activeEnrollmentCount: Number(row.active_enrollment_count ?? 0),
+        triggerCount: Number(row.trigger_count ?? 0)
+      }));
+    },
+    async findAdminWorkflowById(workflowId) {
+      const [rows] = await executor.execute<Array<{
+        workflow_id: string;
+        workflow_name: string;
+        workflow_description: string | null;
+        workflow_trigger: Workflow["trigger"];
+        active: number;
+        created_at: string | null;
+      }>>(
+        [
+          "SELECT workflow_id, workflow_name, workflow_description, workflow_trigger, active, created_at",
+          "FROM workflows",
+          "WHERE workflow_id = ?",
           "LIMIT 1"
+        ].join(" "),
+        [workflowId]
+      );
+
+      const row = rows[0];
+      return row == null ? null : {
+        id: row.workflow_id,
+        name: row.workflow_name,
+        description: row.workflow_description ?? "",
+        trigger: row.workflow_trigger,
+        active: Number(row.active) === 1,
+        createdAt: row.created_at ?? now()
+      };
+    },
+    async createAdminWorkflow(_adminUserId, input) {
+      const workflowId = `workflow-${randomUUID()}`;
+      await executor.execute(
+        [
+          "INSERT INTO workflows (workflow_id, workflow_name, workflow_description, workflow_trigger, active, created_at)",
+          "VALUES (?, ?, ?, ?, ?, ?)"
+        ].join(" "),
+        [workflowId, input.name, input.description, input.trigger, input.active ? 1 : 0, now()]
+      );
+
+      const workflow = await workflows.findAdminWorkflowById(workflowId);
+      if (workflow == null) {
+        throw new Error("Failed to load newly created workflow.");
+      }
+
+      return workflow;
+    },
+    async updateAdminWorkflow(workflowId, _adminUserId, input) {
+      const [, result] = await executor.execute(
+        [
+          "UPDATE workflows",
+          "SET workflow_name = ?, workflow_description = ?, workflow_trigger = ?, active = ?",
+          "WHERE workflow_id = ?"
+        ].join(" "),
+        [input.name, input.description, input.trigger, input.active ? 1 : 0, workflowId]
+      );
+
+      if (Number(result.affectedRows ?? 0) === 0) {
+        return null;
+      }
+
+      return workflows.findAdminWorkflowById(workflowId);
+    },
+    async deleteAdminWorkflow(workflowId) {
+      await executor.execute("START TRANSACTION");
+      try {
+        await executor.execute(
+          "DELETE FROM workflow_triggers WHERE workflow_id = ?",
+          [workflowId]
+        );
+        await executor.execute(
+          "DELETE FROM workflow_step_executions WHERE enrollment_id IN (SELECT workflow_enrollment_id FROM workflow_enrollments WHERE workflow_id = ?)",
+          [workflowId]
+        );
+        await executor.execute(
+          "DELETE FROM workflow_step_executions WHERE step_id IN (SELECT workflow_step_id FROM workflow_steps WHERE workflow_id = ?)",
+          [workflowId]
+        );
+        await executor.execute(
+          "DELETE FROM workflow_steps WHERE workflow_id = ?",
+          [workflowId]
+        );
+        await executor.execute(
+          "DELETE FROM workflow_enrollments WHERE workflow_id = ?",
+          [workflowId]
+        );
+        const [, result] = await executor.execute(
+          "DELETE FROM workflows WHERE workflow_id = ?",
+          [workflowId]
+        );
+        await executor.execute("COMMIT");
+        return Number(result.affectedRows ?? 0) > 0;
+      } catch (error) {
+        try {
+          await executor.execute("ROLLBACK");
+        } catch {
+          // best effort rollback
+        }
+        throw error;
+      }
+    },
+    async listAdminWorkflowTriggers(workflowId) {
+      return await listWorkflowTriggersForWorkflow(workflowId);
+    },
+    async listWorkflowTriggerOptions() {
+      const [appointmentTypeRows] = await executor.execute<Array<{ id: number | string; name: string }>>(
+        [
+          "SELECT id, name",
+          "FROM appointment_types",
+          "WHERE COALESCE(active, 1) = 1",
+          "ORDER BY name ASC"
+        ].join(" ")
+      );
+      const [formTemplateRows] = await executor.execute<Array<{ id: number | string; name: string }>>(
+        [
+          "SELECT id, name",
+          "FROM form_templates",
+          "WHERE COALESCE(is_active, 1) = 1",
+          "ORDER BY name ASC"
+        ].join(" ")
+      );
+
+      return {
+        appointmentTypes: appointmentTypeRows.map((row) => ({
+          id: String(row.id),
+          label: row.name
+        })),
+        formTemplates: formTemplateRows.map((row) => ({
+          id: String(row.id),
+          label: row.name
+        }))
+      };
+    },
+    async createAdminWorkflowTrigger(workflowId, _adminUserId, input) {
+      const workflowTriggerId = `workflow-trigger-${randomUUID()}`;
+      const createdAt = now();
+      await executor.execute(
+        [
+          "INSERT INTO workflow_triggers",
+          "(workflow_trigger_id, workflow_id, trigger_type, appointment_type_id, form_template_id, active, created_at)",
+          "VALUES (?, ?, ?, ?, ?, ?, ?)"
+        ].join(" "),
+        [
+          workflowTriggerId,
+          workflowId,
+          input.triggerType,
+          input.appointmentTypeId,
+          input.formTemplateId,
+          input.active ? 1 : 0,
+          createdAt
+        ]
+      );
+
+      const triggers = await listWorkflowTriggersForWorkflow(workflowId);
+      const createdTrigger = triggers.find((trigger) => trigger.id === workflowTriggerId) ?? null;
+      if (createdTrigger == null) {
+        throw new Error("Failed to load newly created workflow trigger.");
+      }
+
+      return createdTrigger;
+    },
+    async deleteAdminWorkflowTrigger(workflowId, triggerId) {
+      const [, result] = await executor.execute(
+        "DELETE FROM workflow_triggers WHERE workflow_id = ? AND workflow_trigger_id = ?",
+        [workflowId, triggerId]
+      );
+
+      return Number(result.affectedRows ?? 0) > 0;
+    },
+    async listAdminWorkflowEnrollments(workflowId) {
+      const [rows] = await executor.execute<Array<{
+        workflow_enrollment_id: string;
+        workflow_id: string;
+        client_id: string;
+        enrolled_at: string;
+        next_run_at: string | null;
+        completed_at: string | null;
+        status: "active" | "completed" | "cancelled" | null;
+        enrolled_by: string | null;
+        cancelled_at: string | null;
+        client_name: string;
+        client_email: string;
+        enrolled_by_name: string | null;
+      }>>(
+        [
+          "SELECT we.workflow_enrollment_id, we.workflow_id, we.client_id, we.enrolled_at, we.next_run_at, we.completed_at,",
+          "we.status, we.enrolled_by, we.cancelled_at,",
+          "c.name AS client_name, c.email AS client_email, au.username AS enrolled_by_name",
+          "FROM workflow_enrollments we",
+          "INNER JOIN clients c ON c.id = we.client_id",
+          "LEFT JOIN admin_users au ON au.id = we.enrolled_by",
+          "WHERE we.workflow_id = ?",
+          "ORDER BY we.enrolled_at DESC"
+        ].join(" "),
+        [workflowId]
+      );
+
+      return rows.map((row) => ({
+        id: row.workflow_enrollment_id,
+        workflowId: row.workflow_id,
+        clientId: row.client_id,
+        enrolledAt: row.enrolled_at,
+        nextRunAt: row.next_run_at ?? row.enrolled_at,
+        completedAt: row.completed_at,
+        status: row.status ?? (row.completed_at == null ? "active" : "completed"),
+        enrolledByAdminUserId: row.enrolled_by,
+        cancelledAt: row.cancelled_at,
+        clientName: row.client_name,
+        clientEmail: row.client_email,
+        enrolledByName: row.enrolled_by_name
+      }));
+    },
+    async listWorkflowEnrollableClients(workflowId) {
+      const [rows] = await executor.execute<Array<{
+        id: number;
+        name: string;
+        email: string;
+        already_enrolled: number;
+      }>>(
+        [
+          "SELECT c.id, c.name, c.email,",
+          "CASE WHEN EXISTS(",
+          "  SELECT 1 FROM workflow_enrollments we",
+          "  WHERE we.workflow_id = ?",
+          "    AND we.client_id = c.id",
+          "    AND COALESCE(we.status, 'active') = 'active'",
+          "    AND we.completed_at IS NULL",
+          ") THEN 1 ELSE 0 END AS already_enrolled",
+          "FROM clients c",
+          "WHERE COALESCE(c.is_archived, 0) = 0",
+          "ORDER BY c.name ASC"
+        ].join(" "),
+        [workflowId]
+      );
+
+      return rows.map((row) => ({
+        clientId: String(row.id),
+        name: row.name,
+        email: row.email,
+        alreadyEnrolled: Number(row.already_enrolled) === 1
+      }));
+    },
+    async enrollWorkflowClients(workflowId, clientIds, adminUserId) {
+      await executor.execute("START TRANSACTION");
+      try {
+        await enrollWorkflowClientsInternal(workflowId, clientIds, adminUserId);
+        await executor.execute("COMMIT");
+      } catch (error) {
+        try {
+          await executor.execute("ROLLBACK");
+        } catch {
+          // best effort rollback
+        }
+        throw error;
+      }
+    },
+    async cancelWorkflowEnrollment(workflowId, enrollmentId) {
+      const cancelledAt = now();
+      await executor.execute("START TRANSACTION");
+      try {
+        const [, result] = await executor.execute(
+          [
+            "UPDATE workflow_enrollments",
+            "SET status = 'cancelled', completed_at = COALESCE(completed_at, ?), cancelled_at = ?, next_run_at = NULL",
+            "WHERE workflow_id = ? AND workflow_enrollment_id = ?",
+            "AND COALESCE(status, 'active') = 'active'"
+          ].join(" "),
+          [cancelledAt, cancelledAt, workflowId, enrollmentId]
+        );
+
+        if (Number(result.affectedRows ?? 0) === 0) {
+          await executor.execute("COMMIT");
+          return false;
+        }
+
+        await executor.execute(
+          [
+            "UPDATE workflow_step_executions",
+            "SET status = 'cancelled'",
+            "WHERE enrollment_id = ? AND status = 'pending' AND executed_at IS NULL"
+          ].join(" "),
+          [enrollmentId]
+        );
+
+        await executor.execute("COMMIT");
+        return true;
+      } catch (error) {
+        try {
+          await executor.execute("ROLLBACK");
+        } catch {
+          // best effort rollback
+        }
+        throw error;
+      }
+    },
+    async listAdminWorkflowSteps(workflowId) {
+      return await listWorkflowStepsForWorkflow(workflowId);
+    },
+    async findAdminWorkflowStepById(workflowId, stepId) {
+      return await findWorkflowStepById(workflowId, stepId);
+    },
+    async createAdminWorkflowStep(workflowId, _adminUserId, input) {
+      const [orderRows] = await executor.execute<Array<{ max_order: number | null }>>(
+        [
+          "SELECT MAX(step_order) AS max_order",
+          "FROM workflow_steps",
+          "WHERE workflow_id = ?"
+        ].join(" "),
+        [workflowId]
+      );
+      const stepOrder = Number(orderRows[0]?.max_order ?? 0) + 1;
+      const workflowStepId = `workflow-step-${randomUUID()}`;
+      const createdAt = now();
+
+      await executor.execute(
+        [
+          "INSERT INTO workflow_steps",
+          "(workflow_step_id, workflow_id, step_order, step_name, email_subject, email_body_html, email_body_text,",
+          "delay_type, delay_value, scheduled_date, attach_contract_id, attach_form_id, attach_quote_id, attach_invoice_id,",
+          "include_appointment_link, appointment_type_id, created_at, updated_at)",
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        ].join(" "),
+        [
+          workflowStepId,
+          workflowId,
+          stepOrder,
+          input.stepName,
+          input.emailSubject,
+          input.emailBodyHtml,
+          input.emailBodyText,
+          input.delayType,
+          input.delayValue,
+          input.scheduledDate,
+          input.attachContractId,
+          input.attachFormId,
+          input.attachQuoteId,
+          input.attachInvoiceId,
+          input.includeAppointmentLink ? 1 : 0,
+          input.appointmentTypeId,
+          createdAt,
+          createdAt
+        ]
+      );
+
+      const step = await findWorkflowStepById(workflowId, workflowStepId);
+      if (step == null) {
+        throw new Error("Failed to load newly created workflow step.");
+      }
+
+      return step;
+    },
+    async updateAdminWorkflowStep(workflowId, stepId, _adminUserId, input) {
+      const [, result] = await executor.execute(
+        [
+          "UPDATE workflow_steps",
+          "SET step_name = ?, email_subject = ?, email_body_html = ?, email_body_text = ?,",
+          "delay_type = ?, delay_value = ?, scheduled_date = ?,",
+          "attach_contract_id = ?, attach_form_id = ?, attach_quote_id = ?, attach_invoice_id = ?,",
+          "include_appointment_link = ?, appointment_type_id = ?, updated_at = ?",
+          "WHERE workflow_id = ? AND workflow_step_id = ?"
+        ].join(" "),
+        [
+          input.stepName,
+          input.emailSubject,
+          input.emailBodyHtml,
+          input.emailBodyText,
+          input.delayType,
+          input.delayValue,
+          input.scheduledDate,
+          input.attachContractId,
+          input.attachFormId,
+          input.attachQuoteId,
+          input.attachInvoiceId,
+          input.includeAppointmentLink ? 1 : 0,
+          input.appointmentTypeId,
+          now(),
+          workflowId,
+          stepId
+        ]
+      );
+
+      if (Number(result.affectedRows ?? 0) === 0) {
+        return null;
+      }
+
+      return await findWorkflowStepById(workflowId, stepId);
+    },
+    async deleteAdminWorkflowStep(workflowId, stepId) {
+      await executor.execute("START TRANSACTION");
+      try {
+        const [enrollmentRows] = await executor.execute<Array<{ enrollment_id: string }>>(
+          [
+            "SELECT DISTINCT enrollment_id",
+            "FROM workflow_step_executions",
+            "WHERE step_id = ?"
+          ].join(" "),
+          [stepId]
+        );
+
+        await executor.execute(
+          "DELETE FROM workflow_step_executions WHERE step_id = ?",
+          [stepId]
+        );
+        const [, result] = await executor.execute(
+          "DELETE FROM workflow_steps WHERE workflow_id = ? AND workflow_step_id = ?",
+          [workflowId, stepId]
+        );
+
+        if (Number(result.affectedRows ?? 0) === 0) {
+          await executor.execute("COMMIT");
+          return false;
+        }
+
+        for (const row of enrollmentRows) {
+          await refreshWorkflowEnrollmentProgress(row.enrollment_id);
+        }
+
+        await executor.execute("COMMIT");
+        return true;
+      } catch (error) {
+        try {
+          await executor.execute("ROLLBACK");
+        } catch {
+          // best effort rollback
+        }
+        throw error;
+      }
+    },
+    async listWorkflowStepEditorOptions() {
+      const [contractRows] = await executor.execute<Array<{ id: number; name: string }>>(
+        "SELECT id, name FROM contract_templates WHERE COALESCE(is_active, 1) = 1 ORDER BY name ASC"
+      );
+      const [formRows] = await executor.execute<Array<{ id: number; name: string }>>(
+        "SELECT id, name FROM form_templates WHERE COALESCE(is_active, 1) = 1 ORDER BY name ASC"
+      );
+      const [appointmentTypeRows] = await executor.execute<Array<{ id: number; name: string }>>(
+        "SELECT id, name FROM appointment_types WHERE COALESCE(is_active, 1) = 1 ORDER BY name ASC"
+      );
+      const [quoteRows] = await executor.execute<Array<{
+        id: number;
+        quote_number: string;
+        title: string;
+        client_name: string | null;
+      }>>(
+        [
+          "SELECT q.id, q.quote_number, q.title, c.name AS client_name",
+          "FROM quotes q",
+          "LEFT JOIN clients c ON c.id = q.client_id",
+          "ORDER BY q.created_at DESC",
+          "LIMIT 100"
+        ].join(" ")
+      );
+      const [invoiceRows] = await executor.execute<Array<{
+        id: number;
+        invoice_number: string;
+        client_name: string | null;
+        total_amount: number;
+      }>>(
+        [
+          "SELECT i.id, i.invoice_number, c.name AS client_name, i.total_amount",
+          "FROM invoices i",
+          "LEFT JOIN clients c ON c.id = i.client_id",
+          "ORDER BY i.issue_date DESC",
+          "LIMIT 100"
+        ].join(" ")
+      );
+      const [emailTemplateRows] = await executor.execute<Array<{
+        id: number;
+        name: string;
+        subject: string;
+        body_html: string;
+        body_text: string | null;
+      }>>(
+        [
+          "SELECT id, name, subject, body_html, body_text",
+          "FROM email_templates",
+          "WHERE COALESCE(is_active, 1) = 1",
+          "ORDER BY name ASC"
+        ].join(" ")
+      );
+
+      return {
+        contractTemplates: contractRows.map((row) => ({
+          id: String(row.id),
+          label: row.name
+        })),
+        formTemplates: formRows.map((row) => ({
+          id: String(row.id),
+          label: row.name
+        })),
+        appointmentTypes: appointmentTypeRows.map((row) => ({
+          id: String(row.id),
+          label: row.name
+        })),
+        quotes: quoteRows.map((row) => ({
+          id: String(row.id),
+          label: `${row.quote_number} - ${row.title}${row.client_name == null || row.client_name === "" ? "" : ` (${row.client_name})`}`
+        })),
+        invoices: invoiceRows.map((row) => ({
+          id: String(row.id),
+          label: `${row.invoice_number}${row.client_name == null || row.client_name === "" ? "" : ` (${row.client_name})`}`
+        })),
+        emailTemplates: emailTemplateRows.map((row) => ({
+          id: String(row.id),
+          label: row.name,
+          subject: row.subject,
+          bodyHtml: row.body_html,
+          bodyText: row.body_text ?? ""
+        })),
+        processorIntervalMinutes: await getWorkflowProcessorIntervalMinutes()
+      };
+    }
+  };
+
+  async function loadPublicQuoteItems(quoteId: string) {
+    const [rows] = await executor.execute<Array<{
+      description: string | null;
+      quantity: number | null;
+      unit_price: number | null;
+      amount: number | null;
+      item_type: string | null;
+      reference_id: number | null;
+    }>>(
+      [
+        "SELECT description, quantity, unit_price, amount, item_type, reference_id",
+        "FROM quote_items",
+        "WHERE quote_id = ?",
+        "ORDER BY id ASC"
+      ].join(" "),
+      [quoteId]
+    );
+
+    return rows.map((row) => ({
+      description: row.description?.trim() === "" ? "Line Item" : (row.description ?? "Line Item"),
+      quantity: Number(row.quantity ?? 0),
+      unitPrice: Number(row.unit_price ?? 0),
+      amount: Number(row.amount ?? 0),
+      itemType: row.item_type ?? undefined,
+      referenceId: row.reference_id == null ? null : String(row.reference_id)
+    }));
+  }
+
+  async function loadPublicQuoteByWhere(whereClause: string, params: unknown[]): Promise<Quote | null> {
+    const [rows] = await executor.execute<Array<{
+      id: number;
+      client_id: number;
+      status: Quote["status"];
+      total_amount: number;
+      access_token: string | null;
+      quote_number: string | null;
+      title: string | null;
+      description: string | null;
+      expiration_date: string | null;
+      accepted_at: string | null;
+      declined_at: string | null;
+    }>>(
+      [
+        "SELECT id, client_id, status, total_amount, access_token, quote_number, title, description, expiration_date, accepted_at, declined_at",
+        "FROM quotes",
+        `WHERE ${whereClause}`,
+        "LIMIT 1"
+      ].join(" "),
+      params
+    );
+
+    const row = rows[0];
+    if (row == null) {
+      return null;
+    }
+
+    return {
+      id: String(row.id),
+      clientId: String(row.client_id),
+      status: row.status,
+      totalAmount: Number(row.total_amount),
+      quoteNumber: row.quote_number ?? undefined,
+      title: row.title ?? undefined,
+      description: row.description ?? "",
+      expiresAt: row.expiration_date,
+      acceptedAt: row.accepted_at,
+      declinedAt: row.declined_at,
+      items: await loadPublicQuoteItems(String(row.id)),
+      publicAccess: row.access_token == null ? null : {
+        token: row.access_token,
+        issuedAt: now(),
+        expiresAt: null,
+        legacySourceId: String(row.id)
+      }
+    };
+  }
+
+  async function loadPublicContractByWhere(whereClause: string, params: unknown[]): Promise<Contract | null> {
+    const [rows] = await executor.execute<Array<{
+      id: number;
+      client_id: number;
+      status: Contract["status"];
+      access_token: string | null;
+      contract_number: string | null;
+      title: string | null;
+      description: string | null;
+      contract_text: string | null;
+      effective_date: string | null;
+      signed_date: string | null;
+      signature_typed_name: string | null;
+      signature_font: string | null;
+    }>>(
+      [
+        "SELECT id, client_id, status, access_token, contract_number, title, description, contract_text, effective_date, signed_date, signature_typed_name, signature_font",
+        "FROM contracts",
+        `WHERE ${whereClause}`,
+        "LIMIT 1"
+      ].join(" "),
+      params
+    );
+
+    const row = rows[0];
+    return row == null ? null : {
+      id: String(row.id),
+      clientId: String(row.client_id),
+      status: row.status,
+      contractNumber: row.contract_number ?? undefined,
+      title: row.title ?? undefined,
+      description: row.description ?? "",
+      contractText: row.contract_text ?? "",
+      effectiveDate: row.effective_date,
+      signedAt: row.signed_date,
+      signatureTypedName: row.signature_typed_name,
+      signatureFont: row.signature_font,
+      publicAccess: row.access_token == null ? null : {
+        token: row.access_token,
+        issuedAt: now(),
+        expiresAt: null,
+        legacySourceId: String(row.id)
+      }
+    };
+  }
+
+  async function loadPublicFormSubmissionByWhere(whereClause: string, params: unknown[]): Promise<FormSubmission | null> {
+    const [rows] = await executor.execute<FormSubmissionRow[]>(
+      [
+        "SELECT fs.id, fs.template_id, fs.client_id, ft.name AS template_name,",
+        "ft.description AS template_description, ft.fields AS template_fields,",
+        "ft.form_type, ft.is_internal AS template_is_internal,",
+        "ft.show_in_client_portal AS template_show_in_client_portal,",
+        "c.name AS client_name, c.email AS client_email, c.phone AS client_phone,",
+        "fs.responses, fs.submitted_at, fs.access_token",
+        "FROM form_submissions fs",
+        "LEFT JOIN form_templates ft ON ft.id = fs.template_id",
+        "LEFT JOIN clients c ON c.id = fs.client_id",
+        `WHERE ${whereClause}`,
+        "LIMIT 1"
+      ].join(" "),
+      params
+    );
+
+    const row = rows[0];
+    return row == null ? null : mapFormSubmissionRow(row, now());
+  }
+
+  const publicDocuments: PublicDocumentAccessDependencies = {
+    now,
+    findPublicQuoteById: async (quoteId) => loadPublicQuoteByWhere("id = ?", [quoteId]),
+    findPublicQuoteByToken: async (token) => loadPublicQuoteByWhere("access_token = ?", [token]),
+    async respondPublicQuote(quoteId, action) {
+      await executor.execute(
+        [
+          "UPDATE quotes",
+          action === "accept"
+            ? "SET status = 'accepted', accepted_at = CURRENT_TIMESTAMP"
+            : "SET status = 'declined', declined_at = CURRENT_TIMESTAMP",
+          "WHERE id = ? AND status IN ('draft', 'sent')"
         ].join(" "),
         [quoteId]
       );
 
-      const row = rows[0];
-      return row == null ? null : {
-        id: String(row.id),
-        clientId: String(row.client_id),
-        status: row.status,
-        totalAmount: Number(row.total_amount),
-        publicAccess: row.access_token == null ? null : {
-          token: row.access_token,
-          issuedAt: now(),
-          expiresAt: null,
-          legacySourceId: String(row.id)
-        }
-      };
+      return await loadPublicQuoteByWhere("id = ?", [quoteId]);
     },
-    async findPublicContractById(contractId) {
-      const [rows] = await executor.execute<Array<{
-        id: number;
-        client_id: number;
-        status: Contract["status"];
-        access_token: string | null;
-      }>>(
-        [
-          "SELECT id, client_id, status, access_token",
-          "FROM contracts",
-          "WHERE id = ?",
-          "LIMIT 1"
-        ].join(" "),
-        [contractId]
-      );
-
-      const row = rows[0];
-      return row == null ? null : {
-        id: String(row.id),
-        clientId: String(row.client_id),
-        status: row.status,
-        publicAccess: row.access_token == null ? null : {
-          token: row.access_token,
-          issuedAt: now(),
-          expiresAt: null,
-          legacySourceId: String(row.id)
+    findPublicContractById: async (contractId) => loadPublicContractByWhere("id = ?", [contractId]),
+    findPublicContractByToken: async (token) => loadPublicContractByWhere("access_token = ?", [token]),
+    async signPublicContract(input) {
+      await executor.execute("START TRANSACTION");
+      try {
+        await executor.execute(
+          [
+            "UPDATE contracts",
+            "SET status = 'signed', signature_typed_name = ?, signature_font = ?, signed_date = CURRENT_TIMESTAMP, ip_address = ?",
+            "WHERE id = ? AND status = 'sent'"
+          ].join(" "),
+          [input.typedName, input.signatureFont, input.ipAddress, input.contractId]
+        );
+        await executor.execute(
+          [
+            "INSERT INTO contract_signature_log",
+            "(contract_id, event_type, details, ip_address, user_agent, created_at)",
+            "VALUES (?, 'signed', ?, ?, ?, CURRENT_TIMESTAMP)"
+          ].join(" "),
+          [
+            input.contractId,
+            `Contract signed electronically by "${input.typedName}" using style ${input.signatureFont}.`,
+            input.ipAddress,
+            input.userAgent
+          ]
+        );
+        await executor.execute("COMMIT");
+      } catch (error) {
+        try {
+          await executor.execute("ROLLBACK");
+        } catch {
+          // best effort rollback
         }
-      };
+        throw error;
+      }
+
+      return await loadPublicContractByWhere("id = ?", [input.contractId]);
     },
-    async findPublicFormSubmissionById(submissionId) {
-      const [rows] = await executor.execute<Array<{
-        id: number;
-        template_id: number;
-        client_id: number;
-        submitted_at: string | null;
-        access_token: string | null;
-      }>>(
-        [
-          "SELECT id, template_id, client_id, submitted_at, access_token",
-          "FROM form_submissions",
-          "WHERE id = ?",
-          "LIMIT 1"
-        ].join(" "),
-        [submissionId]
-      );
-
-      const row = rows[0];
-      return row == null ? null : {
-        id: String(row.id),
-        templateId: String(row.template_id),
-        clientId: String(row.client_id),
-        submittedAt: row.submitted_at,
-        publicAccess: row.access_token == null ? null : {
-          token: row.access_token,
-          issuedAt: now(),
-          expiresAt: null,
-          legacySourceId: String(row.id)
+    findPublicFormSubmissionById: async (submissionId) => loadPublicFormSubmissionByWhere("fs.id = ?", [submissionId]),
+    findPublicFormSubmissionByToken: async (token) => loadPublicFormSubmissionByWhere("fs.access_token = ?", [token]),
+    async submitPublicForm(input) {
+      await executor.execute("START TRANSACTION");
+      try {
+        await executor.execute(
+          [
+            "UPDATE form_submissions",
+            "SET responses = ?, status = 'submitted', submitted_at = CURRENT_TIMESTAMP",
+            "WHERE id = ? AND status = 'pending'"
+          ].join(" "),
+          [JSON.stringify(input.responses), input.submissionId]
+        );
+        await executor.execute(
+          [
+            "UPDATE clients",
+            "SET name = ?, email = ?, phone = ?, updated_at = CURRENT_TIMESTAMP",
+            "WHERE id = (SELECT client_id FROM form_submissions WHERE id = ? LIMIT 1)"
+          ].join(" "),
+          [input.contactName, input.contactEmail, input.contactPhone === "" ? null : input.contactPhone, input.submissionId]
+        );
+        const [submissionRows] = await executor.execute<Array<{ client_id: number | null; template_id: string | number | null }>>(
+          [
+            "SELECT client_id, template_id",
+            "FROM form_submissions",
+            "WHERE id = ?",
+            "LIMIT 1"
+          ].join(" "),
+          [input.submissionId]
+        );
+        const clientId = submissionRows[0]?.client_id;
+        const templateId = submissionRows[0]?.template_id;
+        if (clientId != null && templateId != null) {
+          await applyFormSubmissionTriggers({
+            clientId: String(clientId),
+            templateId: String(templateId)
+          });
         }
-      };
+        await executor.execute("COMMIT");
+      } catch (error) {
+        try {
+          await executor.execute("ROLLBACK");
+        } catch {
+          // best effort rollback
+        }
+        throw error;
+      }
+
+      return await loadPublicFormSubmissionByWhere("fs.id = ?", [input.submissionId]);
     },
     async findPublicBookingIcalById(bookingId) {
       const [rows] = await executor.execute<Array<{
@@ -3500,11 +7237,37 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
 
       const row = rows[0];
       return row == null ? null : fromLegacyBookingRow(row);
-    }
+    },
+    async findPublicBookingIcalByToken(token) {
+      const [rows] = await executor.execute<Array<{
+        id: number;
+        client_id: number | null;
+        service_type: string;
+        appointment_date: string;
+        appointment_time: string;
+        duration_minutes: number;
+        status: "pending" | "confirmed" | "completed" | "cancelled";
+        ical_token: string | null;
+      }>>(
+        [
+          "SELECT id, client_id, service_type, appointment_date, appointment_time, duration_minutes, status, ical_token",
+          "FROM bookings",
+          "WHERE ical_token = ?",
+          "LIMIT 1"
+        ].join(" "),
+        [token]
+      );
+
+      const row = rows[0];
+      return row == null ? null : fromLegacyBookingRow(row);
+    },
+    verifyCaptcha: captchaVerifier
   };
 
   return {
     publicBooking,
+    publicContact,
+    publicPackages,
     integrationCallbacks,
     portalLogin,
     adminLogin,
@@ -3514,6 +7277,7 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
     portalSummary,
     adminDashboard,
     adminOperations,
+    adminConfiguration,
     content,
     achievements,
     portalResources,
@@ -3522,7 +7286,8 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
     contacts,
     adminCalendarSync,
     portalCommerce,
-    publicDocuments
+    publicDocuments,
+    workflows
   };
 }
 
@@ -3693,6 +7458,10 @@ const supportedMigrationTables = new Set([
   "pets",
   "quotes",
   "scheduled_tasks",
+  "settings",
+  "workflow_triggers",
+  "workflow_step_executions",
+  "workflow_steps",
   "workflows"
 ]);
 
@@ -3702,6 +7471,23 @@ const supportedMigrationTokenFields: Record<string, Set<string>> = {
   form_submissions: new Set(["access_token"]),
   quotes: new Set(["access_token"])
 };
+
+const supportedLaunchPreflightTables = new Set([
+  "app_sessions",
+  "calendar_sync_links",
+  "email_outbox",
+  "inbound_emails",
+  "integration_callbacks",
+  "job_queue",
+  "package_pending_purchases",
+  "settings",
+  "unmatched_emails",
+  "workflow_enrollments",
+  "workflow_triggers",
+  "workflow_step_executions",
+  "workflow_steps",
+  "workflows"
+]);
 
 function assertSupportedMigrationTable(table: string): void {
   if (!supportedMigrationTables.has(table)) {
@@ -3716,10 +7502,16 @@ function assertSupportedMigrationTokenField(table: string, field: string): void 
   }
 }
 
+function assertSupportedLaunchPreflightTable(table: string): void {
+  if (!supportedLaunchPreflightTables.has(table)) {
+    throw new Error(`Unsupported launch preflight table: ${table}`);
+  }
+}
+
 export function createMySqlMigrationAuditDependencies(
   executor: SqlExecutor,
   options: { now?: () => string } = {}
-): MigrationAuditDependencies {
+): LaunchPreflightDependencies {
   const now = options.now ?? defaultNow;
 
   return {
@@ -3737,117 +7529,437 @@ export function createMySqlMigrationAuditDependencies(
         `SELECT COUNT(*) AS rowCount FROM ${table} WHERE ${tokenField} IS NULL OR TRIM(${tokenField}) = ''`
       );
       return Number(rows[0]?.rowCount ?? 0);
+    },
+    async tableExists(table) {
+      assertSupportedLaunchPreflightTable(table);
+      const [rows] = await executor.execute<Array<{ tableName: string }>>(
+        "SELECT table_name AS tableName FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ? LIMIT 1",
+        [table]
+      );
+      return rows.length > 0;
     }
   };
 }
 
-export function getMySqlBootstrapStatements(): string[] {
+type MySqlBootstrapIndexStatement = {
+  table: string;
+  indexName: string;
+  statement: string;
+};
+
+type MySqlBootstrapColumnStatement = {
+  table: string;
+  columnName: string;
+  statement: string;
+};
+
+function escapeMySqlString(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+const mySqlBootstrapSettingsSeedStatements = [...managedSettingsCatalog.values()].flatMap((definition) => {
+  const quotedKey = escapeMySqlString(definition.key);
+  const quotedValue = escapeMySqlString(definition.bootstrapValue);
+  const quotedType = escapeMySqlString(definition.type);
+  const quotedCategory = escapeMySqlString(definition.category);
+  const quotedLabel = escapeMySqlString(definition.label);
+  const quotedDescription = escapeMySqlString(definition.description);
+  const secretValue = definition.secret ? "1" : "0";
+
   return [
     [
-      "CREATE TABLE IF NOT EXISTS email_outbox (",
-      "id BIGINT PRIMARY KEY AUTO_INCREMENT,",
-      "recipient VARCHAR(255) NOT NULL,",
-      "subject VARCHAR(255) NOT NULL,",
-      "html_body MEDIUMTEXT NOT NULL,",
-      "template_key VARCHAR(100) NOT NULL,",
-      "status VARCHAR(32) NOT NULL DEFAULT 'queued',",
-      "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,",
-      "processed_at TIMESTAMP NULL",
-      ")"
+      "INSERT INTO settings (setting_key, setting_value, setting_type, category, label, description, is_secret, updated_at)",
+      `SELECT ${quotedKey}, ${quotedValue}, ${quotedType}, ${quotedCategory}, ${quotedLabel}, ${quotedDescription}, ${secretValue}, CURRENT_TIMESTAMP`,
+      `WHERE NOT EXISTS (SELECT 1 FROM settings WHERE setting_key = ${quotedKey})`
     ].join(" "),
     [
-      "CREATE TABLE IF NOT EXISTS job_queue (",
-      "id BIGINT PRIMARY KEY AUTO_INCREMENT,",
-      "job_id VARCHAR(128) NOT NULL UNIQUE,",
-      "job_kind VARCHAR(64) NOT NULL,",
-      "run_at TIMESTAMP NOT NULL,",
-      "payload_json JSON NOT NULL,",
-      "status VARCHAR(32) NOT NULL DEFAULT 'queued',",
-      "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,",
-      "processed_at TIMESTAMP NULL",
+      "UPDATE settings",
+      `SET setting_type = ${quotedType},`,
+      `category = ${quotedCategory},`,
+      `label = ${quotedLabel},`,
+      `description = ${quotedDescription},`,
+      `is_secret = ${secretValue},`,
+      "updated_at = CURRENT_TIMESTAMP",
+      `WHERE setting_key = ${quotedKey}`,
+      "AND (",
+      `COALESCE(setting_type, '') <> ${quotedType}`,
+      `OR COALESCE(category, '') <> ${quotedCategory}`,
+      `OR COALESCE(label, '') <> ${quotedLabel}`,
+      `OR COALESCE(description, '') <> ${quotedDescription}`,
+      `OR is_secret <> ${secretValue}`,
       ")"
-    ].join(" "),
-    [
-      "CREATE TABLE IF NOT EXISTS inbound_emails (",
-      "id BIGINT PRIMARY KEY AUTO_INCREMENT,",
-      "inbound_email_id VARCHAR(128) NOT NULL UNIQUE,",
-      "provider VARCHAR(64) NOT NULL,",
-      "mailbox VARCHAR(255) NOT NULL,",
-      "message_id VARCHAR(255) NOT NULL,",
-      "received_at TIMESTAMP NOT NULL,",
-      "from_email VARCHAR(255) NOT NULL,",
-      "subject VARCHAR(255) NOT NULL,",
-      "matched_client_id VARCHAR(128) NULL,",
-      "raw_payload_json JSON NOT NULL,",
-      "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP",
-      ")"
-    ].join(" "),
-    [
-      "CREATE TABLE IF NOT EXISTS unmatched_emails (",
-      "id BIGINT PRIMARY KEY AUTO_INCREMENT,",
-      "unmatched_email_id VARCHAR(128) NOT NULL UNIQUE,",
-      "inbound_email_id VARCHAR(128) NOT NULL,",
-      "reason VARCHAR(64) NOT NULL,",
-      "detected_at TIMESTAMP NOT NULL,",
-      "resolved_at TIMESTAMP NULL,",
-      "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP",
-      ")"
-    ].join(" "),
-    [
-      "CREATE TABLE IF NOT EXISTS integration_callbacks (",
-      "id BIGINT PRIMARY KEY AUTO_INCREMENT,",
-      "callback_id VARCHAR(128) NOT NULL UNIQUE,",
-      "provider VARCHAR(64) NOT NULL,",
-      "received_at TIMESTAMP NOT NULL,",
-      "payload_json JSON NOT NULL,",
-      "queued_job_id VARCHAR(128) NULL,",
-      "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP",
-      ")"
-    ].join(" "),
-    [
-      "CREATE TABLE IF NOT EXISTS calendar_sync_links (",
-      "id BIGINT PRIMARY KEY AUTO_INCREMENT,",
-      "sync_link_id VARCHAR(128) NOT NULL UNIQUE,",
-      "booking_id VARCHAR(128) NOT NULL,",
-      "provider VARCHAR(64) NOT NULL,",
-      "external_event_id VARCHAR(255) NOT NULL,",
-      "external_event_url VARCHAR(1024) NULL,",
-      "synced_at TIMESTAMP NOT NULL,",
-      "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,",
-      "UNIQUE KEY uniq_calendar_sync_links_booking_provider (booking_id, provider)",
-      ")"
-    ].join(" "),
-    [
-      "CREATE TABLE IF NOT EXISTS workflows (",
-      "id BIGINT PRIMARY KEY AUTO_INCREMENT,",
-      "workflow_id VARCHAR(128) NOT NULL UNIQUE,",
-      "workflow_name VARCHAR(255) NOT NULL,",
-      "workflow_trigger VARCHAR(64) NOT NULL,",
-      "active TINYINT(1) NOT NULL DEFAULT 1,",
-      "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP",
-      ")"
-    ].join(" "),
-    [
-      "CREATE TABLE IF NOT EXISTS workflow_enrollments (",
-      "id BIGINT PRIMARY KEY AUTO_INCREMENT,",
-      "workflow_enrollment_id VARCHAR(128) NOT NULL UNIQUE,",
-      "workflow_id VARCHAR(128) NOT NULL,",
-      "client_id VARCHAR(128) NOT NULL,",
-      "enrolled_at TIMESTAMP NOT NULL,",
-      "next_run_at TIMESTAMP NOT NULL,",
-      "completed_at TIMESTAMP NULL,",
-      "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP",
-      ")"
-    ].join(" "),
-    "CREATE INDEX idx_inbound_emails_provider_received_at ON inbound_emails(provider, received_at)",
-    "CREATE INDEX idx_unmatched_emails_reason_detected_at ON unmatched_emails(reason, detected_at)",
-    "CREATE INDEX idx_integration_callbacks_provider_received_at ON integration_callbacks(provider, received_at)",
-    "CREATE INDEX idx_calendar_sync_links_provider_synced_at ON calendar_sync_links(provider, synced_at)",
-    "CREATE INDEX idx_workflows_active_trigger ON workflows(active, workflow_trigger)",
-    "CREATE INDEX idx_workflow_enrollments_run_at ON workflow_enrollments(completed_at, next_run_at)",
-    "CREATE INDEX idx_job_queue_status_run_at ON job_queue(status, run_at)",
-    "CREATE INDEX idx_email_outbox_status_created_at ON email_outbox(status, created_at)"
+    ].join(" ")
   ];
+});
+
+const mySqlBootstrapTableStatements = [
+  [
+    "CREATE TABLE IF NOT EXISTS settings (",
+    "setting_key VARCHAR(191) PRIMARY KEY,",
+    "setting_value TEXT NULL,",
+    "setting_type VARCHAR(64) NOT NULL DEFAULT 'text',",
+    "category VARCHAR(64) NOT NULL DEFAULT 'general',",
+    "label VARCHAR(255) NOT NULL DEFAULT '',",
+    "description TEXT NULL,",
+    "is_secret TINYINT(1) NOT NULL DEFAULT 0,",
+    "updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
+    ")"
+  ].join(" "),
+  [
+    "CREATE TABLE IF NOT EXISTS email_outbox (",
+    "id BIGINT PRIMARY KEY AUTO_INCREMENT,",
+    "recipient VARCHAR(255) NOT NULL,",
+    "subject VARCHAR(255) NOT NULL,",
+    "html_body MEDIUMTEXT NOT NULL,",
+    "template_key VARCHAR(100) NOT NULL,",
+    "status VARCHAR(32) NOT NULL DEFAULT 'queued',",
+    "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,",
+    "processed_at TIMESTAMP NULL",
+    ")"
+  ].join(" "),
+  [
+    "CREATE TABLE IF NOT EXISTS job_queue (",
+    "id BIGINT PRIMARY KEY AUTO_INCREMENT,",
+    "job_id VARCHAR(128) NOT NULL UNIQUE,",
+    "job_kind VARCHAR(64) NOT NULL,",
+    "run_at TIMESTAMP NOT NULL,",
+    "payload_json JSON NOT NULL,",
+    "status VARCHAR(32) NOT NULL DEFAULT 'queued',",
+    "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,",
+    "processed_at TIMESTAMP NULL",
+    ")"
+  ].join(" "),
+  [
+    "CREATE TABLE IF NOT EXISTS inbound_emails (",
+    "id BIGINT PRIMARY KEY AUTO_INCREMENT,",
+    "inbound_email_id VARCHAR(128) NOT NULL UNIQUE,",
+    "provider VARCHAR(64) NOT NULL,",
+    "mailbox VARCHAR(255) NOT NULL,",
+    "message_id VARCHAR(255) NOT NULL,",
+    "received_at TIMESTAMP NOT NULL,",
+    "from_email VARCHAR(255) NOT NULL,",
+    "subject VARCHAR(255) NOT NULL,",
+    "matched_client_id VARCHAR(128) NULL,",
+    "raw_payload_json JSON NOT NULL,",
+    "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    ")"
+  ].join(" "),
+  [
+    "CREATE TABLE IF NOT EXISTS unmatched_emails (",
+    "id BIGINT PRIMARY KEY AUTO_INCREMENT,",
+    "unmatched_email_id VARCHAR(128) NOT NULL UNIQUE,",
+    "inbound_email_id VARCHAR(128) NOT NULL,",
+    "reason VARCHAR(64) NOT NULL,",
+    "detected_at TIMESTAMP NOT NULL,",
+    "resolved_at TIMESTAMP NULL,",
+    "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    ")"
+  ].join(" "),
+  [
+    "CREATE TABLE IF NOT EXISTS integration_callbacks (",
+    "id BIGINT PRIMARY KEY AUTO_INCREMENT,",
+    "callback_id VARCHAR(128) NOT NULL UNIQUE,",
+    "provider VARCHAR(64) NOT NULL,",
+    "received_at TIMESTAMP NOT NULL,",
+    "payload_json JSON NOT NULL,",
+    "queued_job_id VARCHAR(128) NULL,",
+    "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    ")"
+  ].join(" "),
+  [
+    "CREATE TABLE IF NOT EXISTS package_pending_purchases (",
+    "id BIGINT PRIMARY KEY AUTO_INCREMENT,",
+    "package_id VARCHAR(128) NOT NULL,",
+    "package_token VARCHAR(255) NOT NULL,",
+    "stripe_checkout_session_id VARCHAR(255) NOT NULL,",
+    "buyer_name VARCHAR(255) NOT NULL,",
+    "buyer_email VARCHAR(255) NOT NULL,",
+    "buyer_phone VARCHAR(64) NULL,",
+    "notes TEXT NULL,",
+    "form_submission_json JSON NULL,",
+    "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,",
+    "updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,",
+    "UNIQUE KEY uniq_package_pending_purchases_package_session (package_id, stripe_checkout_session_id)",
+    ")"
+  ].join(" "),
+  [
+    "CREATE TABLE IF NOT EXISTS calendar_sync_links (",
+    "id BIGINT PRIMARY KEY AUTO_INCREMENT,",
+    "sync_link_id VARCHAR(128) NOT NULL UNIQUE,",
+    "booking_id VARCHAR(128) NOT NULL,",
+    "provider VARCHAR(64) NOT NULL,",
+    "external_event_id VARCHAR(255) NOT NULL,",
+    "external_event_url VARCHAR(1024) NULL,",
+    "synced_at TIMESTAMP NOT NULL,",
+    "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,",
+    "UNIQUE KEY uniq_calendar_sync_links_booking_provider (booking_id, provider)",
+    ")"
+  ].join(" "),
+  [
+    "CREATE TABLE IF NOT EXISTS workflows (",
+    "id BIGINT PRIMARY KEY AUTO_INCREMENT,",
+    "workflow_id VARCHAR(128) NOT NULL UNIQUE,",
+    "workflow_name VARCHAR(255) NOT NULL,",
+    "workflow_description TEXT NULL,",
+    "workflow_trigger VARCHAR(64) NOT NULL,",
+    "active TINYINT(1) NOT NULL DEFAULT 1,",
+    "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    ")"
+  ].join(" "),
+  [
+    "CREATE TABLE IF NOT EXISTS workflow_enrollments (",
+    "id BIGINT PRIMARY KEY AUTO_INCREMENT,",
+    "workflow_enrollment_id VARCHAR(128) NOT NULL UNIQUE,",
+    "workflow_id VARCHAR(128) NOT NULL,",
+    "client_id VARCHAR(128) NOT NULL,",
+    "enrolled_at TIMESTAMP NOT NULL,",
+    "next_run_at TIMESTAMP NULL,",
+    "completed_at TIMESTAMP NULL,",
+    "status VARCHAR(32) NOT NULL DEFAULT 'active',",
+    "enrolled_by VARCHAR(128) NULL,",
+    "cancelled_at TIMESTAMP NULL,",
+    "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    ")"
+  ].join(" "),
+  [
+    "CREATE TABLE IF NOT EXISTS workflow_triggers (",
+    "id BIGINT PRIMARY KEY AUTO_INCREMENT,",
+    "workflow_trigger_id VARCHAR(128) NOT NULL UNIQUE,",
+    "workflow_id VARCHAR(128) NOT NULL,",
+    "trigger_type VARCHAR(64) NOT NULL,",
+    "appointment_type_id VARCHAR(128) NULL,",
+    "form_template_id VARCHAR(128) NULL,",
+    "active TINYINT(1) NOT NULL DEFAULT 1,",
+    "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    ")"
+  ].join(" "),
+  [
+    "CREATE TABLE IF NOT EXISTS workflow_steps (",
+    "id BIGINT PRIMARY KEY AUTO_INCREMENT,",
+    "workflow_step_id VARCHAR(128) NOT NULL UNIQUE,",
+    "workflow_id VARCHAR(128) NOT NULL,",
+    "step_order INT NOT NULL,",
+    "step_name VARCHAR(255) NOT NULL,",
+    "email_subject VARCHAR(255) NOT NULL,",
+    "email_body_html MEDIUMTEXT NOT NULL,",
+    "email_body_text MEDIUMTEXT NULL,",
+    "delay_type VARCHAR(64) NOT NULL,",
+    "delay_value VARCHAR(255) NULL,",
+    "scheduled_date TIMESTAMP NULL,",
+    "attach_contract_id VARCHAR(128) NULL,",
+    "attach_form_id VARCHAR(128) NULL,",
+    "attach_quote_id VARCHAR(128) NULL,",
+    "attach_invoice_id VARCHAR(128) NULL,",
+    "include_appointment_link TINYINT(1) NOT NULL DEFAULT 0,",
+    "appointment_type_id VARCHAR(128) NULL,",
+    "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,",
+    "updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    ")"
+  ].join(" "),
+  [
+    "CREATE TABLE IF NOT EXISTS workflow_step_executions (",
+    "id BIGINT PRIMARY KEY AUTO_INCREMENT,",
+    "workflow_step_execution_id VARCHAR(128) NOT NULL UNIQUE,",
+    "enrollment_id VARCHAR(128) NOT NULL,",
+    "step_id VARCHAR(128) NOT NULL,",
+    "scheduled_for TIMESTAMP NOT NULL,",
+    "executed_at TIMESTAMP NULL,",
+    "status VARCHAR(32) NOT NULL DEFAULT 'pending',",
+    "error_message TEXT NULL,",
+    "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    ")"
+  ].join(" ")
+];
+
+const mySqlBootstrapColumnStatements: MySqlBootstrapColumnStatement[] = [
+  {
+    table: "settings",
+    columnName: "category",
+    statement: "ALTER TABLE settings ADD COLUMN category VARCHAR(64) NOT NULL DEFAULT 'general' AFTER setting_type"
+  },
+  {
+    table: "settings",
+    columnName: "label",
+    statement: "ALTER TABLE settings ADD COLUMN label VARCHAR(255) NOT NULL DEFAULT '' AFTER category"
+  },
+  {
+    table: "settings",
+    columnName: "description",
+    statement: "ALTER TABLE settings ADD COLUMN description TEXT NULL AFTER label"
+  },
+  {
+    table: "settings",
+    columnName: "is_secret",
+    statement: "ALTER TABLE settings ADD COLUMN is_secret TINYINT(1) NOT NULL DEFAULT 0 AFTER description"
+  },
+  {
+    table: "settings",
+    columnName: "updated_at",
+    statement: "ALTER TABLE settings ADD COLUMN updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER is_secret"
+  },
+  {
+    table: "workflows",
+    columnName: "workflow_description",
+    statement: "ALTER TABLE workflows ADD COLUMN workflow_description TEXT NULL AFTER workflow_name"
+  },
+  {
+    table: "workflow_enrollments",
+    columnName: "status",
+    statement: "ALTER TABLE workflow_enrollments ADD COLUMN status VARCHAR(32) NOT NULL DEFAULT 'active' AFTER completed_at"
+  },
+  {
+    table: "workflow_enrollments",
+    columnName: "enrolled_by",
+    statement: "ALTER TABLE workflow_enrollments ADD COLUMN enrolled_by VARCHAR(128) NULL AFTER status"
+  },
+  {
+    table: "workflow_enrollments",
+    columnName: "cancelled_at",
+    statement: "ALTER TABLE workflow_enrollments ADD COLUMN cancelled_at TIMESTAMP NULL AFTER enrolled_by"
+  }
+];
+
+const mySqlBootstrapIndexStatements: MySqlBootstrapIndexStatement[] = [
+  {
+    table: "inbound_emails",
+    indexName: "idx_inbound_emails_provider_received_at",
+    statement: "CREATE INDEX idx_inbound_emails_provider_received_at ON inbound_emails(provider, received_at)"
+  },
+  {
+    table: "inbound_emails",
+    indexName: "idx_inbound_emails_provider_message_id",
+    statement: "CREATE INDEX idx_inbound_emails_provider_message_id ON inbound_emails(provider(16), message_id(170))"
+  },
+  {
+    table: "inbound_emails",
+    indexName: "idx_inbound_emails_message_id",
+    statement: "CREATE INDEX idx_inbound_emails_message_id ON inbound_emails(message_id(170))"
+  },
+  {
+    table: "unmatched_emails",
+    indexName: "idx_unmatched_emails_reason_detected_at",
+    statement: "CREATE INDEX idx_unmatched_emails_reason_detected_at ON unmatched_emails(reason, detected_at)"
+  },
+  {
+    table: "integration_callbacks",
+    indexName: "idx_integration_callbacks_provider_received_at",
+    statement: "CREATE INDEX idx_integration_callbacks_provider_received_at ON integration_callbacks(provider, received_at)"
+  },
+  {
+    table: "calendar_sync_links",
+    indexName: "idx_calendar_sync_links_provider_synced_at",
+    statement: "CREATE INDEX idx_calendar_sync_links_provider_synced_at ON calendar_sync_links(provider, synced_at)"
+  },
+  {
+    table: "workflows",
+    indexName: "idx_workflows_active_trigger",
+    statement: "CREATE INDEX idx_workflows_active_trigger ON workflows(active, workflow_trigger)"
+  },
+  {
+    table: "workflow_enrollments",
+    indexName: "idx_workflow_enrollments_run_at",
+    statement: "CREATE INDEX idx_workflow_enrollments_run_at ON workflow_enrollments(completed_at, next_run_at)"
+  },
+  {
+    table: "workflow_triggers",
+    indexName: "idx_workflow_triggers_workflow",
+    statement: "CREATE INDEX idx_workflow_triggers_workflow ON workflow_triggers(workflow_id, created_at)"
+  },
+  {
+    table: "workflow_triggers",
+    indexName: "idx_workflow_triggers_match",
+    statement: "CREATE INDEX idx_workflow_triggers_match ON workflow_triggers(trigger_type, active, appointment_type_id, form_template_id)"
+  },
+  {
+    table: "workflow_steps",
+    indexName: "idx_workflow_steps_workflow_order",
+    statement: "CREATE INDEX idx_workflow_steps_workflow_order ON workflow_steps(workflow_id, step_order)"
+  },
+  {
+    table: "workflow_step_executions",
+    indexName: "idx_workflow_step_executions_due",
+    statement: "CREATE INDEX idx_workflow_step_executions_due ON workflow_step_executions(status, executed_at, scheduled_for)"
+  },
+  {
+    table: "workflow_step_executions",
+    indexName: "idx_workflow_step_executions_enrollment",
+    statement: "CREATE INDEX idx_workflow_step_executions_enrollment ON workflow_step_executions(enrollment_id, status, scheduled_for)"
+  },
+  {
+    table: "job_queue",
+    indexName: "idx_job_queue_status_run_at",
+    statement: "CREATE INDEX idx_job_queue_status_run_at ON job_queue(status, run_at)"
+  },
+  {
+    table: "email_outbox",
+    indexName: "idx_email_outbox_status_created_at",
+    statement: "CREATE INDEX idx_email_outbox_status_created_at ON email_outbox(status, created_at)"
+  }
+];
+
+export function getMySqlBootstrapStatements(): string[] {
+  return [
+    ...mySqlBootstrapTableStatements,
+    ...mySqlBootstrapColumnStatements.map((statement) => statement.statement),
+    ...mySqlBootstrapSettingsSeedStatements,
+    ...mySqlBootstrapIndexStatements.map((statement) => statement.statement)
+  ];
+}
+
+async function mySqlBootstrapColumnExists(
+  executor: SqlExecutor,
+  table: string,
+  columnName: string
+): Promise<boolean> {
+  const [rows] = await executor.execute<Array<{ columnName: string }>>(
+    "SELECT column_name AS columnName FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ? LIMIT 1",
+    [table, columnName]
+  );
+  return rows.length > 0;
+}
+
+async function mySqlBootstrapIndexExists(
+  executor: SqlExecutor,
+  table: string,
+  indexName: string
+): Promise<boolean> {
+  const [rows] = await executor.execute<Array<{ indexName: string }>>(
+    "SELECT index_name AS indexName FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ? LIMIT 1",
+    [table, indexName]
+  );
+  return rows.length > 0;
+}
+
+export async function applyMySqlBootstrapStatement(executor: SqlExecutor, statement: string): Promise<boolean> {
+  const columnStatement = mySqlBootstrapColumnStatements.find((candidate) => candidate.statement === statement);
+  if (columnStatement != null) {
+    if (await mySqlBootstrapColumnExists(executor, columnStatement.table, columnStatement.columnName)) {
+      return false;
+    }
+  }
+
+  const indexStatement = mySqlBootstrapIndexStatements.find((candidate) => candidate.statement === statement);
+  if (indexStatement != null) {
+    if (await mySqlBootstrapIndexExists(executor, indexStatement.table, indexStatement.indexName)) {
+      return false;
+    }
+  }
+
+  await executor.execute(statement);
+  return true;
+}
+
+export async function applyMySqlBootstrap(executor: SqlExecutor): Promise<Array<{ statement: string; executed: boolean }>> {
+  const audits: Array<{ statement: string; executed: boolean }> = [];
+
+  for (const statement of getMySqlBootstrapStatements()) {
+    audits.push({
+      statement,
+      executed: await applyMySqlBootstrapStatement(executor, statement)
+    });
+  }
+
+  return audits;
 }
 
 export function createMySqlPoolFromDatabaseUrl(databaseUrl: string, overrides: Partial<PoolOptions> = {}): Pool {

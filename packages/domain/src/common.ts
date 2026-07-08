@@ -23,4 +23,23 @@ export const contractStatusSchema = z.enum(["draft", "sent", "signed", "void"]);
 export const achievementScopeSchema = z.enum(["general", "custom"]);
 export const achievementModeSchema = z.enum(["badge_only", "certificate_only", "badge_certificate"]);
 export const clientAchievementStatusSchema = z.enum(["awarded", "revoked"]);
-export const workflowTriggerSchema = z.enum(["booking_created", "invoice_overdue", "manual", "scheduled"]);
+export const workflowTriggerSchema = z.enum([
+  "appointment_booking",
+  "booking_created",
+  "form_submission",
+  "invoice_overdue",
+  "manual",
+  "scheduled"
+]);
+export const workflowAutoEnrollmentTriggerTypeSchema = z.enum([
+  "appointment_booking",
+  "form_submission"
+]);
+export const workflowEnrollmentStatusSchema = z.enum(["active", "completed", "cancelled"]);
+export const workflowStepDelayTypeSchema = z.enum([
+  "immediate",
+  "after_enrollment",
+  "after_previous",
+  "specific_date"
+]);
+export const workflowStepExecutionStatusSchema = z.enum(["pending", "completed", "cancelled", "failed"]);

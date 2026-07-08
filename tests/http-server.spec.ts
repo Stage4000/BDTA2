@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import { once } from "node:events";
 
 import { createHttpApiServer } from "../apps/api/src/server.js";
@@ -8,7 +9,7 @@ import {
 } from "@bdta/infrastructure";
 
 describe("http api server", () => {
-  it("serves health and public booking endpoints", async () => {
+  it("serves health, public booking, and public contact endpoints", async () => {
     const state = createInMemoryPlatformState({
       portalUsers: [
         {
@@ -58,8 +59,126 @@ describe("http api server", () => {
       expect(booking.status).toBe(201);
       expect(state.bookings).toHaveLength(1);
 
+      const contact = await fetch(`${baseUrl}/api/public/contact`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          name: "Contact New",
+          email: "Contact-New@Example.com",
+          phone: "555-1100",
+          service: "pet-sitting",
+          message: "Need help with training basics.",
+          turnstile_token: "turnstile-ok"
+        })
+      });
+
+      expect(contact.status).toBe(200);
+      expect(await contact.json()).toEqual({ success: true });
+      expect(state.portalUsers).toHaveLength(2);
+      expect(state.portalUsers[1]).toMatchObject({
+        email: "contact-new@example.com",
+        displayName: "Contact New",
+        phone: "555-1100"
+      });
+      expect(state.portalUsers[1]?.notes).toContain("Message: Need help with training basics.");
+
       const publicQuote = await fetch(`${baseUrl}/api/public/quotes/quote-1?token=missing`);
       expect(publicQuote.status).toBe(404);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error?: Error) => error ? reject(error) : resolve());
+      });
+    }
+  });
+
+  it("returns dependency-aware health responses when a production health check is provided", async () => {
+    const server = createHttpApiServer({
+      dependencies: createInMemoryApiDependencies(createInMemoryPlatformState()),
+      sessionStore: null,
+      healthCheck: async () => ({
+        status: "degraded",
+        checks: {
+          database: "error"
+        }
+      })
+    });
+
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (address == null || typeof address === "string") {
+      throw new Error("Expected TCP server address.");
+    }
+
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    try {
+      const health = await fetch(`${baseUrl}/health`);
+      expect(health.status).toBe(503);
+      expect(await health.json()).toEqual({
+        status: "degraded",
+        checks: {
+          database: "error"
+        }
+      });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error?: Error) => error ? reject(error) : resolve());
+      });
+    }
+  });
+
+  it("returns a request id and logs unexpected health-check failures", async () => {
+    const reportedErrors: Array<{
+      error: unknown;
+      requestId: string;
+      method: string;
+      path: string;
+    }> = [];
+
+    const server = createHttpApiServer({
+      dependencies: createInMemoryApiDependencies(createInMemoryPlatformState()),
+      sessionStore: null,
+      requestIdFactory: () => "api-request-1",
+      healthCheck: async () => {
+        throw new Error("database probe exploded");
+      },
+      onError: async (error, context) => {
+        reportedErrors.push({
+          error,
+          requestId: context.requestId,
+          method: context.method,
+          path: context.path
+        });
+      }
+    });
+
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (address == null || typeof address === "string") {
+      throw new Error("Expected TCP server address.");
+    }
+
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    try {
+      const response = await fetch(`${baseUrl}/health`);
+      expect(response.status).toBe(500);
+      expect(response.headers.get("x-request-id")).toBe("api-request-1");
+      expect(await response.json()).toEqual({
+        error: {
+          code: "internal_error",
+          message: "Unexpected server failure."
+        }
+      });
+      expect(reportedErrors).toHaveLength(1);
+      expect(reportedErrors[0]?.requestId).toBe("api-request-1");
+      expect(reportedErrors[0]?.method).toBe("GET");
+      expect(reportedErrors[0]?.path).toBe("/health");
+      expect(reportedErrors[0]?.error).toBeInstanceOf(Error);
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((error?: Error) => error ? reject(error) : resolve());
@@ -118,6 +237,7 @@ describe("http api server", () => {
           clientId: "client-admin-1",
           name: "Scout",
           species: "Dog",
+          petSittingNotes: "Use the side gate and towel paws before re-entry.",
           archived: false
         }
       ],
@@ -126,6 +246,7 @@ describe("http api server", () => {
           id: "credit-admin-1",
           clientId: "client-admin-1",
           packageId: "package-admin-1",
+          appointmentTypeId: "appointment-type-admin-1",
           remainingUnits: 4
         }
       ],
@@ -360,6 +481,7 @@ describe("http api server", () => {
           clientId: "client-admin-1",
           name: "Scout",
           species: "Dog",
+          petSittingNotes: "Use the side gate and towel paws before re-entry.",
           archived: false
         }]
       });
@@ -370,6 +492,7 @@ describe("http api server", () => {
           clientId: "client-admin-1",
           name: "Scout",
           species: "Dog",
+          petSittingNotes: "Use the side gate and towel paws before re-entry.",
           archived: false
         }
       });
@@ -407,13 +530,14 @@ describe("http api server", () => {
       });
       expect(forms.status).toBe(200);
       expect(await forms.json()).toEqual({
-        items: [{
+        items: [expect.objectContaining({
           id: "form-admin-1",
           templateId: "template-admin-1",
           clientId: "client-admin-1",
           submittedAt: null,
-          publicAccess: null
-        }]
+          publicAccess: null,
+          status: "pending"
+        })]
       });
       expect(packages.status).toBe(200);
       expect(await packages.json()).toEqual({
@@ -439,6 +563,7 @@ describe("http api server", () => {
           id: "credit-admin-1",
           clientId: "client-admin-1",
           packageId: "package-admin-1",
+          appointmentTypeId: "appointment-type-admin-1",
           remainingUnits: 4
         }]
       });
@@ -448,6 +573,7 @@ describe("http api server", () => {
           id: "credit-admin-1",
           clientId: "client-admin-1",
           packageId: "package-admin-1",
+          appointmentTypeId: "appointment-type-admin-1",
           remainingUnits: 4
         }
       });
@@ -584,6 +710,7 @@ describe("http api server", () => {
           clientId: "client-portal-1",
           name: "Riley",
           species: "Dog",
+          petSittingNotes: "Use the side gate and towel paws before re-entry.",
           archived: false
         }
       ],
@@ -592,6 +719,7 @@ describe("http api server", () => {
           id: "credit-ical-1",
           clientId: "client-portal-1",
           packageId: "package-ical-1",
+          appointmentTypeId: "appointment-type-ical-1",
           remainingUnits: 2
         }
       ],
@@ -600,6 +728,9 @@ describe("http api server", () => {
           id: "form-1",
           templateId: "template-1",
           clientId: "client-portal-1",
+          templateName: "Client Intake",
+          formType: "client_form",
+          templateIsInternal: false,
           submittedAt: null,
           publicAccess: {
             token: "form-access-token-123456",
@@ -607,6 +738,15 @@ describe("http api server", () => {
             expiresAt: null,
             legacySourceId: "form-1"
           }
+        },
+        {
+          id: "form-hidden-1",
+          templateId: "template-hidden",
+          clientId: "client-portal-1",
+          templateName: "Internal Staff Note",
+          formType: "client_form",
+          submittedAt: "2026-05-26T10:00:00.000Z",
+          publicAccess: null
         }
       ],
       portalUsers: [
@@ -850,6 +990,7 @@ describe("http api server", () => {
           clientId: "client-portal-1",
           name: "Riley",
           species: "Dog",
+          petSittingNotes: "Use the side gate and towel paws before re-entry.",
           archived: false
         }]
       });
@@ -860,6 +1001,7 @@ describe("http api server", () => {
           clientId: "client-portal-1",
           name: "Riley",
           species: "Dog",
+          petSittingNotes: "Use the side gate and towel paws before re-entry.",
           archived: false
         }
       });
@@ -912,6 +1054,7 @@ describe("http api server", () => {
           id: "credit-ical-1",
           clientId: "client-portal-1",
           packageId: "package-ical-1",
+          appointmentTypeId: "appointment-type-ical-1",
           remainingUnits: 2
         }]
       });
@@ -921,6 +1064,7 @@ describe("http api server", () => {
           id: "credit-ical-1",
           clientId: "client-portal-1",
           packageId: "package-ical-1",
+          appointmentTypeId: "appointment-type-ical-1",
           remainingUnits: 2
         }
       });
@@ -930,6 +1074,10 @@ describe("http api server", () => {
           id: "form-1",
           templateId: "template-1",
           clientId: "client-portal-1",
+          templateName: "Client Intake",
+          formType: "client_form",
+          templateIsInternal: false,
+          clientReviewSubmission: false,
           submittedAt: null,
           publicAccess: {
             token: "form-access-token-123456",
@@ -946,6 +1094,7 @@ describe("http api server", () => {
           clientId: "client-portal-1",
           status: "accepted",
           totalAmount: 450,
+          acceptedAt: "2026-05-27T18:00:00.000Z",
           publicAccess: {
             token: "quote-access-token-1234",
             issuedAt: "2026-05-27T18:00:00.000Z",
@@ -976,6 +1125,7 @@ describe("http api server", () => {
           id: "contract-1",
           clientId: "client-portal-1",
           status: "signed",
+          signedAt: "2026-05-27T18:00:00.000Z",
           publicAccess: {
             token: "contract-access-token-1234",
             issuedAt: "2026-05-27T18:00:00.000Z",
@@ -990,6 +1140,11 @@ describe("http api server", () => {
           id: "form-1",
           templateId: "template-1",
           clientId: "client-portal-1",
+          templateName: "Client Intake",
+          formType: "client_form",
+          templateIsInternal: false,
+          clientReviewSubmission: false,
+          status: "submitted",
           submittedAt: "2026-05-27T18:00:00.000Z",
           publicAccess: {
             token: "form-access-token-123456",
@@ -1012,6 +1167,7 @@ describe("http api server", () => {
           clientId: "client-portal-1",
           status: "accepted",
           totalAmount: 450,
+          acceptedAt: "2026-05-27T18:00:00.000Z",
           publicAccess: {
             token: "quote-access-token-1234",
             issuedAt: "2026-05-27T18:00:00.000Z",
@@ -1026,6 +1182,7 @@ describe("http api server", () => {
           id: "contract-1",
           clientId: "client-portal-1",
           status: "signed",
+          signedAt: "2026-05-27T18:00:00.000Z",
           publicAccess: {
             token: "contract-access-token-1234",
             issuedAt: "2026-05-27T18:00:00.000Z",
@@ -1036,10 +1193,14 @@ describe("http api server", () => {
       });
       expect(publicForm.status).toBe(200);
       expect(await publicForm.json()).toEqual({
-        item: {
+        item: expect.objectContaining({
           id: "form-1",
           templateId: "template-1",
           clientId: "client-portal-1",
+          templateName: "Client Intake",
+          formType: "client_form",
+          templateIsInternal: false,
+          clientReviewSubmission: false,
           submittedAt: "2026-05-27T18:00:00.000Z",
           publicAccess: {
             token: "form-access-token-123456",
@@ -1047,7 +1208,7 @@ describe("http api server", () => {
             expiresAt: null,
             legacySourceId: "form-1"
           }
-        }
+        })
       });
       expect(publicBookingIcal.status).toBe(200);
       expect(publicBookingIcal.headers.get("content-type")).toContain("text/calendar");
@@ -1416,6 +1577,7 @@ describe("http api server", () => {
           clientId: "client-admin-1",
           name: "Scout",
           species: "Dog",
+          petSittingNotes: "Use the side gate and towel paws before re-entry.",
           archived: false
         }
       ],
@@ -1667,6 +1829,7 @@ describe("http api server", () => {
           clientId: "client-admin-1",
           name: "Scout",
           species: "Dog",
+          petSittingNotes: "Use the side gate and towel paws before re-entry.",
           archived: false
         }
       ],
@@ -1795,6 +1958,7 @@ describe("http api server", () => {
           clientId: "client-admin-1",
           name: "Scout",
           species: "Dog",
+          petSittingNotes: "Use the side gate and towel paws before re-entry.",
           archived: false
         }
       ],
@@ -2140,6 +2304,93 @@ describe("http api server", () => {
     }
   });
 
+  it("accepts signed raw Stripe checkout webhooks and applies invoice payment updates", async () => {
+    const state = createInMemoryPlatformState({
+      settings: [{
+        id: "setting-stripe-webhook",
+        key: "stripe_webhook_secret",
+        value: "whsec_test_callback_secret",
+        type: "password",
+        category: "payments",
+        label: "Stripe Webhook Secret",
+        description: "Webhook signing secret.",
+        secret: true,
+        updatedAt: "2026-05-27T18:00:00.000Z"
+      }],
+      invoices: [{
+        id: "invoice-1",
+        clientId: "client-1",
+        status: "sent",
+        totalAmount: 225,
+        outstandingAmount: 125,
+        dueAt: "2026-06-05T00:00:00.000Z"
+      }]
+    });
+    const server = createHttpApiServer({
+      dependencies: createInMemoryApiDependencies(state),
+      sessionStore: null
+    });
+
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (address == null || typeof address === "string") {
+      throw new Error("Expected TCP server address.");
+    }
+
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const rawBody = JSON.stringify({
+      id: "evt_test_checkout_paid",
+      object: "event",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_test_invoice_paid",
+          object: "checkout.session",
+          payment_status: "paid",
+          metadata: {
+            invoice_id: "invoice-1"
+          }
+        }
+      }
+    });
+    const timestamp = String(Math.floor(Date.parse("2026-05-27T18:00:00.000Z") / 1000));
+    const signature = createHmac("sha256", "whsec_test_callback_secret")
+      .update(`${timestamp}.${rawBody}`, "utf8")
+      .digest("hex");
+
+    try {
+      const response = await fetch(`${baseUrl}/api/callbacks/stripe`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "stripe-signature": `t=${timestamp},v1=${signature}`
+        },
+        body: rawBody
+      });
+
+      expect(response.status).toBe(202);
+      expect(await response.json()).toEqual({
+        accepted: true,
+        provider: "stripe",
+        callbackId: expect.stringMatching(/^callback-/),
+        queuedJobId: null
+      });
+      expect(state.invoices[0]).toEqual({
+        id: "invoice-1",
+        clientId: "client-1",
+        status: "paid",
+        totalAmount: 225,
+        outstandingAmount: 0,
+        dueAt: "2026-06-05T00:00:00.000Z"
+      });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error?: Error) => error ? reject(error) : resolve());
+      });
+    }
+  });
+
   it("accepts google calendar callbacks and updates calendar sync state", async () => {
     const state = createInMemoryPlatformState();
     state.calendarSyncs.push({
@@ -2191,6 +2442,955 @@ describe("http api server", () => {
         externalEventUrl: "https://calendar.google.com/calendar/event?eid=google-event-1",
         syncedAt: "2026-05-27T18:00:00.000Z"
       }]);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error?: Error) => error ? reject(error) : resolve());
+      });
+    }
+  });
+
+  it("supports authenticated admin content api routes for blog posts", async () => {
+    const state = createInMemoryPlatformState({
+      adminUsers: [{
+        actorId: "admin-1",
+        username: "owner",
+        displayName: "Owner Admin",
+        passwordHash: "admin-hash",
+        role: "owner",
+        active: true
+      }],
+      blogPosts: [{
+        id: "blog-1",
+        title: "Loose Leash Training Tips",
+        slug: "loose-leash-training-tips",
+        content: "<p>Walks start before the leash clips on.</p>",
+        excerpt: "Walks start before the leash clips on.",
+        coverPhoto: "/backend/uploads/blog/loose-leash.jpg",
+        author: "Brook",
+        published: true,
+        publishDate: "2026-05-28T15:00:00.000Z",
+        createdAt: "2026-05-20T10:00:00.000Z",
+        updatedAt: "2026-05-28T15:00:00.000Z"
+      }],
+      passwordVerifier: async (password, hash) => password === "correct-password" && hash === "admin-hash"
+    });
+
+    const sessionStore = createInMemorySessionStore(state);
+    const server = createHttpApiServer({
+      dependencies: createInMemoryApiDependencies(state),
+      sessionStore
+    });
+
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (address == null || typeof address === "string") {
+      throw new Error("Expected TCP server address.");
+    }
+
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    try {
+      const login = await fetch(`${baseUrl}/api/admin/login`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          username: "owner",
+          password: "correct-password"
+        })
+      });
+
+      expect(login.status).toBe(200);
+      const cookie = login.headers.get("set-cookie");
+
+      const blogPosts = await fetch(`${baseUrl}/api/admin/blog-posts`, {
+        headers: { cookie: cookie ?? "" }
+      });
+      const blogPostDetail = await fetch(`${baseUrl}/api/admin/blog-posts/blog-1`, {
+        headers: { cookie: cookie ?? "" }
+      });
+      const createBlogPost = await fetch(`${baseUrl}/api/admin/blog-posts`, {
+        method: "POST",
+        headers: {
+          cookie: cookie ?? "",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          title: "Reactive Dog Journal",
+          slug: "reactive-dog-journal",
+          content: "<p>Pattern work for calmer walks.</p>",
+          excerpt: "Pattern work for calmer walks.",
+          coverPhoto: null,
+          author: "Brook",
+          published: true,
+          publishDate: "2026-05-30T10:00:00.000Z"
+        })
+      });
+      const updateBlogPost = await fetch(`${baseUrl}/api/admin/blog-posts/blog-1`, {
+        method: "POST",
+        headers: {
+          cookie: cookie ?? "",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          title: "Loose Leash Training Tips Updated",
+          slug: "loose-leash-training-tips",
+          content: "<p>Updated content.</p>",
+          excerpt: "Updated excerpt.",
+          coverPhoto: "/backend/uploads/blog/loose-leash-updated.jpg",
+          author: "Brook",
+          published: true,
+          publishDate: "2026-05-29T12:00:00.000Z"
+        })
+      });
+      expect(createBlogPost.status).toBe(201);
+      const createdBlogPostId = state.blogPosts.find((item) => item.slug === "reactive-dog-journal")?.id;
+      expect(createdBlogPostId).toBeDefined();
+      const deleteBlogPost = await fetch(`${baseUrl}/api/admin/blog-posts/${encodeURIComponent(String(createdBlogPostId ?? ""))}/delete`, {
+        method: "POST",
+        headers: {
+          cookie: cookie ?? ""
+        }
+      });
+
+      expect(blogPosts.status).toBe(200);
+      expect(blogPostDetail.status).toBe(200);
+      expect(updateBlogPost.status).toBe(200);
+      expect(deleteBlogPost.status).toBe(200);
+      expect(state.blogPosts.some((item) => item.id === createdBlogPostId)).toBe(false);
+      expect(state.blogPosts.find((item) => item.id === "blog-1")?.title).toBe("Loose Leash Training Tips Updated");
+      expect(await blogPosts.json()).toEqual({
+        items: [
+          expect.objectContaining({
+            id: "blog-1",
+            slug: "loose-leash-training-tips"
+          })
+        ]
+      });
+      expect(await blogPostDetail.json()).toEqual({
+        item: expect.objectContaining({
+          id: "blog-1",
+          title: "Loose Leash Training Tips"
+        })
+      });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error?: Error) => error ? reject(error) : resolve());
+      });
+    }
+  });
+
+  it("serves admin workflow management endpoints through the authenticated API", async () => {
+    const state = createInMemoryPlatformState({
+      adminUsers: [{
+        actorId: "admin-1",
+        username: "accountant",
+        displayName: "Accountant User",
+        passwordHash: "admin-hash",
+        role: "accountant",
+        active: true
+      }],
+      portalUsers: [
+        {
+          clientId: "client-1",
+          email: "client@example.com",
+          displayName: "Client One",
+          passwordHash: "client-hash",
+          archived: false
+        },
+        {
+          clientId: "client-2",
+          email: "client-two@example.com",
+          displayName: "Client Two",
+          passwordHash: "client-two-hash",
+          archived: false
+        }
+      ],
+      workflows: [{
+        id: "workflow-1",
+        name: "Welcome Series",
+        description: "New client onboarding workflow.",
+        trigger: "manual",
+        active: true,
+        createdAt: "2026-05-27T18:00:00.000Z"
+      }],
+      workflowTriggers: [{
+        id: "workflow-trigger-1",
+        workflowId: "workflow-1",
+        triggerType: "appointment_booking",
+        appointmentTypeId: "appointment-type-1",
+        formTemplateId: null,
+        active: true,
+        createdAt: "2026-05-27T18:00:00.000Z"
+      }],
+      workflowEnrollments: [{
+        id: "workflow-enrollment-1",
+        workflowId: "workflow-1",
+        clientId: "client-1",
+        status: "active",
+        enrolledAt: "2026-05-27T18:00:00.000Z",
+        nextRunAt: "2026-05-27T18:00:00.000Z",
+        completedAt: null,
+        enrolledByAdminUserId: "admin-1"
+      }],
+      workflowSteps: [{
+        id: "workflow-step-1",
+        workflowId: "workflow-1",
+        stepOrder: 1,
+        stepName: "Welcome Email",
+        emailSubject: "Welcome {client_name}",
+        emailBodyHtml: "<p>Hello {client_name}</p>",
+        emailBodyText: "Hello {client_name}",
+        delayType: "after_enrollment",
+        delayValue: "2 hours",
+        scheduledDate: null,
+        attachContractId: null,
+        attachFormId: null,
+        attachQuoteId: null,
+        attachInvoiceId: null,
+        includeAppointmentLink: false,
+        appointmentTypeId: null,
+        createdAt: "2026-05-27T18:00:00.000Z",
+        updatedAt: "2026-05-27T18:00:00.000Z"
+      }],
+      workflowStepExecutions: [],
+      emailTemplates: [{
+        id: "email-template-1",
+        name: "Workflow Welcome Template",
+        subject: "Template Subject",
+        bodyHtml: "<p>Template Html</p>",
+        bodyText: "Template Text",
+        active: true
+      }],
+      formTemplates: [{
+        id: "form-template-1",
+        name: "Client Intake",
+        active: true,
+        description: "",
+        fields: [],
+        formType: "booking_form",
+        requiredFrequency: null,
+        appointmentTypeId: null,
+        templateIsInternal: false,
+        templateShowInClientPortal: true
+      }],
+      appointmentTypes: [{
+        id: "appointment-type-1",
+        name: "Consultation",
+        active: true
+      }],
+      scheduledTasks: [{
+        id: "scheduled-task-1",
+        taskType: "workflow_processor",
+        active: true,
+        scheduleType: "hourly",
+        scheduleValue: ""
+      }],
+      passwordVerifier: async (password, hash) => password === "correct-password" && hash === "admin-hash"
+    });
+
+    const sessionStore = createInMemorySessionStore(state);
+    const server = createHttpApiServer({
+      dependencies: createInMemoryApiDependencies(state),
+      sessionStore
+    });
+
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (address == null || typeof address === "string") {
+      throw new Error("Expected TCP server address.");
+    }
+
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    try {
+      const login = await fetch(`${baseUrl}/api/admin/login`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          username: "accountant",
+          password: "correct-password"
+        })
+      });
+
+      expect(login.status).toBe(200);
+      const cookie = login.headers.get("set-cookie");
+      expect(cookie).toContain("bdta_session=");
+
+      const workflows = await fetch(`${baseUrl}/api/admin/workflows`, {
+        headers: { cookie: cookie ?? "" }
+      });
+      const workflowDetail = await fetch(`${baseUrl}/api/admin/workflows/workflow-1`, {
+        headers: { cookie: cookie ?? "" }
+      });
+      const workflowTriggers = await fetch(`${baseUrl}/api/admin/workflows/workflow-1/triggers`, {
+        headers: { cookie: cookie ?? "" }
+      });
+      const workflowEnrollments = await fetch(`${baseUrl}/api/admin/workflows/workflow-1/enrollments`, {
+        headers: { cookie: cookie ?? "" }
+      });
+      const workflowEnroll = await fetch(`${baseUrl}/api/admin/workflows/workflow-1/enroll`, {
+        headers: { cookie: cookie ?? "" }
+      });
+      const workflowSteps = await fetch(`${baseUrl}/api/admin/workflows/workflow-1/steps`, {
+        headers: { cookie: cookie ?? "" }
+      });
+      const workflowStepCreate = await fetch(`${baseUrl}/api/admin/workflows/workflow-1/steps/new`, {
+        headers: { cookie: cookie ?? "" }
+      });
+      const workflowStepDetail = await fetch(`${baseUrl}/api/admin/workflows/workflow-1/steps/workflow-step-1`, {
+        headers: { cookie: cookie ?? "" }
+      });
+
+      expect(workflows.status).toBe(200);
+      expect(workflowDetail.status).toBe(200);
+      expect(workflowTriggers.status).toBe(200);
+      expect(workflowEnrollments.status).toBe(200);
+      expect(workflowEnroll.status).toBe(200);
+      expect(workflowSteps.status).toBe(200);
+      expect(workflowStepCreate.status).toBe(200);
+      expect(workflowStepDetail.status).toBe(200);
+
+      expect(await workflows.json()).toEqual({
+        items: [
+          expect.objectContaining({
+            id: "workflow-1",
+            name: "Welcome Series"
+          })
+        ]
+      });
+      expect(await workflowDetail.json()).toEqual({
+        item: expect.objectContaining({
+          id: "workflow-1",
+          name: "Welcome Series"
+        })
+      });
+      expect(await workflowTriggers.json()).toEqual(expect.objectContaining({
+        workflow: expect.objectContaining({ id: "workflow-1" }),
+        items: expect.arrayContaining([
+          expect.objectContaining({
+            id: "workflow-trigger-1",
+            triggerType: "appointment_booking",
+            appointmentTypeId: "appointment-type-1"
+          })
+        ]),
+        options: expect.objectContaining({
+          appointmentTypes: expect.any(Array),
+          formTemplates: expect.any(Array)
+        })
+      }));
+      expect(await workflowEnrollments.json()).toEqual(expect.objectContaining({
+        workflow: expect.objectContaining({ id: "workflow-1" }),
+        items: expect.arrayContaining([
+          expect.objectContaining({
+            id: "workflow-enrollment-1",
+            clientId: "client-1"
+          })
+        ])
+      }));
+      expect(await workflowEnroll.json()).toEqual(expect.objectContaining({
+        workflow: expect.objectContaining({ id: "workflow-1" }),
+        items: expect.any(Array)
+      }));
+      expect(await workflowSteps.json()).toEqual(expect.objectContaining({
+        workflow: expect.objectContaining({ id: "workflow-1" }),
+        items: expect.arrayContaining([
+          expect.objectContaining({
+            id: "workflow-step-1",
+            stepName: "Welcome Email"
+          })
+        ])
+      }));
+      expect(await workflowStepCreate.json()).toEqual(expect.objectContaining({
+        workflow: expect.objectContaining({ id: "workflow-1" }),
+        item: null,
+        options: expect.objectContaining({
+          appointmentTypes: expect.any(Array),
+          emailTemplates: expect.any(Array)
+        })
+      }));
+      expect(await workflowStepDetail.json()).toEqual(expect.objectContaining({
+        workflow: expect.objectContaining({ id: "workflow-1" }),
+        item: expect.objectContaining({
+          id: "workflow-step-1",
+          stepName: "Welcome Email"
+        })
+      }));
+
+      const createWorkflow = await fetch(`${baseUrl}/api/admin/workflows`, {
+        method: "POST",
+        headers: {
+          cookie: cookie ?? "",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          name: "Invoice Follow-up",
+          description: "Overdue invoice reminder workflow.",
+          trigger: "invoice_overdue",
+          active: true
+        })
+      });
+      expect(createWorkflow.status).toBe(201);
+      const createdWorkflowId = state.workflows.find((workflow) => workflow.id !== "workflow-1")?.id;
+      expect(createdWorkflowId).toBeDefined();
+
+      const updateWorkflow = await fetch(`${baseUrl}/api/admin/workflows/workflow-1`, {
+        method: "POST",
+        headers: {
+          cookie: cookie ?? "",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          name: "Welcome Series Revised",
+          description: "Updated onboarding flow.",
+          trigger: "scheduled",
+          active: false
+        })
+      });
+      expect(updateWorkflow.status).toBe(200);
+      expect(state.workflows.find((workflow) => workflow.id === "workflow-1")?.name).toBe("Welcome Series Revised");
+
+      const createWorkflowTrigger = await fetch(`${baseUrl}/api/admin/workflows/workflow-1/triggers`, {
+        method: "POST",
+        headers: {
+          cookie: cookie ?? "",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          triggerType: "form_submission",
+          appointmentTypeId: null,
+          formTemplateId: "form-template-1",
+          active: true
+        })
+      });
+      expect(createWorkflowTrigger.status).toBe(201);
+      const createdWorkflowTriggerId = state.workflowTriggers.find((trigger) => trigger.id !== "workflow-trigger-1")?.id;
+      expect(createdWorkflowTriggerId).toBeDefined();
+
+      const createWorkflowStep = await fetch(`${baseUrl}/api/admin/workflows/workflow-1/steps`, {
+        method: "POST",
+        headers: {
+          cookie: cookie ?? "",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          stepName: "Preparation Reminder",
+          emailSubject: "Prep for {workflow_name}",
+          emailBodyHtml: "<p>Bring your leash.</p>",
+          emailBodyText: "Bring your leash.",
+          delayType: "after_previous",
+          delayValue: "1 day",
+          scheduledDate: null,
+          attachContractId: null,
+          attachFormId: null,
+          attachQuoteId: null,
+          attachInvoiceId: null,
+          includeAppointmentLink: true,
+          appointmentTypeId: "appointment-type-1"
+        })
+      });
+      expect(createWorkflowStep.status).toBe(201);
+      const createdWorkflowStepId = state.workflowSteps.find((step) => step.id !== "workflow-step-1")?.id;
+      expect(createdWorkflowStepId).toBeDefined();
+
+      const updateWorkflowStep = await fetch(`${baseUrl}/api/admin/workflows/workflow-1/steps/workflow-step-1`, {
+        method: "POST",
+        headers: {
+          cookie: cookie ?? "",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          stepName: "Welcome Email Revised",
+          emailSubject: "Updated welcome for {client_name}",
+          emailBodyHtml: "<p>Updated body</p>",
+          emailBodyText: "Updated body",
+          delayType: "after_enrollment",
+          delayValue: "3 hours",
+          scheduledDate: null,
+          attachContractId: null,
+          attachFormId: null,
+          attachQuoteId: null,
+          attachInvoiceId: null,
+          includeAppointmentLink: false,
+          appointmentTypeId: null
+        })
+      });
+      expect(updateWorkflowStep.status).toBe(200);
+      expect(state.workflowSteps.find((step) => step.id === "workflow-step-1")?.stepName).toBe("Welcome Email Revised");
+
+      const enrollClient = await fetch(`${baseUrl}/api/admin/workflows/workflow-1/enroll`, {
+        method: "POST",
+        headers: {
+          cookie: cookie ?? "",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          clientIds: ["client-2"]
+        })
+      });
+      expect(enrollClient.status).toBe(200);
+      expect(state.workflowEnrollments.some((enrollment) => enrollment.clientId === "client-2")).toBe(true);
+      expect(state.workflowStepExecutions.some((execution) => execution.enrollmentId != null)).toBe(true);
+
+      const cancelEnrollment = await fetch(`${baseUrl}/api/admin/workflows/workflow-1/enrollments/workflow-enrollment-1/cancel`, {
+        method: "POST",
+        headers: {
+          cookie: cookie ?? ""
+        }
+      });
+      expect(cancelEnrollment.status).toBe(200);
+      expect(state.workflowEnrollments.find((enrollment) => enrollment.id === "workflow-enrollment-1")?.status).toBe("cancelled");
+
+      const deleteWorkflowStep = await fetch(`${baseUrl}/api/admin/workflows/workflow-1/steps/${encodeURIComponent(String(createdWorkflowStepId ?? ""))}/delete`, {
+        method: "POST",
+        headers: {
+          cookie: cookie ?? ""
+        }
+      });
+      expect(deleteWorkflowStep.status).toBe(200);
+      expect(state.workflowSteps.some((step) => step.id === createdWorkflowStepId)).toBe(false);
+
+      const deleteWorkflowTrigger = await fetch(`${baseUrl}/api/admin/workflows/workflow-1/triggers/${encodeURIComponent(String(createdWorkflowTriggerId ?? ""))}/delete`, {
+        method: "POST",
+        headers: {
+          cookie: cookie ?? ""
+        }
+      });
+      expect(deleteWorkflowTrigger.status).toBe(200);
+      expect(state.workflowTriggers.some((trigger) => trigger.id === createdWorkflowTriggerId)).toBe(false);
+
+      const deleteWorkflow = await fetch(`${baseUrl}/api/admin/workflows/${encodeURIComponent(String(createdWorkflowId ?? ""))}/delete`, {
+        method: "POST",
+        headers: {
+          cookie: cookie ?? ""
+        }
+      });
+      expect(deleteWorkflow.status).toBe(200);
+      expect(state.workflows.some((workflow) => workflow.id === createdWorkflowId)).toBe(false);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error?: Error) => error ? reject(error) : resolve());
+      });
+    }
+  });
+
+  it("supports authenticated admin configuration api routes for appointment types, form templates, email templates, and scheduled tasks", async () => {
+    const state = createInMemoryPlatformState({
+      adminUsers: [{
+        actorId: "admin-1",
+        username: "owner",
+        displayName: "Owner Admin",
+        passwordHash: "admin-hash",
+        role: "owner",
+        active: true
+      }],
+      appointmentTypes: [{
+        id: "appointment-type-1",
+        name: "Private Coaching",
+        description: "One-on-one coaching session.",
+        bulletPoints: ["Behavior assessment", "Homework plan"],
+        adminUserId: "admin-1",
+        durationMinutes: 90,
+        bufferBeforeMinutes: 15,
+        bufferAfterMinutes: 15,
+        useTravelTimeBuffer: true,
+        travelTimeMinutes: 20,
+        advanceBookingMinDays: 2,
+        advanceBookingMaxDays: 45,
+        cancellationNoticeHours: 24,
+        requiresForms: true,
+        formTemplateIds: ["form-template-1"],
+        requiresContract: true,
+        contractTemplateId: "contract-template-1",
+        autoInvoice: true,
+        invoiceDueDays: 7,
+        invoiceDueTiming: "after",
+        defaultAmount: 225,
+        consumesCredits: true,
+        creditCount: 2,
+        isGroupClass: false,
+        maxParticipants: 1,
+        publicAvailable: true,
+        portalAvailable: true,
+        scheduleType: "recurring",
+        specificDate: null,
+        specificDates: [],
+        availableDays: [1, 2, 3, 4, 5],
+        availableStartTime: "09:00",
+        availableEndTime: "17:00",
+        timeSlotInterval: 30,
+        perDaySchedule: {},
+        isMiniSession: false,
+        miniSessionLocation: "",
+        miniSessionTopic: "",
+        isFieldRental: false,
+        fieldRentalLocation: "",
+        groupClassLocation: "",
+        locationTypes: ["client_address"],
+        confirmationTemplateId: "email-template-1",
+        bookingRequestTemplateId: null,
+        invoiceTemplateId: null,
+        reminderTemplateId: null,
+        cancellationTemplateId: null,
+        requiresAdminConfirmation: true,
+        usesResource: true,
+        resourceName: "Trainer Vehicle",
+        resourceCapacity: 1,
+        resourceAllocation: "per_appointment",
+        uniqueLink: "private-coaching-link",
+        active: true
+      }] as never,
+      formTemplates: [{
+        id: "form-template-1",
+        name: "Boarding Intake",
+        active: true,
+        description: "Collect intake details before boarding.",
+        fields: [{ label: "Pet Name", type: "text", required: true }],
+        formType: "client_form",
+        requiredFrequency: "once",
+        appointmentTypeId: "appointment-type-1",
+        templateIsInternal: false,
+        templateShowInClientPortal: true
+      }] as never,
+      emailTemplates: [{
+        id: "email-template-1",
+        name: "Booking Confirmation",
+        templateType: "booking_confirmation",
+        subject: "Your booking is confirmed",
+        bodyHtml: "<p>Confirmed.</p>",
+        bodyText: "Confirmed.",
+        active: true
+      }] as never,
+      scheduledTasks: [{
+        id: "scheduled-task-1",
+        name: "Workflow Processor",
+        taskType: "workflow_processor",
+        active: true,
+        scheduleType: "interval",
+        scheduleValue: "60",
+        lastRunAt: "2026-05-27T17:00:00.000Z",
+        nextRunAt: "2026-05-27T18:00:00.000Z"
+      }] as never,
+      passwordVerifier: async (password, hash) => password === "correct-password" && hash === "admin-hash"
+    });
+
+    const sessionStore = createInMemorySessionStore(state);
+    const server = createHttpApiServer({
+      dependencies: createInMemoryApiDependencies(state),
+      sessionStore
+    });
+
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (address == null || typeof address === "string") {
+      throw new Error("Expected TCP server address.");
+    }
+
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    try {
+      const login = await fetch(`${baseUrl}/api/admin/login`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          username: "owner",
+          password: "correct-password"
+        })
+      });
+
+      expect(login.status).toBe(200);
+      const cookie = login.headers.get("set-cookie");
+
+      const appointmentTypes = await fetch(`${baseUrl}/api/admin/appointment-types`, {
+        headers: { cookie: cookie ?? "" }
+      });
+      const appointmentTypeDetail = await fetch(`${baseUrl}/api/admin/appointment-types/appointment-type-1`, {
+        headers: { cookie: cookie ?? "" }
+      });
+      const createAppointmentType = await fetch(`${baseUrl}/api/admin/appointment-types`, {
+        method: "POST",
+        headers: {
+          cookie: cookie ?? "",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          name: "Mini Session Saturday",
+          description: "Short-format mini session.",
+          bulletPoints: ["Outdoor setup"],
+          adminUserId: "admin-1",
+          durationMinutes: 45,
+          bufferBeforeMinutes: 10,
+          bufferAfterMinutes: 10,
+          useTravelTimeBuffer: false,
+          travelTimeMinutes: 0,
+          advanceBookingMinDays: 1,
+          advanceBookingMaxDays: 14,
+          cancellationNoticeHours: 12,
+          requiresForms: true,
+          formTemplateIds: ["form-template-1"],
+          requiresContract: false,
+          contractTemplateId: null,
+          autoInvoice: true,
+          invoiceDueDays: 3,
+          invoiceDueTiming: "before",
+          defaultAmount: 95,
+          consumesCredits: false,
+          creditCount: 1,
+          isGroupClass: false,
+          maxParticipants: 1,
+          publicAvailable: false,
+          portalAvailable: true,
+          scheduleType: "specific_date",
+          specificDate: "2026-06-21",
+          specificDates: [{
+            date: "2026-06-21",
+            timeslots: [{ type: "point", time: "10:00" }]
+          }],
+          availableDays: [0],
+          availableStartTime: "10:00",
+          availableEndTime: "14:00",
+          timeSlotInterval: 30,
+          perDaySchedule: {},
+          isMiniSession: true,
+          miniSessionLocation: "Downtown Park",
+          miniSessionTopic: "Recall refresh",
+          isFieldRental: false,
+          fieldRentalLocation: "",
+          groupClassLocation: "",
+          locationTypes: [],
+          confirmationTemplateId: "email-template-1",
+          bookingRequestTemplateId: null,
+          invoiceTemplateId: null,
+          reminderTemplateId: null,
+          cancellationTemplateId: null,
+          requiresAdminConfirmation: true,
+          usesResource: false,
+          resourceName: "",
+          resourceCapacity: 1,
+          resourceAllocation: "per_appointment",
+          uniqueLink: "mini-session-june-21",
+          active: true
+        })
+      });
+      const updateAppointmentType = await fetch(`${baseUrl}/api/admin/appointment-types/appointment-type-1`, {
+        method: "POST",
+        headers: {
+          cookie: cookie ?? "",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          name: "Private Coaching Updated",
+          description: "Updated coaching session.",
+          bulletPoints: ["Updated assessment"],
+          adminUserId: "admin-1",
+          durationMinutes: 60,
+          bufferBeforeMinutes: 5,
+          bufferAfterMinutes: 5,
+          useTravelTimeBuffer: false,
+          travelTimeMinutes: 0,
+          advanceBookingMinDays: 1,
+          advanceBookingMaxDays: 30,
+          cancellationNoticeHours: 12,
+          requiresForms: false,
+          formTemplateIds: [],
+          requiresContract: false,
+          contractTemplateId: null,
+          autoInvoice: false,
+          invoiceDueDays: 7,
+          invoiceDueTiming: "after",
+          defaultAmount: 175,
+          consumesCredits: false,
+          creditCount: 1,
+          isGroupClass: false,
+          maxParticipants: 1,
+          publicAvailable: true,
+          portalAvailable: true,
+          scheduleType: "recurring",
+          specificDate: null,
+          specificDates: [],
+          availableDays: [1, 2, 3],
+          availableStartTime: "08:00",
+          availableEndTime: "12:00",
+          timeSlotInterval: 30,
+          perDaySchedule: {},
+          isMiniSession: false,
+          miniSessionLocation: "",
+          miniSessionTopic: "",
+          isFieldRental: false,
+          fieldRentalLocation: "",
+          groupClassLocation: "",
+          locationTypes: ["client_address"],
+          confirmationTemplateId: "email-template-1",
+          bookingRequestTemplateId: null,
+          invoiceTemplateId: null,
+          reminderTemplateId: null,
+          cancellationTemplateId: null,
+          requiresAdminConfirmation: false,
+          usesResource: false,
+          resourceName: "",
+          resourceCapacity: 1,
+          resourceAllocation: "per_appointment",
+          uniqueLink: "private-coaching-updated",
+          active: true
+        })
+      });
+      expect(createAppointmentType.status).toBe(201);
+      const createdAppointmentTypeId = state.appointmentTypes.find((item) => item.uniqueLink === "mini-session-june-21")?.id;
+      expect(createdAppointmentTypeId).toBeDefined();
+      const deleteAppointmentType = await fetch(`${baseUrl}/api/admin/appointment-types/${encodeURIComponent(String(createdAppointmentTypeId ?? ""))}/delete`, {
+        method: "POST",
+        headers: {
+          cookie: cookie ?? ""
+        }
+      });
+      const formTemplates = await fetch(`${baseUrl}/api/admin/form-templates`, {
+        headers: { cookie: cookie ?? "" }
+      });
+      const formTemplateDetail = await fetch(`${baseUrl}/api/admin/form-templates/form-template-1`, {
+        headers: { cookie: cookie ?? "" }
+      });
+      const createFormTemplate = await fetch(`${baseUrl}/api/admin/form-templates`, {
+        method: "POST",
+        headers: {
+          cookie: cookie ?? "",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          name: "Follow-Up Survey",
+          active: true,
+          description: "Collect post-program feedback.",
+          fields: [{ label: "How did training go?", type: "textarea", required: true }],
+          formType: "survey_form",
+          requiredFrequency: "yearly",
+          appointmentTypeId: null,
+          templateIsInternal: false,
+          templateShowInClientPortal: true
+        })
+      });
+      const updateFormTemplate = await fetch(`${baseUrl}/api/admin/form-templates/form-template-1`, {
+        method: "POST",
+        headers: {
+          cookie: cookie ?? "",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          name: "Boarding Intake Updated",
+          active: false,
+          description: "Updated boarding intake workflow.",
+          fields: [{ label: "Pet Name", type: "text", required: true }, { label: "Medication Notes", type: "textarea" }],
+          formType: "client_form",
+          requiredFrequency: "once_per_pet",
+          appointmentTypeId: "appointment-type-1",
+          templateIsInternal: true,
+          templateShowInClientPortal: false
+        })
+      });
+      expect(createFormTemplate.status).toBe(201);
+      const createdFormTemplateId = state.formTemplates.find((item) => item.name === "Follow-Up Survey")?.id;
+      expect(createdFormTemplateId).toBeDefined();
+      const deleteFormTemplate = await fetch(`${baseUrl}/api/admin/form-templates/${encodeURIComponent(String(createdFormTemplateId ?? ""))}/delete`, {
+        method: "POST",
+        headers: {
+          cookie: cookie ?? ""
+        }
+      });
+      const emailTemplates = await fetch(`${baseUrl}/api/admin/email-templates`, {
+        headers: { cookie: cookie ?? "" }
+      });
+      const emailTemplateDetail = await fetch(`${baseUrl}/api/admin/email-templates/email-template-1`, {
+        headers: { cookie: cookie ?? "" }
+      });
+      const createEmailTemplate = await fetch(`${baseUrl}/api/admin/email-templates`, {
+        method: "POST",
+        headers: {
+          cookie: cookie ?? "",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          name: "Booking Reminder",
+          templateType: "booking_reminder",
+          subject: "Reminder",
+          bodyHtml: "<p>Reminder.</p>",
+          bodyText: "Reminder.",
+          active: true
+        })
+      });
+      const updateEmailTemplate = await fetch(`${baseUrl}/api/admin/email-templates/email-template-1`, {
+        method: "POST",
+        headers: {
+          cookie: cookie ?? "",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          name: "Booking Confirmation Updated",
+          templateType: "booking_confirmation",
+          subject: "Updated",
+          bodyHtml: "<p>Updated.</p>",
+          bodyText: "Updated.",
+          active: false
+        })
+      });
+      const scheduledTasks = await fetch(`${baseUrl}/api/admin/scheduled-tasks`, {
+        headers: { cookie: cookie ?? "" }
+      });
+      const scheduledTaskDetail = await fetch(`${baseUrl}/api/admin/scheduled-tasks/scheduled-task-1`, {
+        headers: { cookie: cookie ?? "" }
+      });
+      const createScheduledTask = await fetch(`${baseUrl}/api/admin/scheduled-tasks`, {
+        method: "POST",
+        headers: {
+          cookie: cookie ?? "",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          name: "Inbox Poller",
+          taskType: "email_receiver",
+          scheduleType: "custom",
+          scheduleValue: "*/5 * * * *",
+          active: true
+        })
+      });
+      const updateScheduledTask = await fetch(`${baseUrl}/api/admin/scheduled-tasks/scheduled-task-1`, {
+        method: "POST",
+        headers: {
+          cookie: cookie ?? "",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          name: "Workflow Processor Revised",
+          taskType: "workflow_processor",
+          scheduleType: "interval",
+          scheduleValue: "30",
+          active: true
+        })
+      });
+
+      expect(appointmentTypes.status).toBe(200);
+      expect(appointmentTypeDetail.status).toBe(200);
+      expect(updateAppointmentType.status).toBe(200);
+      expect(deleteAppointmentType.status).toBe(200);
+      expect(state.appointmentTypes.some((item) => item.id === createdAppointmentTypeId)).toBe(false);
+      expect(formTemplates.status).toBe(200);
+      expect(formTemplateDetail.status).toBe(200);
+      expect(updateFormTemplate.status).toBe(200);
+      expect(deleteFormTemplate.status).toBe(200);
+      expect(state.formTemplates.some((item) => item.id === createdFormTemplateId)).toBe(false);
+      expect(emailTemplates.status).toBe(200);
+      expect(emailTemplateDetail.status).toBe(200);
+      expect(createEmailTemplate.status).toBe(201);
+      expect(updateEmailTemplate.status).toBe(200);
+      expect(scheduledTasks.status).toBe(200);
+      expect(scheduledTaskDetail.status).toBe(200);
+      expect(createScheduledTask.status).toBe(201);
+      expect(updateScheduledTask.status).toBe(200);
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((error?: Error) => error ? reject(error) : resolve());

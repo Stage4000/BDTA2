@@ -19,7 +19,9 @@ import {
   type PortalSummaryDependencies,
   type PortalActorProfileDependencies,
   type PortalLoginDependencies,
-  type PublicBookingDependencies
+  type PublicContactDependencies,
+  type PublicBookingDependencies,
+  type WorkflowManagementDependencies
 } from "@bdta/application";
 
 function createPublicBookingDependencies(overrides: Partial<PublicBookingDependencies> = {}): PublicBookingDependencies {
@@ -41,6 +43,35 @@ function createPublicBookingDependencies(overrides: Partial<PublicBookingDepende
     queueConfirmationEmail: async () => undefined,
     queueJob: async () => undefined,
     buildPortalReturnUrl: (clientId) => `https://portal.example.test/portal?client=${clientId}`,
+    ...overrides
+  };
+}
+
+function createPublicContactDependencies(overrides: Partial<PublicContactDependencies> = {}): PublicContactDependencies {
+  const clients = [{
+    clientId: "client-1",
+    notes: "Existing note"
+  }];
+  let sequence = clients.length;
+
+  return {
+    now: () => "2026-05-27T18:00:00.000Z",
+    verifyCaptcha: async () => true,
+    findLatestClientByEmail: async (email) => email.trim().toLowerCase() === "client@example.com"
+      ? clients[0] ?? null
+      : null,
+    updateClientNotes: async (clientId, notes) => {
+      const index = clients.findIndex((client) => client.clientId === clientId);
+      if (index >= 0) {
+        clients[index] = {
+          ...clients[index],
+          notes
+        };
+      }
+    },
+    createClientLead: async () => ({
+      clientId: `client-${++sequence}`
+    }),
     ...overrides
   };
 }
@@ -420,6 +451,7 @@ function createContentManagementDependencies(
       createdAt: "2026-05-20T10:00:00.000Z",
       updatedAt: "2026-05-27T18:00:00.000Z"
     } : null,
+    deleteAdminBlogPost: async (postId) => postId === "blog-1",
     listAdminSitePages: async () => [{
       id: "page-home",
       slug: "home",
@@ -492,6 +524,7 @@ function createContentManagementDependencies(
       createdAt: "2026-05-01T10:00:00.000Z",
       updatedAt: "2026-05-27T18:00:00.000Z"
     } : null,
+    deleteAdminSitePage: async () => true,
     listAdminSettings: async () => [{
       id: "setting-1",
       key: "turnstile_site_key",
@@ -525,6 +558,52 @@ function createContentManagementDependencies(
       secret: false,
       updatedAt: "2026-05-27T18:00:00.000Z"
     } : null,
+    findAdminSettingsUserByActorId: async (actorId) => actorId === "admin-1" ? {
+      actorId: "admin-1",
+      username: "owner",
+      email: "owner@example.com",
+      accountType: "main",
+      role: "owner",
+      isMainAccount: true,
+      canManageAdminUsers: true,
+      canManageApiKeys: true,
+      active: true
+    } : null,
+    listAdminSettingsUsers: async () => [{
+      actorId: "admin-1",
+      username: "owner",
+      email: "owner@example.com",
+      accountType: "main",
+      role: "owner",
+      isMainAccount: true,
+      canManageAdminUsers: true,
+      canManageApiKeys: true,
+      active: true
+    }],
+    findAdminSettingsUserByUsername: async () => null,
+    createAdminSettingsUser: async (input) => ({
+      actorId: "admin-2",
+      username: input.username,
+      email: input.email,
+      accountType: input.accountType,
+      role: input.accountType === "accountant" ? "accountant" : "admin",
+      isMainAccount: false,
+      canManageAdminUsers: false,
+      canManageApiKeys: false,
+      active: true
+    }),
+    updateAdminSettingsUserPermissions: async (actorId, input) => actorId === "admin-2" ? {
+      actorId: "admin-2",
+      username: "new-admin",
+      email: "new-admin@example.com",
+      accountType: "standard",
+      role: "admin",
+      isMainAccount: false,
+      canManageAdminUsers: input.canManageAdminUsers,
+      canManageApiKeys: input.canManageApiKeys,
+      active: true
+    } : null,
+    deleteAdminSettingsUser: async () => true,
     ...overrides
   };
 }
@@ -548,6 +627,7 @@ function createPortalResourceReadDependencies(
       clientId: "client-1",
       name: "Buddy",
       species: "Dog",
+      petSittingNotes: "Use the side gate and towel paws before re-entry.",
       archived: false
     }] : [],
     findPortalPetById: async (clientId, petId) => clientId === "client-1" && petId === "pet-1" ? {
@@ -555,6 +635,7 @@ function createPortalResourceReadDependencies(
       clientId: "client-1",
       name: "Buddy",
       species: "Dog",
+      petSittingNotes: "Use the side gate and towel paws before re-entry.",
       archived: false
     } : null,
     listPortalPetFiles: async (clientId, petId) => clientId === "client-1" && petId === "pet-1" ? [{
@@ -655,16 +736,54 @@ function createPortalResourceReadDependencies(
       id: "form-1",
       templateId: "template-1",
       clientId: "client-1",
-      submittedAt: null,
+      templateName: "Follow-up Note",
+      formType: "follow_up_note",
+      templateIsInternal: true,
+      templateShowInClientPortal: true,
+      clientReviewSubmission: true,
+      submittedAt: "2026-05-26T11:00:00.000Z",
+      publicAccess: null
+    }, {
+      id: "form-hidden-1",
+      templateId: "template-2",
+      clientId: "client-1",
+      templateName: "Internal Pet Form",
+      formType: "client_form",
+      submittedAt: "2026-05-25T09:00:00.000Z",
       publicAccess: null
     }] : [],
     findPortalFormById: async (clientId, formId) => clientId === "client-1" && formId === "form-1" ? {
       id: "form-1",
       templateId: "template-1",
       clientId: "client-1",
-      submittedAt: null,
+      templateName: "Follow-up Note",
+      formType: "follow_up_note",
+      templateIsInternal: true,
+      templateShowInClientPortal: true,
+      clientReviewSubmission: true,
+      submittedAt: "2026-05-26T11:00:00.000Z",
+      publicAccess: null
+    } : clientId === "client-1" && formId === "form-hidden-1" ? {
+      id: "form-hidden-1",
+      templateId: "template-2",
+      clientId: "client-1",
+      templateName: "Internal Pet Form",
+      formType: "client_form",
+      submittedAt: "2026-05-25T09:00:00.000Z",
       publicAccess: null
     } : null,
+    listPortalNotifications: async (clientId) => clientId === "client-1" ? [{
+      id: "notification-1",
+      clientId: "client-1",
+      channel: "portal",
+      entityType: "follow_up_note",
+      entityId: "form-1",
+      subject: "New follow-up note available",
+      message: "Your Follow-up Note is ready to review in the client portal.",
+      url: "/portal/forms/form-1",
+      isRead: false,
+      createdAt: "2026-05-26T12:00:00.000Z"
+    }] : [],
     listPortalPackages: async (clientId) => clientId === "client-1" ? [{
       id: "package-1",
       name: "Starter Package",
@@ -681,12 +800,14 @@ function createPortalResourceReadDependencies(
       id: "credit-1",
       clientId: "client-1",
       packageId: "package-1",
+      appointmentTypeId: "appointment-type-1",
       remainingUnits: 4
     }] : [],
     findPortalCreditById: async (clientId, creditId) => clientId === "client-1" && creditId === "credit-1" ? {
       id: "credit-1",
       clientId: "client-1",
       packageId: "package-1",
+      appointmentTypeId: "appointment-type-1",
       remainingUnits: 4
     } : null,
     ...overrides
@@ -709,6 +830,7 @@ function createAdminResourceReadDependencies(
       clientId: "client-1",
       name: "Buddy",
       species: "Dog",
+      petSittingNotes: "Use the side gate and towel paws before re-entry.",
       archived: false
     }],
     findAdminPetById: async (petId) => petId === "pet-1" ? {
@@ -716,6 +838,7 @@ function createAdminResourceReadDependencies(
       clientId: "client-1",
       name: "Buddy",
       species: "Dog",
+      petSittingNotes: "Use the side gate and towel paws before re-entry.",
       archived: false
     } : null,
     listAdminPetFiles: async (petId) => petId === "pet-1" ? [{
@@ -833,16 +956,127 @@ function createAdminResourceReadDependencies(
       id: "form-1",
       templateId: "template-1",
       clientId: "client-1",
-      submittedAt: null,
+      templateName: "Follow-up Note",
+      formType: "follow_up_note",
+      templateIsInternal: true,
+      templateShowInClientPortal: true,
+      clientReviewSubmission: true,
+      submittedAt: "2026-05-26T11:00:00.000Z",
+      publicAccess: null
+    }, {
+      id: "form-hidden-1",
+      templateId: "template-2",
+      clientId: "client-1",
+      templateName: "Internal Pet Form",
+      formType: "client_form",
+      submittedAt: "2026-05-25T09:00:00.000Z",
       publicAccess: null
     }],
+    listAdminFormsByTemplate: async (templateId) => [{
+      id: "form-1",
+      templateId: "template-1",
+      clientId: "client-1",
+      templateName: "Follow-up Note",
+      formType: "follow_up_note",
+      templateIsInternal: true,
+      templateShowInClientPortal: true,
+      clientReviewSubmission: true,
+      submittedAt: "2026-05-26T11:00:00.000Z",
+      publicAccess: null
+    }, {
+      id: "form-hidden-1",
+      templateId: "template-2",
+      clientId: "client-1",
+      templateName: "Internal Pet Form",
+      formType: "client_form",
+      submittedAt: "2026-05-25T09:00:00.000Z",
+      publicAccess: null
+    }].filter((form) => form.templateId === templateId),
     findAdminFormById: async (formId) => formId === "form-1" ? {
       id: "form-1",
       templateId: "template-1",
       clientId: "client-1",
-      submittedAt: null,
+      templateName: "Follow-up Note",
+      formType: "follow_up_note",
+      templateIsInternal: true,
+      templateShowInClientPortal: true,
+      clientReviewSubmission: true,
+      submittedAt: "2026-05-26T11:00:00.000Z",
+      publicAccess: null
+    } : formId === "form-hidden-1" ? {
+      id: "form-hidden-1",
+      templateId: "template-2",
+      clientId: "client-1",
+      templateName: "Internal Pet Form",
+      formType: "client_form",
+      submittedAt: "2026-05-25T09:00:00.000Z",
       publicAccess: null
     } : null,
+    createAdminFormRequest: async (input) => ({
+      id: "form-request-1",
+      templateId: input.templateId,
+      clientId: input.clientId,
+      bookingId: input.bookingId ?? null,
+      petId: input.petId ?? null,
+      templateName: "Generated Request",
+      formType: "client_form",
+      status: "pending",
+      submittedAt: null,
+      publicAccess: {
+        token: "form-request-public-token",
+        issuedAt: "2026-05-27T18:00:00.000Z",
+        expiresAt: null,
+        legacySourceId: null
+      }
+    }),
+    reviewAdminForm: async (formId, adminUserId, notes) => {
+      const item = formId === "form-1"
+        ? {
+          id: "form-1",
+          templateId: "template-1",
+          clientId: "client-1",
+          templateName: "Follow-up Note",
+          formType: "follow_up_note",
+          templateIsInternal: true,
+          templateShowInClientPortal: true,
+          clientReviewSubmission: true,
+          submittedAt: "2026-05-26T11:00:00.000Z",
+          publicAccess: null
+        }
+        : null;
+      return item == null ? null : {
+        ...item,
+        status: "reviewed",
+        reviewedByAdminUserId: adminUserId,
+        reviewedByName: "Admin Reviewer",
+        reviewedAt: "2026-05-27T18:00:00.000Z",
+        notes
+      };
+    },
+    unreviewAdminForm: async (formId) => {
+      const item = formId === "form-1"
+        ? {
+          id: "form-1",
+          templateId: "template-1",
+          clientId: "client-1",
+          templateName: "Follow-up Note",
+          formType: "follow_up_note",
+          templateIsInternal: true,
+          templateShowInClientPortal: true,
+          clientReviewSubmission: true,
+          submittedAt: "2026-05-26T11:00:00.000Z",
+          publicAccess: null
+        }
+        : null;
+      return item == null ? null : {
+        ...item,
+        status: "submitted",
+        reviewedByAdminUserId: null,
+        reviewedByName: null,
+        reviewedAt: null,
+        notes: "Kept note"
+      };
+    },
     listAdminPackages: async () => [{
       id: "package-1",
       name: "Starter Package",
@@ -859,12 +1093,14 @@ function createAdminResourceReadDependencies(
       id: "credit-1",
       clientId: "client-1",
       packageId: "package-1",
+      appointmentTypeId: "appointment-type-1",
       remainingUnits: 4
     }],
     findAdminCreditById: async (creditId) => creditId === "credit-1" ? {
       id: "credit-1",
       clientId: "client-1",
       packageId: "package-1",
+      appointmentTypeId: "appointment-type-1",
       remainingUnits: 4
     } : null,
     ...overrides
@@ -1062,12 +1298,37 @@ function createPortalCommerceDependencies(
 function createPublicDocumentAccessDependencies(
   overrides: Partial<PublicDocumentAccessDependencies> = {}
 ): PublicDocumentAccessDependencies {
-  return {
+  const defaults: PublicDocumentAccessDependencies = {
     now: () => "2026-05-27T18:00:00.000Z",
+    verifyCaptcha: async () => true,
     findPublicQuoteById: async (quoteId) => quoteId === "quote-1" ? {
       id: "quote-1",
       clientId: "client-1",
       status: "sent",
+      totalAmount: 450,
+      publicAccess: {
+        token: "quote-access-token-1234",
+        issuedAt: "2026-05-27T18:00:00.000Z",
+        expiresAt: null,
+        legacySourceId: "quote-1"
+      }
+    } : null,
+    findPublicQuoteByToken: async (token) => token === "quote-access-token-1234" ? {
+      id: "quote-1",
+      clientId: "client-1",
+      status: "sent",
+      totalAmount: 450,
+      publicAccess: {
+        token: "quote-access-token-1234",
+        issuedAt: "2026-05-27T18:00:00.000Z",
+        expiresAt: null,
+        legacySourceId: "quote-1"
+      }
+    } : null,
+    respondPublicQuote: async (quoteId, action) => quoteId === "quote-1" ? {
+      id: "quote-1",
+      clientId: "client-1",
+      status: action === "accept" ? "accepted" : "declined",
       totalAmount: 450,
       publicAccess: {
         token: "quote-access-token-1234",
@@ -1087,11 +1348,99 @@ function createPublicDocumentAccessDependencies(
         legacySourceId: "contract-1"
       }
     } : null,
+    findPublicContractByToken: async (token) => token === "contract-access-token-1234" ? {
+      id: "contract-1",
+      clientId: "client-1",
+      status: "sent",
+      publicAccess: {
+        token: "contract-access-token-1234",
+        issuedAt: "2026-05-27T18:00:00.000Z",
+        expiresAt: null,
+        legacySourceId: "contract-1"
+      }
+    } : null,
+    signPublicContract: async (input) => input.contractId === "contract-1" ? {
+      id: "contract-1",
+      clientId: "client-1",
+      status: "signed",
+      signatureTypedName: input.typedName,
+      signatureFont: input.signatureFont,
+      signedAt: "2026-05-27T18:00:00.000Z",
+      publicAccess: {
+        token: "contract-access-token-1234",
+        issuedAt: "2026-05-27T18:00:00.000Z",
+        expiresAt: null,
+        legacySourceId: "contract-1"
+      }
+    } : null,
     findPublicFormSubmissionById: async (submissionId) => submissionId === "form-1" ? {
       id: "form-1",
       templateId: "template-1",
       clientId: "client-1",
+      templateName: "Client Intake",
+      templateDescription: "Complete the onboarding form.",
+      templateFields: [
+        {
+          label: "Dog Name",
+          type: "text",
+          required: true
+        }
+      ],
+      contactName: "Casey Client",
+      contactEmail: "casey@example.com",
+      contactPhone: "555-0110",
+      responses: [],
       submittedAt: null,
+      publicAccess: {
+        token: "form-access-token-123456",
+        issuedAt: "2026-05-27T18:00:00.000Z",
+        expiresAt: null,
+        legacySourceId: "form-1"
+      }
+    } : null,
+    findPublicFormSubmissionByToken: async (token) => token === "form-access-token-123456" ? {
+      id: "form-1",
+      templateId: "template-1",
+      clientId: "client-1",
+      templateName: "Client Intake",
+      templateDescription: "Complete the onboarding form.",
+      templateFields: [
+        {
+          label: "Dog Name",
+          type: "text",
+          required: true
+        }
+      ],
+      contactName: "Casey Client",
+      contactEmail: "casey@example.com",
+      contactPhone: "555-0110",
+      responses: [],
+      submittedAt: null,
+      publicAccess: {
+        token: "form-access-token-123456",
+        issuedAt: "2026-05-27T18:00:00.000Z",
+        expiresAt: null,
+        legacySourceId: "form-1"
+      }
+    } : null,
+    submitPublicForm: async (input) => input.submissionId === "form-1" ? {
+      id: "form-1",
+      templateId: "template-1",
+      clientId: "client-1",
+      templateName: "Client Intake",
+      templateDescription: "Complete the onboarding form.",
+      templateFields: [
+        {
+          label: "Dog Name",
+          type: "text",
+          required: true
+        }
+      ],
+      contactName: input.contactName,
+      contactEmail: input.contactEmail,
+      contactPhone: input.contactPhone,
+      responses: input.responses,
+      submittedAt: "2026-05-27T18:00:00.000Z",
       publicAccess: {
         token: "form-access-token-123456",
         issuedAt: "2026-05-27T18:00:00.000Z",
@@ -1114,6 +1463,24 @@ function createPublicDocumentAccessDependencies(
         legacySourceId: "booking-ical-1"
       }
     } : null,
+    findPublicBookingIcalByToken: async (token) => token === "ical-access-token-123456" ? {
+      id: "booking-ical-1",
+      clientId: "client-1",
+      petIds: ["pet-1"],
+      serviceId: "svc-private-lesson",
+      startsAt: "2026-06-01T16:00:00.000Z",
+      endsAt: "2026-06-01T17:00:00.000Z",
+      status: "confirmed",
+      icalAccess: {
+        token: "ical-access-token-123456",
+        issuedAt: "2026-05-27T18:00:00.000Z",
+        expiresAt: null,
+        legacySourceId: "booking-ical-1"
+      }
+    } : null
+  };
+  return {
+    ...defaults,
     ...overrides
   };
 }
@@ -1245,9 +1612,398 @@ function createAchievementDependencies(
   };
 }
 
+function createWorkflowManagementDependencies(
+  overrides: Partial<WorkflowManagementDependencies> = {}
+): WorkflowManagementDependencies {
+  return {
+    listAdminWorkflows: async () => [],
+    findAdminWorkflowById: async () => null,
+    createAdminWorkflow: async (_adminUserId, input) => ({
+      id: "workflow-1",
+      name: input.name,
+      description: input.description,
+      trigger: input.trigger,
+      active: input.active,
+      createdAt: "2026-05-27T18:00:00.000Z"
+    }),
+    updateAdminWorkflow: async (workflowId, _adminUserId, input) => ({
+      id: workflowId,
+      name: input.name,
+      description: input.description,
+      trigger: input.trigger,
+      active: input.active,
+      createdAt: "2026-05-27T18:00:00.000Z"
+    }),
+    deleteAdminWorkflow: async () => true,
+    listAdminWorkflowTriggers: async () => [],
+    listWorkflowTriggerOptions: async () => ({
+      appointmentTypes: [],
+      formTemplates: []
+    }),
+    createAdminWorkflowTrigger: async (workflowId, _adminUserId, input) => ({
+      id: "workflow-trigger-1",
+      workflowId,
+      triggerType: input.triggerType,
+      appointmentTypeId: input.appointmentTypeId,
+      formTemplateId: input.formTemplateId,
+      active: input.active,
+      createdAt: "2026-05-27T18:00:00.000Z",
+      appointmentTypeName: input.appointmentTypeId,
+      formTemplateName: input.formTemplateId
+    }),
+    deleteAdminWorkflowTrigger: async () => true,
+    listAdminWorkflowEnrollments: async () => [],
+    listWorkflowEnrollableClients: async () => [],
+    enrollWorkflowClients: async () => undefined,
+    cancelWorkflowEnrollment: async () => true,
+    listAdminWorkflowSteps: async () => [],
+    findAdminWorkflowStepById: async () => null,
+    createAdminWorkflowStep: async (workflowId, _adminUserId, input) => ({
+      id: "workflow-step-1",
+      workflowId,
+      stepOrder: 1,
+      stepName: input.stepName,
+      emailSubject: input.emailSubject,
+      emailBodyHtml: input.emailBodyHtml,
+      emailBodyText: input.emailBodyText,
+      delayType: input.delayType,
+      delayValue: input.delayValue,
+      scheduledDate: input.scheduledDate,
+      attachContractId: input.attachContractId,
+      attachFormId: input.attachFormId,
+      attachQuoteId: input.attachQuoteId,
+      attachInvoiceId: input.attachInvoiceId,
+      includeAppointmentLink: input.includeAppointmentLink,
+      appointmentTypeId: input.appointmentTypeId,
+      createdAt: "2026-05-27T18:00:00.000Z",
+      updatedAt: "2026-05-27T18:00:00.000Z"
+    }),
+    updateAdminWorkflowStep: async (workflowId, stepId, _adminUserId, input) => ({
+      id: stepId,
+      workflowId,
+      stepOrder: 1,
+      stepName: input.stepName,
+      emailSubject: input.emailSubject,
+      emailBodyHtml: input.emailBodyHtml,
+      emailBodyText: input.emailBodyText,
+      delayType: input.delayType,
+      delayValue: input.delayValue,
+      scheduledDate: input.scheduledDate,
+      attachContractId: input.attachContractId,
+      attachFormId: input.attachFormId,
+      attachQuoteId: input.attachQuoteId,
+      attachInvoiceId: input.attachInvoiceId,
+      includeAppointmentLink: input.includeAppointmentLink,
+      appointmentTypeId: input.appointmentTypeId,
+      createdAt: "2026-05-27T18:00:00.000Z",
+      updatedAt: "2026-05-27T18:00:00.000Z"
+    }),
+    deleteAdminWorkflowStep: async () => true,
+    listWorkflowStepEditorOptions: async () => ({
+      contractTemplates: [],
+      formTemplates: [],
+      appointmentTypes: [],
+      quotes: [],
+      invoices: [],
+      emailTemplates: [],
+      processorIntervalMinutes: 60
+    }),
+    ...overrides
+  };
+}
+
+function createAdminConfigurationDependencies(overrides: Record<string, unknown> = {}) {
+  return {
+    listAdminAppointmentTypes: async () => [{
+      id: "appointment-type-1",
+      name: "Private Coaching",
+      description: "One-on-one coaching session.",
+      bulletPoints: ["Behavior assessment", "Homework plan"],
+      adminUserId: "admin-1",
+      durationMinutes: 90,
+      bufferBeforeMinutes: 15,
+      bufferAfterMinutes: 15,
+      useTravelTimeBuffer: true,
+      travelTimeMinutes: 20,
+      advanceBookingMinDays: 2,
+      advanceBookingMaxDays: 45,
+      cancellationNoticeHours: 24,
+      requiresForms: true,
+      formTemplateIds: ["form-template-1", "form-template-2"],
+      requiresContract: true,
+      contractTemplateId: "contract-template-1",
+      autoInvoice: true,
+      invoiceDueDays: 7,
+      invoiceDueTiming: "after",
+      defaultAmount: 225,
+      consumesCredits: true,
+      creditCount: 2,
+      isGroupClass: false,
+      maxParticipants: 1,
+      publicAvailable: true,
+      portalAvailable: true,
+      scheduleType: "recurring",
+      specificDate: null,
+      specificDates: [],
+      availableDays: [1, 2, 3, 4, 5],
+      availableStartTime: "09:00",
+      availableEndTime: "17:00",
+      timeSlotInterval: 30,
+      perDaySchedule: {
+        1: { start: "09:00", end: "17:00" },
+        3: { start: "10:00", end: "16:00" }
+      },
+      isMiniSession: false,
+      miniSessionLocation: "",
+      miniSessionTopic: "",
+      isFieldRental: false,
+      fieldRentalLocation: "",
+      groupClassLocation: "",
+      locationTypes: ["client_address", "phone_inbound"],
+      confirmationTemplateId: "email-template-1",
+      bookingRequestTemplateId: "email-template-2",
+      invoiceTemplateId: "email-template-3",
+      reminderTemplateId: "email-template-4",
+      cancellationTemplateId: "email-template-5",
+      requiresAdminConfirmation: true,
+      usesResource: true,
+      resourceName: "Trainer Vehicle",
+      resourceCapacity: 1,
+      resourceAllocation: "per_appointment",
+      uniqueLink: "private-coaching-link",
+      active: true,
+      createdAt: "2026-05-27T17:00:00.000Z",
+      updatedAt: "2026-05-27T18:00:00.000Z"
+    }],
+    findAdminAppointmentTypeById: async (appointmentTypeId: string) => appointmentTypeId === "appointment-type-1"
+      ? {
+        id: "appointment-type-1",
+        name: "Private Coaching",
+        description: "One-on-one coaching session.",
+        bulletPoints: ["Behavior assessment", "Homework plan"],
+        adminUserId: "admin-1",
+        durationMinutes: 90,
+        bufferBeforeMinutes: 15,
+        bufferAfterMinutes: 15,
+        useTravelTimeBuffer: true,
+        travelTimeMinutes: 20,
+        advanceBookingMinDays: 2,
+        advanceBookingMaxDays: 45,
+        cancellationNoticeHours: 24,
+        requiresForms: true,
+        formTemplateIds: ["form-template-1", "form-template-2"],
+        requiresContract: true,
+        contractTemplateId: "contract-template-1",
+        autoInvoice: true,
+        invoiceDueDays: 7,
+        invoiceDueTiming: "after",
+        defaultAmount: 225,
+        consumesCredits: true,
+        creditCount: 2,
+        isGroupClass: false,
+        maxParticipants: 1,
+        publicAvailable: true,
+        portalAvailable: true,
+        scheduleType: "recurring",
+        specificDate: null,
+        specificDates: [],
+        availableDays: [1, 2, 3, 4, 5],
+        availableStartTime: "09:00",
+        availableEndTime: "17:00",
+        timeSlotInterval: 30,
+        perDaySchedule: {
+          1: { start: "09:00", end: "17:00" },
+          3: { start: "10:00", end: "16:00" }
+        },
+        isMiniSession: false,
+        miniSessionLocation: "",
+        miniSessionTopic: "",
+        isFieldRental: false,
+        fieldRentalLocation: "",
+        groupClassLocation: "",
+        locationTypes: ["client_address", "phone_inbound"],
+        confirmationTemplateId: "email-template-1",
+        bookingRequestTemplateId: "email-template-2",
+        invoiceTemplateId: "email-template-3",
+        reminderTemplateId: "email-template-4",
+        cancellationTemplateId: "email-template-5",
+        requiresAdminConfirmation: true,
+        usesResource: true,
+        resourceName: "Trainer Vehicle",
+        resourceCapacity: 1,
+        resourceAllocation: "per_appointment",
+        uniqueLink: "private-coaching-link",
+        active: true,
+        createdAt: "2026-05-27T17:00:00.000Z",
+        updatedAt: "2026-05-27T18:00:00.000Z"
+      }
+      : null,
+    createAdminAppointmentType: async (_adminUserId: string, input: Record<string, unknown>) => ({
+      id: "appointment-type-created",
+      ...input
+    }),
+    updateAdminAppointmentType: async (appointmentTypeId: string, _adminUserId: string, input: Record<string, unknown>) => ({
+      id: appointmentTypeId,
+      ...input
+    }),
+    deleteAdminAppointmentType: async (appointmentTypeId: string) => appointmentTypeId === "appointment-type-1",
+    listAdminFormTemplates: async () => [{
+      id: "form-template-1",
+      name: "Boarding Intake",
+      active: true,
+      description: "Collect intake details before boarding.",
+      fields: [{ label: "Pet Name", type: "text", required: true }],
+      formType: "client_form",
+      requiredFrequency: "once",
+      appointmentTypeId: "appointment-type-1",
+      templateIsInternal: false,
+      templateShowInClientPortal: true
+    }],
+    findAdminFormTemplateById: async (templateId: string) => templateId === "form-template-1"
+      ? {
+        id: "form-template-1",
+        name: "Boarding Intake",
+        active: true,
+        description: "Collect intake details before boarding.",
+        fields: [{ label: "Pet Name", type: "text", required: true }],
+        formType: "client_form",
+        requiredFrequency: "once",
+        appointmentTypeId: "appointment-type-1",
+        templateIsInternal: false,
+        templateShowInClientPortal: true
+      }
+      : null,
+    createAdminFormTemplate: async (_adminUserId: string, input: Record<string, unknown>) => ({
+      id: "form-template-created",
+      name: String(input.name ?? ""),
+      active: Boolean(input.active),
+      description: String(input.description ?? ""),
+      fields: Array.isArray(input.fields) ? input.fields as Array<Record<string, unknown>> : [],
+      formType: String(input.formType ?? "client_form"),
+      requiredFrequency: typeof input.requiredFrequency === "string" ? input.requiredFrequency : null,
+      appointmentTypeId: typeof input.appointmentTypeId === "string" ? input.appointmentTypeId : null,
+      templateIsInternal: Boolean(input.templateIsInternal),
+      templateShowInClientPortal: input.templateShowInClientPortal !== false
+    }),
+    updateAdminFormTemplate: async (templateId: string, _adminUserId: string, input: Record<string, unknown>) => ({
+      id: templateId,
+      name: String(input.name ?? ""),
+      active: Boolean(input.active),
+      description: String(input.description ?? ""),
+      fields: Array.isArray(input.fields) ? input.fields as Array<Record<string, unknown>> : [],
+      formType: String(input.formType ?? "client_form"),
+      requiredFrequency: typeof input.requiredFrequency === "string" ? input.requiredFrequency : null,
+      appointmentTypeId: typeof input.appointmentTypeId === "string" ? input.appointmentTypeId : null,
+      templateIsInternal: Boolean(input.templateIsInternal),
+      templateShowInClientPortal: input.templateShowInClientPortal !== false
+    }),
+    countAdminFormTemplateSubmissions: async (templateId: string) => templateId === "form-template-in-use" ? 2 : 0,
+    deleteAdminFormTemplate: async (templateId: string) => templateId === "form-template-1",
+    listAdminEmailTemplates: async () => [{
+      id: "email-template-1",
+      name: "Booking Confirmation",
+      templateType: "booking_confirmation",
+      subject: "Your booking is confirmed",
+      bodyHtml: "<p>Confirmed.</p>",
+      bodyText: "Confirmed.",
+      active: true
+    }],
+    findAdminEmailTemplateById: async (templateId: string) => templateId === "email-template-1"
+      ? {
+        id: "email-template-1",
+        name: "Booking Confirmation",
+        templateType: "booking_confirmation",
+        subject: "Your booking is confirmed",
+        bodyHtml: "<p>Confirmed.</p>",
+        bodyText: "Confirmed.",
+        active: true
+      }
+      : null,
+    createAdminEmailTemplate: async (_adminUserId: string, input: Record<string, unknown>) => ({
+      id: "email-template-created",
+      name: String(input.name ?? ""),
+      templateType: String(input.templateType ?? ""),
+      subject: String(input.subject ?? ""),
+      bodyHtml: String(input.bodyHtml ?? ""),
+      bodyText: String(input.bodyText ?? ""),
+      active: Boolean(input.active)
+    }),
+    updateAdminEmailTemplate: async (templateId: string, _adminUserId: string, input: Record<string, unknown>) => ({
+      id: templateId,
+      name: String(input.name ?? ""),
+      templateType: String(input.templateType ?? ""),
+      subject: String(input.subject ?? ""),
+      bodyHtml: String(input.bodyHtml ?? ""),
+      bodyText: String(input.bodyText ?? ""),
+      active: Boolean(input.active)
+    }),
+    listAdminScheduledTasks: async () => [{
+      id: "scheduled-task-1",
+      name: "Workflow Processor",
+      taskType: "workflow_processor",
+      scheduleType: "interval",
+      scheduleValue: "60",
+      active: true,
+      lastRunAt: "2026-05-27T17:00:00.000Z",
+      nextRunAt: "2026-05-27T18:00:00.000Z"
+    }],
+    findAdminScheduledTaskById: async (taskId: string) => taskId === "scheduled-task-1"
+      ? {
+        id: "scheduled-task-1",
+        name: "Workflow Processor",
+        taskType: "workflow_processor",
+        scheduleType: "interval",
+        scheduleValue: "60",
+        active: true,
+        lastRunAt: "2026-05-27T17:00:00.000Z",
+        nextRunAt: "2026-05-27T18:00:00.000Z"
+      }
+      : null,
+    createAdminScheduledTask: async (_adminUserId: string, input: Record<string, unknown>) => ({
+      id: "scheduled-task-created",
+      name: String(input.name ?? ""),
+      taskType: String(input.taskType ?? ""),
+      scheduleType: String(input.scheduleType ?? ""),
+      scheduleValue: String(input.scheduleValue ?? ""),
+      active: Boolean(input.active),
+      lastRunAt: null,
+      nextRunAt: null
+    }),
+    updateAdminScheduledTask: async (taskId: string, _adminUserId: string, input: Record<string, unknown>) => ({
+      id: taskId,
+      name: String(input.name ?? ""),
+      taskType: String(input.taskType ?? ""),
+      scheduleType: String(input.scheduleType ?? ""),
+      scheduleValue: String(input.scheduleValue ?? ""),
+      active: Boolean(input.active),
+      lastRunAt: "2026-05-27T17:00:00.000Z",
+      nextRunAt: "2026-05-27T18:00:00.000Z"
+    }),
+    ...overrides
+  };
+}
+
 function createApiDependencies(overrides: Partial<ApiDependencies> = {}): ApiDependencies {
   return {
     publicBooking: createPublicBookingDependencies(),
+    publicContact: createPublicContactDependencies(),
+    publicPackages: {
+      now: () => "2026-05-27T18:00:00.000Z",
+      findPublicPackageByToken: async (token) => token === "starter-package-token" ? {
+        id: "package-1",
+        name: "Starter Package",
+        active: true,
+        price: 325,
+        items: []
+      } : null,
+      findPublicCheckoutForm: async () => null,
+      findClientIdByEmail: async () => null,
+      hasSubmittedCheckoutForm: async () => false,
+      finalizePublicPackagePurchase: async () => ({
+        clientId: "client-1",
+        clientPackageId: "client-package-1"
+      })
+    },
     integrationCallbacks: createIntegrationCallbackDependencies(),
     portalLogin: createPortalDependencies(),
     adminLogin: createAdminDependencies(),
@@ -1257,6 +2013,7 @@ function createApiDependencies(overrides: Partial<ApiDependencies> = {}): ApiDep
     portalSummary: createPortalSummaryDependencies(),
     adminDashboard: createAdminDashboardDependencies(),
     adminOperations: createAdminOperationsDependencies(),
+    adminConfiguration: createAdminConfigurationDependencies() as never,
     content: createContentManagementDependencies(),
     achievements: createAchievementDependencies(),
     portalResources: createPortalResourceReadDependencies(),
@@ -1266,6 +2023,7 @@ function createApiDependencies(overrides: Partial<ApiDependencies> = {}): ApiDep
     adminCalendarSync: createAdminCalendarSyncDependencies(),
     portalCommerce: createPortalCommerceDependencies(),
     publicDocuments: createPublicDocumentAccessDependencies(),
+    workflows: createWorkflowManagementDependencies(),
     ...overrides
   };
 }
@@ -1313,6 +2071,280 @@ describe("api handlers", () => {
       throw new Error("Expected conflict public booking response.");
     }
     expect(result.body.error.code).toBe("slot_unavailable");
+  });
+
+  it("returns a success envelope for a valid public contact request", async () => {
+    const handlers = createApiHandlers(createApiDependencies());
+
+    const result = await handlers.handlePublicContact({
+      name: "Contact New",
+      email: "Contact-New@Example.com",
+      phone: "555-1100",
+      service: "pet-sitting",
+      message: "Need help with training basics.",
+      turnstile_token: "turnstile-ok"
+    });
+
+    expect(result.status).toBe(200);
+    if ("error" in result.body) {
+      throw new Error("Expected successful public contact response.");
+    }
+    expect(result.body).toEqual({ success: true });
+  });
+
+  it("maps public contact captcha failures to 400 responses", async () => {
+    const handlers = createApiHandlers(createApiDependencies({
+      publicContact: createPublicContactDependencies({
+        verifyCaptcha: async () => false
+      })
+    }));
+
+    const result = await handlers.handlePublicContact({
+      name: "Contact New",
+      email: "contact@example.com",
+      phone: "555-1100",
+      service: "",
+      message: "Need help with training basics.",
+      turnstileToken: "turnstile-fail"
+    });
+
+    expect(result.status).toBe(400);
+    if (!("error" in result.body)) {
+      throw new Error("Expected failed public contact response.");
+    }
+    expect(result.body.error.code).toBe("captcha_failed");
+  });
+
+  it("returns admin configuration payloads and mutations for appointment types, form templates, email templates, and scheduled tasks", async () => {
+    const handlers = createApiHandlers({
+      ...createApiDependencies(),
+      adminConfiguration: createAdminConfigurationDependencies()
+    } as never);
+    const session = {
+      actorId: "admin-1",
+      actorType: "admin_user" as const,
+      role: "owner" as const,
+      issuedAt: "2026-05-27T18:00:00.000Z",
+      expiresAt: "2026-05-27T19:00:00.000Z"
+    };
+    const adminHandlers = handlers as Record<string, (...args: unknown[]) => Promise<{ status: number; body: unknown }>>;
+
+    const appointmentTypes = await adminHandlers.handleAdminAppointmentTypes(session);
+    const appointmentType = await adminHandlers.handleAdminAppointmentTypeDetail(session, "appointment-type-1");
+    const createdAppointmentType = await adminHandlers.handleAdminAppointmentTypeCreate(session, {
+      name: "Mini Session Saturday",
+      description: "Short-format mini session.",
+      bulletPoints: ["Outdoor setup", "Photo-ready training"],
+      adminUserId: "admin-1",
+      durationMinutes: 45,
+      bufferBeforeMinutes: 10,
+      bufferAfterMinutes: 10,
+      useTravelTimeBuffer: false,
+      travelTimeMinutes: 0,
+      advanceBookingMinDays: 1,
+      advanceBookingMaxDays: 14,
+      cancellationNoticeHours: 12,
+      requiresForms: true,
+      formTemplateIds: ["form-template-1"],
+      requiresContract: false,
+      contractTemplateId: null,
+      autoInvoice: true,
+      invoiceDueDays: 3,
+      invoiceDueTiming: "before",
+      defaultAmount: 95,
+      consumesCredits: false,
+      creditCount: 1,
+      isGroupClass: false,
+      maxParticipants: 1,
+      publicAvailable: false,
+      portalAvailable: true,
+      scheduleType: "specific_date",
+      specificDate: "2026-06-21",
+      specificDates: [{
+        date: "2026-06-21",
+        timeslots: [{ type: "point", time: "10:00" }]
+      }],
+      availableDays: [0],
+      availableStartTime: "10:00",
+      availableEndTime: "14:00",
+      timeSlotInterval: 30,
+      perDaySchedule: {},
+      isMiniSession: true,
+      miniSessionLocation: "Downtown Park",
+      miniSessionTopic: "Recall refresh",
+      isFieldRental: false,
+      fieldRentalLocation: "",
+      groupClassLocation: "",
+      locationTypes: [],
+      confirmationTemplateId: "email-template-1",
+      bookingRequestTemplateId: null,
+      invoiceTemplateId: null,
+      reminderTemplateId: null,
+      cancellationTemplateId: null,
+      requiresAdminConfirmation: true,
+      usesResource: false,
+      resourceName: "",
+      resourceCapacity: 1,
+      resourceAllocation: "per_appointment",
+      uniqueLink: "mini-session-june-21",
+      active: true
+    });
+    const updatedAppointmentType = await adminHandlers.handleAdminAppointmentTypeUpdate(session, "appointment-type-1", {
+      name: "Private Coaching Updated",
+      description: "Updated coaching session.",
+      bulletPoints: ["Updated assessment"],
+      adminUserId: "admin-1",
+      durationMinutes: 60,
+      bufferBeforeMinutes: 5,
+      bufferAfterMinutes: 5,
+      useTravelTimeBuffer: false,
+      travelTimeMinutes: 0,
+      advanceBookingMinDays: 1,
+      advanceBookingMaxDays: 30,
+      cancellationNoticeHours: 12,
+      requiresForms: false,
+      formTemplateIds: [],
+      requiresContract: false,
+      contractTemplateId: null,
+      autoInvoice: false,
+      invoiceDueDays: 7,
+      invoiceDueTiming: "after",
+      defaultAmount: 175,
+      consumesCredits: false,
+      creditCount: 1,
+      isGroupClass: false,
+      maxParticipants: 1,
+      publicAvailable: true,
+      portalAvailable: true,
+      scheduleType: "recurring",
+      specificDate: null,
+      specificDates: [],
+      availableDays: [1, 2, 3],
+      availableStartTime: "08:00",
+      availableEndTime: "12:00",
+      timeSlotInterval: 30,
+      perDaySchedule: {},
+      isMiniSession: false,
+      miniSessionLocation: "",
+      miniSessionTopic: "",
+      isFieldRental: false,
+      fieldRentalLocation: "",
+      groupClassLocation: "",
+      locationTypes: ["client_address"],
+      confirmationTemplateId: "email-template-1",
+      bookingRequestTemplateId: null,
+      invoiceTemplateId: null,
+      reminderTemplateId: null,
+      cancellationTemplateId: null,
+      requiresAdminConfirmation: false,
+      usesResource: false,
+      resourceName: "",
+      resourceCapacity: 1,
+      resourceAllocation: "per_appointment",
+      uniqueLink: "private-coaching-updated",
+      active: true
+    });
+    const deletedAppointmentType = await adminHandlers.handleAdminAppointmentTypeDelete(session, "appointment-type-1");
+    const formTemplates = await adminHandlers.handleAdminFormTemplates(session);
+    const formTemplate = await adminHandlers.handleAdminFormTemplateDetail(session, "form-template-1");
+    const createdFormTemplate = await adminHandlers.handleAdminFormTemplateCreate(session, {
+      name: "Follow-Up Survey",
+      active: true,
+      description: "Collect post-program survey responses.",
+      fields: [{ label: "How did training go?", type: "textarea", required: true }],
+      formType: "survey_form",
+      requiredFrequency: "yearly",
+      appointmentTypeId: null,
+      templateIsInternal: false,
+      templateShowInClientPortal: true
+    });
+    const updatedFormTemplate = await adminHandlers.handleAdminFormTemplateUpdate(session, "form-template-1", {
+      name: "Boarding Intake Updated",
+      active: false,
+      description: "Updated boarding intake workflow.",
+      fields: [{ label: "Pet Name", type: "text", required: true }, { label: "Medication Notes", type: "textarea" }],
+      formType: "client_form",
+      requiredFrequency: "once_per_pet",
+      appointmentTypeId: "appointment-type-1",
+      templateIsInternal: true,
+      templateShowInClientPortal: false
+    });
+    const deletedFormTemplate = await adminHandlers.handleAdminFormTemplateDelete(session, "form-template-1");
+    const emailTemplates = await adminHandlers.handleAdminEmailTemplates(session);
+    const emailTemplate = await adminHandlers.handleAdminEmailTemplateDetail(session, "email-template-1");
+    const createdEmailTemplate = await adminHandlers.handleAdminEmailTemplateCreate(session, {
+      name: "Reminder Template",
+      templateType: "booking_reminder",
+      subject: "Reminder",
+      bodyHtml: "<p>Reminder</p>",
+      bodyText: "Reminder",
+      active: true
+    });
+    const updatedEmailTemplate = await adminHandlers.handleAdminEmailTemplateUpdate(session, "email-template-1", {
+      name: "Booking Confirmation Updated",
+      templateType: "booking_confirmation",
+      subject: "Updated subject",
+      bodyHtml: "<p>Updated</p>",
+      bodyText: "Updated",
+      active: false
+    });
+    const scheduledTasks = await adminHandlers.handleAdminScheduledTasks(session);
+    const scheduledTask = await adminHandlers.handleAdminScheduledTaskDetail(session, "scheduled-task-1");
+    const createdScheduledTask = await adminHandlers.handleAdminScheduledTaskCreate(session, {
+      name: "Inbox Poller",
+      taskType: "email_receiver",
+      scheduleType: "custom",
+      scheduleValue: "*/5 * * * *",
+      active: true
+    });
+    const updatedScheduledTask = await adminHandlers.handleAdminScheduledTaskUpdate(session, "scheduled-task-1", {
+      name: "Workflow Processor Revised",
+      taskType: "workflow_processor",
+      scheduleType: "interval",
+      scheduleValue: "30",
+      active: true
+    });
+
+    expect(appointmentTypes.status).toBe(200);
+    expect(appointmentType.status).toBe(200);
+    expect(createdAppointmentType.status).toBe(201);
+    expect(updatedAppointmentType.status).toBe(200);
+    expect(deletedAppointmentType.status).toBe(200);
+    expect(formTemplates.status).toBe(200);
+    expect(formTemplate.status).toBe(200);
+    expect(createdFormTemplate.status).toBe(201);
+    expect(updatedFormTemplate.status).toBe(200);
+    expect(deletedFormTemplate.status).toBe(200);
+    expect(emailTemplates.status).toBe(200);
+    expect(emailTemplate.status).toBe(200);
+    expect(createdEmailTemplate.status).toBe(201);
+    expect(updatedEmailTemplate.status).toBe(200);
+    expect(scheduledTasks.status).toBe(200);
+    expect(scheduledTask.status).toBe(200);
+    expect(createdScheduledTask.status).toBe(201);
+    expect(updatedScheduledTask.status).toBe(200);
+
+    const appointmentTypesBody = appointmentTypes.body as {
+      items: Array<{ publicAvailable: boolean; formTemplateIds: string[] }>;
+    };
+    const appointmentTypeBody = appointmentType.body as {
+      item: { uniqueLink: string };
+    };
+    const formTemplatesBody = formTemplates.body as {
+      items: Array<{ formType?: string; templateShowInClientPortal?: boolean | null }>;
+    };
+    const formTemplateBody = formTemplate.body as {
+      item: { requiredFrequency?: string | null; appointmentTypeId?: string | null };
+    };
+    expect(appointmentTypesBody.items[0]?.publicAvailable).toBe(true);
+    expect(appointmentTypesBody.items[0]?.formTemplateIds).toEqual(["form-template-1", "form-template-2"]);
+    expect(appointmentTypeBody.item.uniqueLink).toBe("private-coaching-link");
+    expect(deletedAppointmentType.body).toEqual({ deleted: true });
+    expect(formTemplatesBody.items[0]?.formType).toBe("client_form");
+    expect(formTemplatesBody.items[0]?.templateShowInClientPortal).toBe(true);
+    expect(formTemplateBody.item.requiredFrequency).toBe("once");
+    expect(formTemplateBody.item.appointmentTypeId).toBe("appointment-type-1");
+    expect(deletedFormTemplate.body).toEqual({ deleted: true });
   });
 
   it("returns a session envelope for successful portal login", async () => {
@@ -1564,13 +2596,38 @@ describe("api handlers", () => {
     }
     expect(bookings.body.items).toHaveLength(1);
     expect(pets.body.items[0]?.name).toBe("Buddy");
+    expect(pets.body.items[0]?.petSittingNotes).toBe("Use the side gate and towel paws before re-entry.");
     expect(pet.body.item.id).toBe("pet-1");
+    expect(pet.body.item.petSittingNotes).toBe("Use the side gate and towel paws before re-entry.");
     expect(contracts.body.items).toHaveLength(1);
     expect(contract.body.item.id).toBe("contract-1");
     expect(forms.body.items).toHaveLength(1);
+    expect(forms.body.items[0]?.formType).toBe("follow_up_note");
+    expect(forms.body.items[0]?.clientReviewSubmission).toBe(true);
     expect(form.body.item.id).toBe("form-1");
+    expect(form.body.item.templateShowInClientPortal).toBe(true);
     expect(invoice.body.item.id).toBe("invoice-1");
     expect(quote.body.item.id).toBe("quote-1");
+  });
+
+  it("hides non-portal-visible internal submissions from portal resource reads", async () => {
+    const handlers = createApiHandlers(createApiDependencies());
+    const session = {
+      actorId: "client-1",
+      actorType: "portal_user" as const,
+      issuedAt: "2026-05-27T18:00:00.000Z",
+      expiresAt: "2026-05-27T18:00:00.000Z"
+    };
+
+    const form = await handlers.handlePortalFormDetail(session, "form-hidden-1");
+
+    expect(form.status).toBe(404);
+    expect(form.body).toEqual({
+      error: {
+        code: "actor_not_found",
+        message: "Portal form not found."
+      }
+    });
   });
 
   it("returns portal package and credit collections and details for a valid portal session", async () => {
@@ -1830,7 +2887,9 @@ describe("api handlers", () => {
     }
     expect(clients.body.items).toHaveLength(1);
     expect(pets.body.items[0]?.id).toBe("pet-1");
+    expect(pets.body.items[0]?.petSittingNotes).toBe("Use the side gate and towel paws before re-entry.");
     expect(pet.body.item.species).toBe("Dog");
+    expect(pet.body.item.petSittingNotes).toBe("Use the side gate and towel paws before re-entry.");
     expect(client.body.item.email).toBe("client@example.com");
     expect(booking.body.item.id).toBe("booking-2");
     expect(invoices.body.items[0]?.id).toBe("invoice-1");
@@ -1839,8 +2898,11 @@ describe("api handlers", () => {
     expect(quote.body.item.id).toBe("quote-1");
     expect(contracts.body.items[0]?.id).toBe("contract-1");
     expect(contract.body.item.id).toBe("contract-1");
+    expect(forms.body.items).toHaveLength(2);
     expect(forms.body.items[0]?.id).toBe("form-1");
+    expect(forms.body.items[1]?.id).toBe("form-hidden-1");
     expect(form.body.item.id).toBe("form-1");
+    expect(form.body.item.clientReviewSubmission).toBe(true);
   });
 
   it("returns, creates, and updates admin client profiles for a valid admin session", async () => {

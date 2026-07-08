@@ -1,9 +1,15 @@
-import { cutoverRehearsalReportSchema } from "@bdta/contracts";
+import {
+  cutoverExecutionReportSchema,
+  cutoverRehearsalReportSchema,
+  launchPreflightReportSchema
+} from "@bdta/contracts";
 
 export const migrationRuntimeManifest = {
   name: "bdta-migrate",
   surface: "migration",
   supports: {
-    cutoverRehearsalReport: cutoverRehearsalReportSchema
+    cutoverRehearsalReport: cutoverRehearsalReportSchema,
+    launchPreflightReport: launchPreflightReportSchema,
+    cutoverExecutionReport: cutoverExecutionReportSchema
   }
 } as const;

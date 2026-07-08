@@ -19,6 +19,24 @@ describe("job worker config", () => {
     });
   });
 
+  it("accepts legacy database variables without requiring portal env", () => {
+    const config = readJobWorkerConfig({
+      DB_HOST: "legacy-db.example.test",
+      DB_PORT: "3307",
+      DB_NAME: "bdta_legacy",
+      DB_USER: "legacy_user",
+      DB_PASSWORD: "legacy_password"
+    });
+
+    expect(config).toEqual({
+      databaseUrl: "mysql://legacy_user:legacy_password@legacy-db.example.test:3307/bdta_legacy",
+      portalBaseUrl: undefined,
+      pollIntervalMs: 30000,
+      jobBatchSize: 25,
+      emailBatchSize: 25
+    });
+  });
+
   it("rejects invalid worker numeric environment values", () => {
     expect(() => readJobWorkerConfig({
       DATABASE_URL: "mysql://user:password@db.example.test:3306/bdta",
@@ -31,9 +49,5 @@ describe("job worker config", () => {
       PORTAL_BASE_URL: "https://portal.example.test/portal",
       JOB_BATCH_SIZE: "0"
     })).toThrow("Invalid JOB_BATCH_SIZE value.");
-
-    expect(() => readJobWorkerConfig({
-      DATABASE_URL: "mysql://user:password@db.example.test:3306/bdta"
-    })).toThrow("Missing required PORTAL_BASE_URL environment variable.");
   });
 });

@@ -13,9 +13,27 @@ type SessionStore = {
   delete(sessionId: string): Promise<void>;
 } | null;
 
+type ServerErrorContext = {
+  requestId: string;
+  method: string;
+  path: string;
+};
+
+type RequestCompletionContext = ServerErrorContext & {
+  statusCode: number;
+  durationMs: number;
+};
+
 type HttpApiServerOptions = {
   dependencies: ApiDependencies;
   sessionStore: SessionStore;
+  requestIdFactory?: () => string;
+  onError?: (error: unknown, context: ServerErrorContext) => void | Promise<void>;
+  onRequestComplete?: (context: RequestCompletionContext) => void | Promise<void>;
+  healthCheck?: () => Promise<{
+    status: "ok" | "degraded";
+    checks: Record<string, "ok" | "error">;
+  }>;
 };
 
 const storedSessionSchema = z.object({
@@ -42,6 +60,24 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   }
 
   return JSON.parse(raw);
+}
+
+async function readJsonTextBody(request: IncomingMessage): Promise<{
+  raw: string;
+  parsed: unknown;
+}> {
+  const raw = (await readRawBody(request)).toString("utf8").trim();
+  if (raw === "") {
+    return {
+      raw,
+      parsed: {}
+    };
+  }
+
+  return {
+    raw,
+    parsed: JSON.parse(raw)
+  };
 }
 
 async function readFormDataBody(request: IncomingMessage): Promise<FormData> {
@@ -177,17 +213,49 @@ export function createHttpApiServer(options: HttpApiServerOptions): Server {
   const runtime = buildApiRuntime(options.dependencies);
 
   return createServer(async (request, response) => {
+    const requestId = options.requestIdFactory?.() ?? randomUUID();
     const method = request.method ?? "GET";
     const url = new URL(request.url ?? "/", "http://localhost");
+    const startedAt = Date.now();
+    response.setHeader("x-request-id", requestId);
+    response.once("finish", () => {
+      void Promise.resolve(options.onRequestComplete?.({
+        requestId,
+        method,
+        path: url.pathname,
+        statusCode: response.statusCode,
+        durationMs: Date.now() - startedAt
+      })).catch(() => undefined);
+    });
 
     try {
       if (method === "GET" && url.pathname === "/health") {
-        writeJson(response, 200, { status: "ok" });
+        if (options.healthCheck == null) {
+          writeJson(response, 200, { status: "ok" });
+          return;
+        }
+
+        const report = await options.healthCheck();
+        writeJson(response, report.status === "ok" ? 200 : 503, report);
         return;
       }
 
       if (method === "POST" && url.pathname === "/api/public/bookings") {
         const result = await runtime.handlers.handlePublicBooking(await readJsonBody(request));
+        writeJson(response, result.status, result.body);
+        return;
+      }
+
+      if (method === "POST" && (url.pathname === "/api/public/contact" || url.pathname === "/backend/public/api_contact.php")) {
+        const result = await runtime.handlers.handlePublicContact(await readJsonBody(request));
+        if ("error" in result.body) {
+          writeJson(response, result.status, {
+            success: false,
+            error: result.body.error.message
+          });
+          return;
+        }
+
         writeJson(response, result.status, result.body);
         return;
       }
@@ -213,20 +281,26 @@ export function createHttpApiServer(options: HttpApiServerOptions): Server {
 
       const callbackMatch = method === "POST" ? /^\/api\/callbacks\/([^/]+)$/.exec(url.pathname) : null;
       if (callbackMatch != null) {
-        const rawBody = await readJsonBody(request);
-        const receivedAt = isRecord(rawBody) && typeof rawBody.receivedAt === "string"
-          ? rawBody.receivedAt
+        const callbackBody = await readJsonTextBody(request);
+        const receivedAt = isRecord(callbackBody.parsed) && typeof callbackBody.parsed.receivedAt === "string"
+          ? callbackBody.parsed.receivedAt
           : undefined;
-        const payload = isRecord(rawBody) && isRecord(rawBody.payload)
-          ? rawBody.payload
-          : isRecord(rawBody)
-            ? Object.fromEntries(Object.entries(rawBody).filter(([key]) => key !== "receivedAt"))
+        const payload = isRecord(callbackBody.parsed) && isRecord(callbackBody.parsed.payload)
+          ? callbackBody.parsed.payload
+          : isRecord(callbackBody.parsed)
+            ? Object.fromEntries(Object.entries(callbackBody.parsed).filter(([key]) => key !== "receivedAt"))
             : {};
 
         const result = await runtime.handlers.handleIntegrationCallback({
           provider: decodeURIComponent(callbackMatch[1] ?? ""),
           receivedAt,
-          payload
+          payload,
+          rawBody: callbackBody.raw,
+          signature: request.headers["stripe-signature"] == null
+            ? undefined
+            : Array.isArray(request.headers["stripe-signature"])
+              ? (request.headers["stripe-signature"][0] ?? undefined)
+              : request.headers["stripe-signature"]
         });
         writeJson(response, result.status, result.body);
         return;
@@ -553,17 +627,23 @@ export function createHttpApiServer(options: HttpApiServerOptions): Server {
         return;
       }
 
-      if (method === "GET" && url.pathname === "/api/portal/forms") {
-        const result = await runtime.handlers.handlePortalForms(await loadPersistedSession(options.sessionStore, request));
-        writeJson(response, result.status, result.body);
-        return;
-      }
+        if (method === "GET" && url.pathname === "/api/portal/forms") {
+          const result = await runtime.handlers.handlePortalForms(await loadPersistedSession(options.sessionStore, request));
+          writeJson(response, result.status, result.body);
+          return;
+        }
 
-      if (method === "GET" && url.pathname === "/api/portal/packages") {
-        const result = await runtime.handlers.handlePortalPackages(await loadPersistedSession(options.sessionStore, request));
-        writeJson(response, result.status, result.body);
-        return;
-      }
+        if (method === "GET" && url.pathname === "/api/portal/notifications") {
+          const result = await runtime.handlers.handlePortalNotifications(await loadPersistedSession(options.sessionStore, request));
+          writeJson(response, result.status, result.body);
+          return;
+        }
+
+        if (method === "GET" && url.pathname === "/api/portal/packages") {
+          const result = await runtime.handlers.handlePortalPackages(await loadPersistedSession(options.sessionStore, request));
+          writeJson(response, result.status, result.body);
+          return;
+        }
 
       const portalPackageMatch = method === "GET" ? /^\/api\/portal\/packages\/([^/]+)$/.exec(url.pathname) : null;
       if (portalPackageMatch != null) {
@@ -660,6 +740,16 @@ export function createHttpApiServer(options: HttpApiServerOptions): Server {
         return;
       }
 
+      const adminBlogPostDeleteMatch = method === "POST" ? /^\/api\/admin\/blog-posts\/([^/]+)\/delete$/.exec(url.pathname) : null;
+      if (adminBlogPostDeleteMatch != null) {
+        const result = await runtime.handlers.handleAdminBlogPostDelete(
+          await loadPersistedSession(options.sessionStore, request),
+          decodeURIComponent(adminBlogPostDeleteMatch[1] ?? "")
+        );
+        writeJson(response, result.status, result.body);
+        return;
+      }
+
       const adminBlogPostUpdateMatch = method === "POST" ? /^\/api\/admin\/blog-posts\/([^/]+)$/.exec(url.pathname) : null;
       if (adminBlogPostUpdateMatch != null) {
         const result = await runtime.handlers.handleAdminBlogPostUpdate(
@@ -742,6 +832,174 @@ export function createHttpApiServer(options: HttpApiServerOptions): Server {
         );
         writeJson(response, result.status, result.body);
         return;
+      }
+
+      if (method === "GET" && url.pathname === "/api/admin/appointment-types") {
+        const result = await runtime.handlers.handleAdminAppointmentTypes(await loadPersistedSession(options.sessionStore, request));
+        writeJson(response, result.status, result.body);
+        return;
+      }
+
+      if (method === "POST" && url.pathname === "/api/admin/appointment-types") {
+        const result = await runtime.handlers.handleAdminAppointmentTypeCreate(
+          await loadPersistedSession(options.sessionStore, request),
+          await readJsonBody(request)
+        );
+        writeJson(response, result.status, result.body);
+        return;
+      }
+
+      const adminAppointmentTypeDeleteMatch = method === "POST" ? /^\/api\/admin\/appointment-types\/([^/]+)\/delete$/.exec(url.pathname) : null;
+      if (adminAppointmentTypeDeleteMatch != null) {
+        const result = await runtime.handlers.handleAdminAppointmentTypeDelete(
+          await loadPersistedSession(options.sessionStore, request),
+          decodeURIComponent(adminAppointmentTypeDeleteMatch[1] ?? "")
+        );
+        writeJson(response, result.status, result.body);
+        return;
+      }
+
+      const adminAppointmentTypeMatch = /^\/api\/admin\/appointment-types\/([^/]+)$/.exec(url.pathname);
+      if (adminAppointmentTypeMatch != null) {
+        const appointmentTypeId = decodeURIComponent(adminAppointmentTypeMatch[1] ?? "");
+        if (method === "GET") {
+          const result = await runtime.handlers.handleAdminAppointmentTypeDetail(
+            await loadPersistedSession(options.sessionStore, request),
+            appointmentTypeId
+          );
+          writeJson(response, result.status, result.body);
+          return;
+        }
+        if (method === "POST") {
+          const result = await runtime.handlers.handleAdminAppointmentTypeUpdate(
+            await loadPersistedSession(options.sessionStore, request),
+            appointmentTypeId,
+            await readJsonBody(request)
+          );
+          writeJson(response, result.status, result.body);
+          return;
+        }
+      }
+
+      if (method === "GET" && url.pathname === "/api/admin/form-templates") {
+        const result = await runtime.handlers.handleAdminFormTemplates(await loadPersistedSession(options.sessionStore, request));
+        writeJson(response, result.status, result.body);
+        return;
+      }
+
+      if (method === "POST" && url.pathname === "/api/admin/form-templates") {
+        const result = await runtime.handlers.handleAdminFormTemplateCreate(
+          await loadPersistedSession(options.sessionStore, request),
+          await readJsonBody(request)
+        );
+        writeJson(response, result.status, result.body);
+        return;
+      }
+
+      const adminFormTemplateDeleteMatch = method === "POST" ? /^\/api\/admin\/form-templates\/([^/]+)\/delete$/.exec(url.pathname) : null;
+      if (adminFormTemplateDeleteMatch != null) {
+        const result = await runtime.handlers.handleAdminFormTemplateDelete(
+          await loadPersistedSession(options.sessionStore, request),
+          decodeURIComponent(adminFormTemplateDeleteMatch[1] ?? "")
+        );
+        writeJson(response, result.status, result.body);
+        return;
+      }
+
+      const adminFormTemplateMatch = /^\/api\/admin\/form-templates\/([^/]+)$/.exec(url.pathname);
+      if (adminFormTemplateMatch != null) {
+        const templateId = decodeURIComponent(adminFormTemplateMatch[1] ?? "");
+        if (method === "GET") {
+          const result = await runtime.handlers.handleAdminFormTemplateDetail(
+            await loadPersistedSession(options.sessionStore, request),
+            templateId
+          );
+          writeJson(response, result.status, result.body);
+          return;
+        }
+        if (method === "POST") {
+          const result = await runtime.handlers.handleAdminFormTemplateUpdate(
+            await loadPersistedSession(options.sessionStore, request),
+            templateId,
+            await readJsonBody(request)
+          );
+          writeJson(response, result.status, result.body);
+          return;
+        }
+      }
+
+      if (method === "GET" && url.pathname === "/api/admin/email-templates") {
+        const result = await runtime.handlers.handleAdminEmailTemplates(await loadPersistedSession(options.sessionStore, request));
+        writeJson(response, result.status, result.body);
+        return;
+      }
+
+      if (method === "POST" && url.pathname === "/api/admin/email-templates") {
+        const result = await runtime.handlers.handleAdminEmailTemplateCreate(
+          await loadPersistedSession(options.sessionStore, request),
+          await readJsonBody(request)
+        );
+        writeJson(response, result.status, result.body);
+        return;
+      }
+
+      const adminEmailTemplateMatch = /^\/api\/admin\/email-templates\/([^/]+)$/.exec(url.pathname);
+      if (adminEmailTemplateMatch != null) {
+        const templateId = decodeURIComponent(adminEmailTemplateMatch[1] ?? "");
+        if (method === "GET") {
+          const result = await runtime.handlers.handleAdminEmailTemplateDetail(
+            await loadPersistedSession(options.sessionStore, request),
+            templateId
+          );
+          writeJson(response, result.status, result.body);
+          return;
+        }
+        if (method === "POST") {
+          const result = await runtime.handlers.handleAdminEmailTemplateUpdate(
+            await loadPersistedSession(options.sessionStore, request),
+            templateId,
+            await readJsonBody(request)
+          );
+          writeJson(response, result.status, result.body);
+          return;
+        }
+      }
+
+      if (method === "GET" && url.pathname === "/api/admin/scheduled-tasks") {
+        const result = await runtime.handlers.handleAdminScheduledTasks(await loadPersistedSession(options.sessionStore, request));
+        writeJson(response, result.status, result.body);
+        return;
+      }
+
+      if (method === "POST" && url.pathname === "/api/admin/scheduled-tasks") {
+        const result = await runtime.handlers.handleAdminScheduledTaskCreate(
+          await loadPersistedSession(options.sessionStore, request),
+          await readJsonBody(request)
+        );
+        writeJson(response, result.status, result.body);
+        return;
+      }
+
+      const adminScheduledTaskMatch = /^\/api\/admin\/scheduled-tasks\/([^/]+)$/.exec(url.pathname);
+      if (adminScheduledTaskMatch != null) {
+        const taskId = decodeURIComponent(adminScheduledTaskMatch[1] ?? "");
+        if (method === "GET") {
+          const result = await runtime.handlers.handleAdminScheduledTaskDetail(
+            await loadPersistedSession(options.sessionStore, request),
+            taskId
+          );
+          writeJson(response, result.status, result.body);
+          return;
+        }
+        if (method === "POST") {
+          const result = await runtime.handlers.handleAdminScheduledTaskUpdate(
+            await loadPersistedSession(options.sessionStore, request),
+            taskId,
+            await readJsonBody(request)
+          );
+          writeJson(response, result.status, result.body);
+          return;
+        }
       }
 
       if (method === "GET" && url.pathname === "/api/admin/achievement-types") {
@@ -1127,6 +1385,198 @@ export function createHttpApiServer(options: HttpApiServerOptions): Server {
         return;
       }
 
+      if (method === "GET" && url.pathname === "/api/admin/workflows") {
+        const result = await runtime.handlers.handleAdminWorkflows(await loadPersistedSession(options.sessionStore, request));
+        writeJson(response, result.status, result.body);
+        return;
+      }
+
+      if (method === "POST" && url.pathname === "/api/admin/workflows") {
+        const result = await runtime.handlers.handleAdminWorkflowCreate(
+          await loadPersistedSession(options.sessionStore, request),
+          await readJsonBody(request)
+        );
+        writeJson(response, result.status, result.body);
+        return;
+      }
+
+      const adminWorkflowTriggerDeleteMatch = method === "POST" ? /^\/api\/admin\/workflows\/([^/]+)\/triggers\/([^/]+)\/delete$/.exec(url.pathname) : null;
+      if (adminWorkflowTriggerDeleteMatch != null) {
+        const result = await runtime.handlers.handleAdminWorkflowTriggerDelete(
+          await loadPersistedSession(options.sessionStore, request),
+          decodeURIComponent(adminWorkflowTriggerDeleteMatch[1] ?? ""),
+          decodeURIComponent(adminWorkflowTriggerDeleteMatch[2] ?? "")
+        );
+        writeJson(response, result.status, result.body);
+        return;
+      }
+
+      const adminWorkflowTriggersMatch = /^\/api\/admin\/workflows\/([^/]+)\/triggers$/.exec(url.pathname);
+      if (adminWorkflowTriggersMatch != null) {
+        const workflowId = decodeURIComponent(adminWorkflowTriggersMatch[1] ?? "");
+        if (method === "GET") {
+          const result = await runtime.handlers.handleAdminWorkflowTriggers(
+            await loadPersistedSession(options.sessionStore, request),
+            workflowId
+          );
+          writeJson(response, result.status, result.body);
+          return;
+        }
+        if (method === "POST") {
+          const result = await runtime.handlers.handleAdminWorkflowTriggerCreate(
+            await loadPersistedSession(options.sessionStore, request),
+            workflowId,
+            await readJsonBody(request)
+          );
+          writeJson(response, result.status, result.body);
+          return;
+        }
+      }
+
+      const adminWorkflowEnrollmentCancelMatch = method === "POST" ? /^\/api\/admin\/workflows\/([^/]+)\/enrollments\/([^/]+)\/cancel$/.exec(url.pathname) : null;
+      if (adminWorkflowEnrollmentCancelMatch != null) {
+        const result = await runtime.handlers.handleAdminWorkflowEnrollmentCancel(
+          await loadPersistedSession(options.sessionStore, request),
+          decodeURIComponent(adminWorkflowEnrollmentCancelMatch[1] ?? ""),
+          decodeURIComponent(adminWorkflowEnrollmentCancelMatch[2] ?? "")
+        );
+        writeJson(response, result.status, result.body);
+        return;
+      }
+
+      const adminWorkflowEnrollmentsMatch = method === "GET" ? /^\/api\/admin\/workflows\/([^/]+)\/enrollments$/.exec(url.pathname) : null;
+      if (adminWorkflowEnrollmentsMatch != null) {
+        const result = await runtime.handlers.handleAdminWorkflowEnrollments(
+          await loadPersistedSession(options.sessionStore, request),
+          decodeURIComponent(adminWorkflowEnrollmentsMatch[1] ?? "")
+        );
+        writeJson(response, result.status, result.body);
+        return;
+      }
+
+      const adminWorkflowEnrollMatch = /^\/api\/admin\/workflows\/([^/]+)\/enroll$/.exec(url.pathname);
+      if (adminWorkflowEnrollMatch != null) {
+        const workflowId = decodeURIComponent(adminWorkflowEnrollMatch[1] ?? "");
+        if (method === "GET") {
+          const result = await runtime.handlers.handleAdminWorkflowEnrollableClients(
+            await loadPersistedSession(options.sessionStore, request),
+            workflowId
+          );
+          writeJson(response, result.status, result.body);
+          return;
+        }
+        if (method === "POST") {
+          const result = await runtime.handlers.handleAdminWorkflowEnroll(
+            await loadPersistedSession(options.sessionStore, request),
+            workflowId,
+            await readJsonBody(request)
+          );
+          writeJson(response, result.status, result.body);
+          return;
+        }
+      }
+
+      const adminWorkflowStepDeleteMatch = method === "POST" ? /^\/api\/admin\/workflows\/([^/]+)\/steps\/([^/]+)\/delete$/.exec(url.pathname) : null;
+      if (adminWorkflowStepDeleteMatch != null) {
+        const result = await runtime.handlers.handleAdminWorkflowStepDelete(
+          await loadPersistedSession(options.sessionStore, request),
+          decodeURIComponent(adminWorkflowStepDeleteMatch[1] ?? ""),
+          decodeURIComponent(adminWorkflowStepDeleteMatch[2] ?? "")
+        );
+        writeJson(response, result.status, result.body);
+        return;
+      }
+
+      const adminWorkflowStepNewMatch = method === "GET" ? /^\/api\/admin\/workflows\/([^/]+)\/steps\/new$/.exec(url.pathname) : null;
+      if (adminWorkflowStepNewMatch != null) {
+        const result = await runtime.handlers.handleAdminWorkflowStepEditor(
+          await loadPersistedSession(options.sessionStore, request),
+          decodeURIComponent(adminWorkflowStepNewMatch[1] ?? ""),
+          null
+        );
+        writeJson(response, result.status, result.body);
+        return;
+      }
+
+      const adminWorkflowStepDetailMatch = /^\/api\/admin\/workflows\/([^/]+)\/steps\/([^/]+)$/.exec(url.pathname);
+      if (adminWorkflowStepDetailMatch != null) {
+        const workflowId = decodeURIComponent(adminWorkflowStepDetailMatch[1] ?? "");
+        const stepId = decodeURIComponent(adminWorkflowStepDetailMatch[2] ?? "");
+        if (method === "GET") {
+          const result = await runtime.handlers.handleAdminWorkflowStepEditor(
+            await loadPersistedSession(options.sessionStore, request),
+            workflowId,
+            stepId
+          );
+          writeJson(response, result.status, result.body);
+          return;
+        }
+        if (method === "POST") {
+          const result = await runtime.handlers.handleAdminWorkflowStepUpdate(
+            await loadPersistedSession(options.sessionStore, request),
+            workflowId,
+            stepId,
+            await readJsonBody(request)
+          );
+          writeJson(response, result.status, result.body);
+          return;
+        }
+      }
+
+      const adminWorkflowStepsMatch = /^\/api\/admin\/workflows\/([^/]+)\/steps$/.exec(url.pathname);
+      if (adminWorkflowStepsMatch != null) {
+        const workflowId = decodeURIComponent(adminWorkflowStepsMatch[1] ?? "");
+        if (method === "GET") {
+          const result = await runtime.handlers.handleAdminWorkflowSteps(
+            await loadPersistedSession(options.sessionStore, request),
+            workflowId
+          );
+          writeJson(response, result.status, result.body);
+          return;
+        }
+        if (method === "POST") {
+          const result = await runtime.handlers.handleAdminWorkflowStepCreate(
+            await loadPersistedSession(options.sessionStore, request),
+            workflowId,
+            await readJsonBody(request)
+          );
+          writeJson(response, result.status, result.body);
+          return;
+        }
+      }
+
+      const adminWorkflowDeleteMatch = method === "POST" ? /^\/api\/admin\/workflows\/([^/]+)\/delete$/.exec(url.pathname) : null;
+      if (adminWorkflowDeleteMatch != null) {
+        const result = await runtime.handlers.handleAdminWorkflowDelete(
+          await loadPersistedSession(options.sessionStore, request),
+          decodeURIComponent(adminWorkflowDeleteMatch[1] ?? "")
+        );
+        writeJson(response, result.status, result.body);
+        return;
+      }
+
+      const adminWorkflowDetailMatch = /^\/api\/admin\/workflows\/([^/]+)$/.exec(url.pathname);
+      if (adminWorkflowDetailMatch != null) {
+        const workflowId = decodeURIComponent(adminWorkflowDetailMatch[1] ?? "");
+        if (method === "GET") {
+          const result = await runtime.handlers.handleAdminWorkflowDetail(
+            await loadPersistedSession(options.sessionStore, request),
+            workflowId
+          );
+          writeJson(response, result.status, result.body);
+          return;
+        }
+        if (method === "POST") {
+          const result = await runtime.handlers.handleAdminWorkflowUpdate(
+            await loadPersistedSession(options.sessionStore, request),
+            workflowId,
+            await readJsonBody(request)
+          );
+          writeJson(response, result.status, result.body);
+          return;
+        }
+      }
+
       if (method === "POST" && url.pathname === "/api/logout") {
         const sessionId = readSessionIdFromCookie(request);
         if (options.sessionStore != null && sessionId != null) {
@@ -1145,13 +1595,26 @@ export function createHttpApiServer(options: HttpApiServerOptions): Server {
           message: "Route not found."
         }
       });
-    } catch {
-      writeJson(response, 500, {
-        error: {
-          code: "internal_error",
-          message: "Unexpected server failure."
-        }
+    } catch (error) {
+      await options.onError?.(error, {
+        requestId,
+        method,
+        path: url.pathname
       });
+
+      if (!response.headersSent) {
+        writeJson(response, 500, {
+          error: {
+            code: "internal_error",
+            message: "Unexpected server failure."
+          }
+        });
+        return;
+      }
+
+      if (!response.writableEnded) {
+        response.end();
+      }
     }
   });
 }

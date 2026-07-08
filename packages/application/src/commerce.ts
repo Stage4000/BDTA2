@@ -9,6 +9,7 @@ import {
 } from "@bdta/contracts";
 import type { Contract, FormSubmission, Invoice, Quote } from "@bdta/domain";
 import { contractSchema, formSubmissionSchema, invoiceSchema, quoteSchema } from "@bdta/domain";
+import { normalizeFormSubmissionPortalMetadata } from "./form-portal-visibility.js";
 import { SessionActorError, type SessionSnapshot } from "./session-actors.js";
 
 export class CommerceActionError extends Error {
@@ -103,7 +104,7 @@ export async function submitPortalForm(
   }
 
   return formSubmissionDetailSchema.parse({
-    item: formSubmissionSchema.parse(submission)
+    item: normalizeFormSubmissionPortalMetadata(formSubmissionSchema.parse(submission))
   });
 }
 

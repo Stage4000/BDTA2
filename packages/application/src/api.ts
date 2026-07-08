@@ -9,10 +9,14 @@ import {
   adminBlogPostUpsertRequestSchema,
   adminJobLogCollectionSchema,
   adminJobLogDetailSchema,
+  appointmentTypeCollectionSchema,
+  appointmentTypeDetailSchema,
   adminRouteAccessSchema,
   adminActorProfileSchema,
   adminClientProfileDetailSchema,
   adminDashboardSchema,
+  formTemplateCollectionSchema,
+  formTemplateDetailSchema,
   adminSettingUpdateRequestSchema,
   adminSitePageUpsertRequestSchema,
   authSessionSchema,
@@ -33,6 +37,8 @@ import {
   creditCollectionSchema,
   creditDetailSchema,
   deleteResponseSchema,
+  emailTemplateCollectionSchema,
+  emailTemplateDetailSchema,
   formSubmissionCollectionSchema,
   formSubmissionDetailSchema,
   integrationCallbackReceiptSchema,
@@ -47,17 +53,51 @@ import {
   petFileCollectionSchema,
   petFileDetailSchema,
   portalActorProfileSchema,
+  portalNotificationCollectionSchema,
   portalProfileDetailSchema,
   portalSummarySchema,
+  publicContactResponseSchema,
   publicBookingRequestSchema,
   publicBookingResponseSchema,
   quoteCollectionSchema,
   quoteDetailSchema,
+  scheduledTaskCollectionSchema,
+  scheduledTaskDetailSchema,
   settingCollectionSchema,
   settingDetailSchema,
   sitePageCollectionSchema,
-  sitePageDetailSchema
+  sitePageDetailSchema,
+  successResponseSchema,
+  adminWorkflowTriggerCollectionSchema,
+  adminWorkflowCollectionSchema,
+  adminWorkflowDetailSchema,
+  adminWorkflowEnrollmentCollectionSchema,
+  adminWorkflowStepCollectionSchema,
+  adminWorkflowStepEditorSchema,
+  workflowEnrollableClientCollectionSchema
 } from "@bdta/contracts";
+import {
+  AdminConfigurationError,
+  createAdminAppointmentType,
+  deleteAdminAppointmentType,
+  createAdminEmailTemplate,
+  createAdminFormTemplate,
+  createAdminScheduledTask,
+  getAdminAppointmentTypeDetail,
+  getAdminEmailTemplateDetail,
+  getAdminFormTemplateDetail,
+  getAdminScheduledTaskDetail,
+  listAdminAppointmentTypes,
+  listAdminEmailTemplates,
+  listAdminFormTemplates,
+  listAdminScheduledTasks,
+  type AdminConfigurationDependencies,
+  updateAdminAppointmentType,
+  updateAdminEmailTemplate,
+  updateAdminFormTemplate,
+  deleteAdminFormTemplate,
+  updateAdminScheduledTask
+} from "./admin-configuration.js";
 import {
   AchievementError,
   getAdminAchievementTypeDetail,
@@ -100,7 +140,9 @@ import {
 import {
   ContentError,
   createAdminBlogPost,
+  deleteAdminBlogPost,
   createAdminSitePage,
+  deleteAdminSitePage,
   getAdminBlogPostDetail,
   getAdminSettingDetail,
   getAdminSitePageDetail,
@@ -115,6 +157,27 @@ import {
   updateAdminSetting,
   updateAdminSitePage
 } from "./content.js";
+import {
+  WorkflowActionError,
+  createAdminWorkflow,
+  createAdminWorkflowTrigger,
+  updateAdminWorkflow,
+  deleteAdminWorkflow as deleteWorkflow,
+  getAdminWorkflowDetail,
+  listAdminWorkflowEnrollments,
+  listAdminWorkflowEnrollableClients,
+  listAdminWorkflowTriggers,
+  listAdminWorkflows,
+  listAdminWorkflowSteps,
+  getAdminWorkflowStepEditor,
+  enrollAdminWorkflowClients,
+  cancelAdminWorkflowEnrollment,
+  createAdminWorkflowStep,
+  deleteAdminWorkflowTrigger,
+  updateAdminWorkflowStep,
+  deleteAdminWorkflowStep,
+  type WorkflowManagementDependencies
+} from "./workflows.js";
 import {
   acceptPortalQuote,
   CommerceActionError,
@@ -143,7 +206,7 @@ import {
   type AdminDashboardDependencies,
   type PortalSummaryDependencies
 } from "./dashboards.js";
-import { PublicBookingError } from "./errors.js";
+import { PublicBookingError, PublicContactError } from "./errors.js";
 import {
   AdminOperationsError,
   getAdminIntegrationCallbackLogDetail,
@@ -170,6 +233,11 @@ import {
   createPublicBooking,
   type PublicBookingDependencies
 } from "./public-booking.js";
+import {
+  createPublicContact,
+  type PublicContactDependencies
+} from "./public-contact.js";
+import { type PublicPackagePurchaseDependencies } from "./public-packages.js";
 import {
   getAdminBookingDetail,
   getAdminClientDetail,
@@ -207,6 +275,7 @@ import {
   listPortalCredits,
   listPortalForms,
   listPortalInvoices,
+  listPortalNotifications,
   listPortalPackages,
   listPortalPets,
   listPortalPetFiles,
@@ -234,6 +303,8 @@ const apiErrorSchema = z.object({
 
 export type ApiDependencies = {
   publicBooking: PublicBookingDependencies;
+  publicContact: PublicContactDependencies;
+  publicPackages: PublicPackagePurchaseDependencies;
   integrationCallbacks: IntegrationCallbackDependencies;
   portalLogin: PortalLoginDependencies;
   adminLogin: AdminLoginDependencies;
@@ -243,6 +314,7 @@ export type ApiDependencies = {
   portalSummary: PortalSummaryDependencies;
   adminDashboard: AdminDashboardDependencies;
   adminOperations: AdminOperationsDependencies;
+  adminConfiguration: AdminConfigurationDependencies;
   content: ContentManagementDependencies;
   achievements: AchievementDependencies;
   portalResources: PortalResourceReadDependencies;
@@ -252,6 +324,7 @@ export type ApiDependencies = {
   adminCalendarSync: AdminCalendarSyncDependencies;
   portalCommerce: PortalCommerceDependencies;
   publicDocuments: PublicDocumentAccessDependencies;
+  workflows: WorkflowManagementDependencies;
 };
 
 export type ApiSuccess<T> = {
@@ -265,6 +338,7 @@ export type ApiFailure = {
 };
 
 export type PublicBookingHandlerResult = ApiSuccess<z.infer<typeof publicBookingResponseSchema>> | ApiFailure;
+export type PublicContactHandlerResult = ApiSuccess<z.infer<typeof publicContactResponseSchema>> | ApiFailure;
 export type AdminLoginHandlerResult = ApiSuccess<Awaited<ReturnType<typeof authenticateAdminLogin>>> | ApiFailure;
 export type PortalLoginHandlerResult = ApiSuccess<Awaited<ReturnType<typeof authenticatePortalLogin>>> | ApiFailure;
 export type PortalActorProfileHandlerResult = ApiSuccess<{ actor: z.infer<typeof portalActorProfileSchema> }> | ApiFailure;
@@ -305,6 +379,7 @@ export type PortalContractListHandlerResult = ApiSuccess<z.infer<typeof contract
 export type PortalContractDetailHandlerResult = ApiSuccess<z.infer<typeof contractDetailSchema>> | ApiFailure;
 export type PortalFormListHandlerResult = ApiSuccess<z.infer<typeof formSubmissionCollectionSchema>> | ApiFailure;
 export type PortalFormDetailHandlerResult = ApiSuccess<z.infer<typeof formSubmissionDetailSchema>> | ApiFailure;
+export type PortalNotificationListHandlerResult = ApiSuccess<z.infer<typeof portalNotificationCollectionSchema>> | ApiFailure;
 export type PortalPackageListHandlerResult = ApiSuccess<z.infer<typeof packageCollectionSchema>> | ApiFailure;
 export type PortalPackageDetailHandlerResult = ApiSuccess<z.infer<typeof packageDetailSchema>> | ApiFailure;
 export type PortalCreditListHandlerResult = ApiSuccess<z.infer<typeof creditCollectionSchema>> | ApiFailure;
@@ -348,10 +423,30 @@ export type PublicBlogPostDetailHandlerResult = ApiSuccess<z.infer<typeof blogPo
 export type PublicSitePageHandlerResult = ApiSuccess<z.infer<typeof sitePageDetailSchema>> | ApiFailure;
 export type AdminBlogPostListHandlerResult = ApiSuccess<z.infer<typeof blogPostCollectionSchema>> | ApiFailure;
 export type AdminBlogPostDetailHandlerResult = ApiSuccess<z.infer<typeof blogPostDetailSchema>> | ApiFailure;
+export type AdminBlogPostDeleteHandlerResult = ApiSuccess<z.infer<typeof deleteResponseSchema>> | ApiFailure;
 export type AdminSitePageListHandlerResult = ApiSuccess<z.infer<typeof sitePageCollectionSchema>> | ApiFailure;
 export type AdminSitePageDetailHandlerResult = ApiSuccess<z.infer<typeof sitePageDetailSchema>> | ApiFailure;
+export type AdminSitePageDeleteHandlerResult = ApiSuccess<z.infer<typeof deleteResponseSchema>> | ApiFailure;
+export type AdminWorkflowListHandlerResult = ApiSuccess<z.infer<typeof adminWorkflowCollectionSchema>> | ApiFailure;
+export type AdminWorkflowDetailHandlerResult = ApiSuccess<z.infer<typeof adminWorkflowDetailSchema>> | ApiFailure;
+export type AdminWorkflowTriggerListHandlerResult = ApiSuccess<z.infer<typeof adminWorkflowTriggerCollectionSchema>> | ApiFailure;
+export type AdminWorkflowEnrollmentListHandlerResult = ApiSuccess<z.infer<typeof adminWorkflowEnrollmentCollectionSchema>> | ApiFailure;
+export type AdminWorkflowEnrollableClientListHandlerResult = ApiSuccess<z.infer<typeof workflowEnrollableClientCollectionSchema>> | ApiFailure;
+export type AdminWorkflowStepListHandlerResult = ApiSuccess<z.infer<typeof adminWorkflowStepCollectionSchema>> | ApiFailure;
+export type AdminWorkflowStepEditorHandlerResult = ApiSuccess<z.infer<typeof adminWorkflowStepEditorSchema>> | ApiFailure;
+export type AdminWorkflowMutationHandlerResult = ApiSuccess<z.infer<typeof successResponseSchema>> | ApiFailure;
 export type AdminSettingListHandlerResult = ApiSuccess<z.infer<typeof settingCollectionSchema>> | ApiFailure;
 export type AdminSettingDetailHandlerResult = ApiSuccess<z.infer<typeof settingDetailSchema>> | ApiFailure;
+export type AdminAppointmentTypeListHandlerResult = ApiSuccess<z.infer<typeof appointmentTypeCollectionSchema>> | ApiFailure;
+export type AdminAppointmentTypeDetailHandlerResult = ApiSuccess<z.infer<typeof appointmentTypeDetailSchema>> | ApiFailure;
+export type AdminAppointmentTypeDeleteHandlerResult = ApiSuccess<z.infer<typeof deleteResponseSchema>> | ApiFailure;
+export type AdminFormTemplateListHandlerResult = ApiSuccess<z.infer<typeof formTemplateCollectionSchema>> | ApiFailure;
+export type AdminFormTemplateDetailHandlerResult = ApiSuccess<z.infer<typeof formTemplateDetailSchema>> | ApiFailure;
+export type AdminFormTemplateDeleteHandlerResult = ApiSuccess<z.infer<typeof deleteResponseSchema>> | ApiFailure;
+export type AdminEmailTemplateListHandlerResult = ApiSuccess<z.infer<typeof emailTemplateCollectionSchema>> | ApiFailure;
+export type AdminEmailTemplateDetailHandlerResult = ApiSuccess<z.infer<typeof emailTemplateDetailSchema>> | ApiFailure;
+export type AdminScheduledTaskListHandlerResult = ApiSuccess<z.infer<typeof scheduledTaskCollectionSchema>> | ApiFailure;
+export type AdminScheduledTaskDetailHandlerResult = ApiSuccess<z.infer<typeof scheduledTaskDetailSchema>> | ApiFailure;
 export type PublicQuoteDetailHandlerResult = ApiSuccess<z.infer<typeof quoteDetailSchema>> | ApiFailure;
 export type PublicContractDetailHandlerResult = ApiSuccess<z.infer<typeof contractDetailSchema>> | ApiFailure;
 export type PublicFormSubmissionDetailHandlerResult = ApiSuccess<z.infer<typeof formSubmissionDetailSchema>> | ApiFailure;
@@ -393,6 +488,25 @@ export function createApiHandlers(dependencies: ApiDependencies) {
         }
 
         return createError(500, "internal_error", "Unexpected error while creating public booking.");
+      }
+    },
+
+    async handlePublicContact(input: unknown): Promise<PublicContactHandlerResult> {
+      try {
+        return {
+          status: 200,
+          body: await createPublicContact(input, dependencies.publicContact)
+        };
+      } catch (error) {
+        if (error instanceof PublicContactError) {
+          return createError(400, error.code, error.message);
+        }
+
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while creating public contact.");
       }
     },
 
@@ -768,6 +882,34 @@ export function createApiHandlers(dependencies: ApiDependencies) {
       }
     },
 
+    async handleAdminBlogPostDelete(
+      session: unknown,
+      postId: string
+    ): Promise<AdminBlogPostDeleteHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 200,
+          body: await deleteAdminBlogPost(session as z.infer<typeof authSessionSchema>, postId, dependencies.content)
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof ContentError) {
+          return createError(404, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while deleting admin blog post.");
+      }
+    },
+
     async handleAdminSitePages(session: unknown): Promise<AdminSitePageListHandlerResult> {
       try {
         if (session == null) {
@@ -866,6 +1008,551 @@ export function createApiHandlers(dependencies: ApiDependencies) {
       }
     },
 
+    async handleAdminSitePageDelete(
+      session: unknown,
+      pageId: string
+    ): Promise<AdminSitePageDeleteHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 200,
+          body: await deleteAdminSitePage(session as z.infer<typeof authSessionSchema>, pageId, dependencies.content)
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof ContentError) {
+          return createError(error.code === "invalid_operation" ? 409 : 404, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while deleting admin site page.");
+      }
+    },
+
+    async handleAdminWorkflows(session: unknown): Promise<AdminWorkflowListHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 200,
+          body: await listAdminWorkflows(session as z.infer<typeof authSessionSchema>, dependencies.workflows)
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while loading admin workflows.");
+      }
+    },
+
+    async handleAdminWorkflowDetail(
+      session: unknown,
+      workflowId: string
+    ): Promise<AdminWorkflowDetailHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 200,
+          body: await getAdminWorkflowDetail(session as z.infer<typeof authSessionSchema>, workflowId, dependencies.workflows)
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof WorkflowActionError) {
+          return createError(error.code === "not_found" ? 404 : 400, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while loading admin workflow.");
+      }
+    },
+
+    async handleAdminWorkflowTriggers(
+      session: unknown,
+      workflowId: string
+    ): Promise<AdminWorkflowTriggerListHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 200,
+          body: await listAdminWorkflowTriggers(
+            session as z.infer<typeof authSessionSchema>,
+            workflowId,
+            dependencies.workflows
+          )
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof WorkflowActionError) {
+          return createError(error.code === "not_found" ? 404 : 400, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while loading workflow triggers.");
+      }
+    },
+
+    async handleAdminWorkflowCreate(
+      session: unknown,
+      input: unknown
+    ): Promise<AdminWorkflowDetailHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 201,
+          body: await createAdminWorkflow(session as z.infer<typeof authSessionSchema>, input, dependencies.workflows)
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while creating admin workflow.");
+      }
+    },
+
+    async handleAdminWorkflowUpdate(
+      session: unknown,
+      workflowId: string,
+      input: unknown
+    ): Promise<AdminWorkflowDetailHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 200,
+          body: await updateAdminWorkflow(session as z.infer<typeof authSessionSchema>, workflowId, input, dependencies.workflows)
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof WorkflowActionError) {
+          return createError(error.code === "not_found" ? 404 : 400, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while updating admin workflow.");
+      }
+    },
+
+    async handleAdminWorkflowDelete(
+      session: unknown,
+      workflowId: string
+    ): Promise<AdminWorkflowMutationHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 200,
+          body: await deleteWorkflow(session as z.infer<typeof authSessionSchema>, workflowId, dependencies.workflows)
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof WorkflowActionError) {
+          return createError(error.code === "not_found" ? 404 : 400, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while deleting admin workflow.");
+      }
+    },
+
+    async handleAdminWorkflowTriggerCreate(
+      session: unknown,
+      workflowId: string,
+      input: unknown
+    ): Promise<AdminWorkflowTriggerListHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 201,
+          body: await createAdminWorkflowTrigger(
+            session as z.infer<typeof authSessionSchema>,
+            workflowId,
+            input,
+            dependencies.workflows
+          )
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof WorkflowActionError) {
+          return createError(error.code === "not_found" ? 404 : 400, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while creating workflow trigger.");
+      }
+    },
+
+    async handleAdminWorkflowTriggerDelete(
+      session: unknown,
+      workflowId: string,
+      triggerId: string
+    ): Promise<AdminWorkflowMutationHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 200,
+          body: await deleteAdminWorkflowTrigger(
+            session as z.infer<typeof authSessionSchema>,
+            workflowId,
+            triggerId,
+            dependencies.workflows
+          )
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof WorkflowActionError) {
+          return createError(error.code === "not_found" ? 404 : 400, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while deleting workflow trigger.");
+      }
+    },
+
+    async handleAdminWorkflowEnrollments(
+      session: unknown,
+      workflowId: string
+    ): Promise<AdminWorkflowEnrollmentListHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 200,
+          body: await listAdminWorkflowEnrollments(session as z.infer<typeof authSessionSchema>, workflowId, dependencies.workflows)
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof WorkflowActionError) {
+          return createError(error.code === "not_found" ? 404 : 400, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while loading workflow enrollments.");
+      }
+    },
+
+    async handleAdminWorkflowEnrollableClients(
+      session: unknown,
+      workflowId: string
+    ): Promise<AdminWorkflowEnrollableClientListHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 200,
+          body: await listAdminWorkflowEnrollableClients(session as z.infer<typeof authSessionSchema>, workflowId, dependencies.workflows)
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof WorkflowActionError) {
+          return createError(error.code === "not_found" ? 404 : 400, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while loading enrollable workflow clients.");
+      }
+    },
+
+    async handleAdminWorkflowEnroll(
+      session: unknown,
+      workflowId: string,
+      input: unknown
+    ): Promise<AdminWorkflowMutationHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 200,
+          body: await enrollAdminWorkflowClients(session as z.infer<typeof authSessionSchema>, workflowId, input, dependencies.workflows)
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof WorkflowActionError) {
+          return createError(error.code === "not_found" ? 404 : 400, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while enrolling workflow clients.");
+      }
+    },
+
+    async handleAdminWorkflowEnrollmentCancel(
+      session: unknown,
+      workflowId: string,
+      enrollmentId: string
+    ): Promise<AdminWorkflowMutationHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 200,
+          body: await cancelAdminWorkflowEnrollment(
+            session as z.infer<typeof authSessionSchema>,
+            workflowId,
+            enrollmentId,
+            dependencies.workflows
+          )
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof WorkflowActionError) {
+          return createError(error.code === "not_found" ? 404 : 400, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while cancelling workflow enrollment.");
+      }
+    },
+
+    async handleAdminWorkflowSteps(
+      session: unknown,
+      workflowId: string
+    ): Promise<AdminWorkflowStepListHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 200,
+          body: await listAdminWorkflowSteps(session as z.infer<typeof authSessionSchema>, workflowId, dependencies.workflows)
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof WorkflowActionError) {
+          return createError(error.code === "not_found" ? 404 : 400, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while loading workflow steps.");
+      }
+    },
+
+    async handleAdminWorkflowStepEditor(
+      session: unknown,
+      workflowId: string,
+      stepId: string | null
+    ): Promise<AdminWorkflowStepEditorHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 200,
+          body: await getAdminWorkflowStepEditor(
+            session as z.infer<typeof authSessionSchema>,
+            workflowId,
+            stepId,
+            dependencies.workflows
+          )
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof WorkflowActionError) {
+          return createError(error.code === "not_found" ? 404 : 400, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while loading workflow step editor.");
+      }
+    },
+
+    async handleAdminWorkflowStepCreate(
+      session: unknown,
+      workflowId: string,
+      input: unknown
+    ): Promise<AdminWorkflowStepEditorHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 201,
+          body: await createAdminWorkflowStep(
+            session as z.infer<typeof authSessionSchema>,
+            workflowId,
+            input,
+            dependencies.workflows
+          )
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof WorkflowActionError) {
+          return createError(error.code === "not_found" ? 404 : 400, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while creating workflow step.");
+      }
+    },
+
+    async handleAdminWorkflowStepUpdate(
+      session: unknown,
+      workflowId: string,
+      stepId: string,
+      input: unknown
+    ): Promise<AdminWorkflowStepEditorHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 200,
+          body: await updateAdminWorkflowStep(
+            session as z.infer<typeof authSessionSchema>,
+            workflowId,
+            stepId,
+            input,
+            dependencies.workflows
+          )
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof WorkflowActionError) {
+          return createError(error.code === "not_found" ? 404 : 400, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while updating workflow step.");
+      }
+    },
+
+    async handleAdminWorkflowStepDelete(
+      session: unknown,
+      workflowId: string,
+      stepId: string
+    ): Promise<AdminWorkflowMutationHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 200,
+          body: await deleteAdminWorkflowStep(
+            session as z.infer<typeof authSessionSchema>,
+            workflowId,
+            stepId,
+            dependencies.workflows
+          )
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof WorkflowActionError) {
+          return createError(error.code === "not_found" ? 404 : 400, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while deleting workflow step.");
+      }
+    },
+
     async handleAdminSettings(session: unknown): Promise<AdminSettingListHandlerResult> {
       try {
         if (session == null) {
@@ -939,6 +1626,538 @@ export function createApiHandlers(dependencies: ApiDependencies) {
         }
 
         return createError(500, "internal_error", "Unexpected error while updating admin setting.");
+      }
+    },
+
+    async handleAdminAppointmentTypes(session: unknown): Promise<AdminAppointmentTypeListHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 200,
+          body: await listAdminAppointmentTypes(session as z.infer<typeof authSessionSchema>, dependencies.adminConfiguration)
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while loading admin appointment types.");
+      }
+    },
+
+    async handleAdminAppointmentTypeDetail(
+      session: unknown,
+      appointmentTypeId: string
+    ): Promise<AdminAppointmentTypeDetailHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 200,
+          body: await getAdminAppointmentTypeDetail(
+            session as z.infer<typeof authSessionSchema>,
+            appointmentTypeId,
+            dependencies.adminConfiguration
+          )
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof AdminConfigurationError) {
+          return createError(404, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while loading admin appointment type.");
+      }
+    },
+
+    async handleAdminAppointmentTypeCreate(
+      session: unknown,
+      input: unknown
+    ): Promise<AdminAppointmentTypeDetailHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 201,
+          body: await createAdminAppointmentType(
+            session as z.infer<typeof authSessionSchema>,
+            input,
+            dependencies.adminConfiguration
+          )
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while creating admin appointment type.");
+      }
+    },
+
+    async handleAdminAppointmentTypeUpdate(
+      session: unknown,
+      appointmentTypeId: string,
+      input: unknown
+    ): Promise<AdminAppointmentTypeDetailHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 200,
+          body: await updateAdminAppointmentType(
+            session as z.infer<typeof authSessionSchema>,
+            appointmentTypeId,
+            input,
+            dependencies.adminConfiguration
+          )
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof AdminConfigurationError) {
+          return createError(404, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while updating admin appointment type.");
+      }
+    },
+
+    async handleAdminAppointmentTypeDelete(
+      session: unknown,
+      appointmentTypeId: string
+    ): Promise<AdminAppointmentTypeDeleteHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 200,
+          body: await deleteAdminAppointmentType(
+            session as z.infer<typeof authSessionSchema>,
+            appointmentTypeId,
+            dependencies.adminConfiguration
+          )
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof AdminConfigurationError) {
+          return createError(404, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while deleting admin appointment type.");
+      }
+    },
+
+    async handleAdminFormTemplates(session: unknown): Promise<AdminFormTemplateListHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 200,
+          body: await listAdminFormTemplates(session as z.infer<typeof authSessionSchema>, dependencies.adminConfiguration)
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while loading admin form templates.");
+      }
+    },
+
+    async handleAdminFormTemplateDetail(
+      session: unknown,
+      templateId: string
+    ): Promise<AdminFormTemplateDetailHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 200,
+          body: await getAdminFormTemplateDetail(
+            session as z.infer<typeof authSessionSchema>,
+            templateId,
+            dependencies.adminConfiguration
+          )
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof AdminConfigurationError) {
+          return createError(error.code === "in_use" ? 409 : 404, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while loading admin form template.");
+      }
+    },
+
+    async handleAdminFormTemplateCreate(
+      session: unknown,
+      input: unknown
+    ): Promise<AdminFormTemplateDetailHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 201,
+          body: await createAdminFormTemplate(
+            session as z.infer<typeof authSessionSchema>,
+            input,
+            dependencies.adminConfiguration
+          )
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while creating admin form template.");
+      }
+    },
+
+    async handleAdminFormTemplateUpdate(
+      session: unknown,
+      templateId: string,
+      input: unknown
+    ): Promise<AdminFormTemplateDetailHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 200,
+          body: await updateAdminFormTemplate(
+            session as z.infer<typeof authSessionSchema>,
+            templateId,
+            input,
+            dependencies.adminConfiguration
+          )
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof AdminConfigurationError) {
+          return createError(error.code === "in_use" ? 409 : 404, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while updating admin form template.");
+      }
+    },
+
+    async handleAdminFormTemplateDelete(
+      session: unknown,
+      templateId: string
+    ): Promise<AdminFormTemplateDeleteHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 200,
+          body: await deleteAdminFormTemplate(
+            session as z.infer<typeof authSessionSchema>,
+            templateId,
+            dependencies.adminConfiguration
+          )
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof AdminConfigurationError) {
+          return createError(error.code === "in_use" ? 409 : 404, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while deleting admin form template.");
+      }
+    },
+
+    async handleAdminEmailTemplates(session: unknown): Promise<AdminEmailTemplateListHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 200,
+          body: await listAdminEmailTemplates(session as z.infer<typeof authSessionSchema>, dependencies.adminConfiguration)
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while loading admin email templates.");
+      }
+    },
+
+    async handleAdminEmailTemplateDetail(
+      session: unknown,
+      templateId: string
+    ): Promise<AdminEmailTemplateDetailHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 200,
+          body: await getAdminEmailTemplateDetail(
+            session as z.infer<typeof authSessionSchema>,
+            templateId,
+            dependencies.adminConfiguration
+          )
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof AdminConfigurationError) {
+          return createError(404, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while loading admin email template.");
+      }
+    },
+
+    async handleAdminEmailTemplateCreate(
+      session: unknown,
+      input: unknown
+    ): Promise<AdminEmailTemplateDetailHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 201,
+          body: await createAdminEmailTemplate(
+            session as z.infer<typeof authSessionSchema>,
+            input,
+            dependencies.adminConfiguration
+          )
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while creating admin email template.");
+      }
+    },
+
+    async handleAdminEmailTemplateUpdate(
+      session: unknown,
+      templateId: string,
+      input: unknown
+    ): Promise<AdminEmailTemplateDetailHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 200,
+          body: await updateAdminEmailTemplate(
+            session as z.infer<typeof authSessionSchema>,
+            templateId,
+            input,
+            dependencies.adminConfiguration
+          )
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof AdminConfigurationError) {
+          return createError(404, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while updating admin email template.");
+      }
+    },
+
+    async handleAdminScheduledTasks(session: unknown): Promise<AdminScheduledTaskListHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 200,
+          body: await listAdminScheduledTasks(session as z.infer<typeof authSessionSchema>, dependencies.adminConfiguration)
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while loading admin scheduled tasks.");
+      }
+    },
+
+    async handleAdminScheduledTaskDetail(
+      session: unknown,
+      taskId: string
+    ): Promise<AdminScheduledTaskDetailHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 200,
+          body: await getAdminScheduledTaskDetail(
+            session as z.infer<typeof authSessionSchema>,
+            taskId,
+            dependencies.adminConfiguration
+          )
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof AdminConfigurationError) {
+          return createError(404, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while loading admin scheduled task.");
+      }
+    },
+
+    async handleAdminScheduledTaskCreate(
+      session: unknown,
+      input: unknown
+    ): Promise<AdminScheduledTaskDetailHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 201,
+          body: await createAdminScheduledTask(
+            session as z.infer<typeof authSessionSchema>,
+            input,
+            dependencies.adminConfiguration
+          )
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while creating admin scheduled task.");
+      }
+    },
+
+    async handleAdminScheduledTaskUpdate(
+      session: unknown,
+      taskId: string,
+      input: unknown
+    ): Promise<AdminScheduledTaskDetailHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Admin session required.");
+        }
+
+        return {
+          status: 200,
+          body: await updateAdminScheduledTask(
+            session as z.infer<typeof authSessionSchema>,
+            taskId,
+            input,
+            dependencies.adminConfiguration
+          )
+        };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof AdminConfigurationError) {
+          return createError(404, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+
+        return createError(500, "internal_error", "Unexpected error while updating admin scheduled task.");
       }
     },
 
@@ -1545,6 +2764,24 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(400, "invalid_request", "Request validation failed.");
         }
         return createError(500, "internal_error", "Unexpected error while loading portal forms.");
+      }
+    },
+
+    async handlePortalNotifications(session: unknown): Promise<PortalNotificationListHandlerResult> {
+      try {
+        if (session == null) {
+          return createError(401, "unauthorized", "Portal session required.");
+        }
+
+        return { status: 200, body: await listPortalNotifications(session as z.infer<typeof authSessionSchema>, dependencies.portalResources) };
+      } catch (error) {
+        if (error instanceof SessionActorError) {
+          return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+        }
+        if (error instanceof z.ZodError) {
+          return createError(400, "invalid_request", "Request validation failed.");
+        }
+        return createError(500, "internal_error", "Unexpected error while loading portal notifications.");
       }
     },
 
@@ -2638,7 +3875,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
       }
     },
 
-    async handlePublicQuoteDetail(input: { quoteId: string; token: string | null; session: unknown }): Promise<PublicQuoteDetailHandlerResult> {
+    async handlePublicQuoteDetail(input: { quoteId: string | null; token: string | null; session: unknown }): Promise<PublicQuoteDetailHandlerResult> {
       try {
         return {
           status: 200,
@@ -2655,7 +3892,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
       }
     },
 
-    async handlePublicContractDetail(input: { contractId: string; token: string | null; session: unknown }): Promise<PublicContractDetailHandlerResult> {
+    async handlePublicContractDetail(input: { contractId: string | null; token: string | null; session: unknown }): Promise<PublicContractDetailHandlerResult> {
       try {
         return {
           status: 200,
@@ -2672,7 +3909,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
       }
     },
 
-    async handlePublicFormSubmissionDetail(input: { submissionId: string; token: string | null; session: unknown }): Promise<PublicFormSubmissionDetailHandlerResult> {
+    async handlePublicFormSubmissionDetail(input: { submissionId: string | null; token: string | null; session: unknown }): Promise<PublicFormSubmissionDetailHandlerResult> {
       try {
         return {
           status: 200,
@@ -2689,7 +3926,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
       }
     },
 
-    async handlePublicBookingIcalDetail(input: { bookingId: string; token: string | null; session: unknown }): Promise<PublicBookingIcalDetailHandlerResult> {
+    async handlePublicBookingIcalDetail(input: { bookingId: string | null; token: string | null; session: unknown }): Promise<PublicBookingIcalDetailHandlerResult> {
       try {
         return {
           status: 200,

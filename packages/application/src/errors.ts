@@ -7,3 +7,13 @@ export class PublicBookingError extends Error {
     this.code = code;
   }
 }
+
+export class PublicContactError extends Error {
+  readonly code: "captcha_failed" | "validation_failed";
+
+  constructor(code: PublicContactError["code"], message: string) {
+    super(message);
+    this.name = "PublicContactError";
+    this.code = code;
+  }
+}

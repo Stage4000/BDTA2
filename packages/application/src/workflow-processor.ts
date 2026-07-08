@@ -1,34 +1,35 @@
 import { z } from "zod";
 
-import type { OutboundEmailMessage, Workflow, WorkflowEnrollment } from "@bdta/domain";
+import type { OutboundEmailMessage, Workflow, WorkflowEnrollment, WorkflowStep, WorkflowStepExecution } from "@bdta/domain";
 import type { JobEnvelope } from "@bdta/contracts";
 
 const workflowProcessorPayloadSchema = z.object({
   limit: z.number().int().positive().max(500).optional()
 });
 
-export type DueWorkflowEnrollmentRecord = {
+export type DueWorkflowStepExecutionRecord = {
   workflow: Workflow;
   enrollment: WorkflowEnrollment;
+  step: WorkflowStep;
+  execution: WorkflowStepExecution;
   recipientEmail: string;
   recipientDisplayName?: string | null;
 };
 
 export type WorkflowProcessorDependencies = {
   now(): string;
-  listDueWorkflowEnrollments(limit: number): Promise<DueWorkflowEnrollmentRecord[]>;
+  listDueWorkflowStepExecutions(limit: number): Promise<DueWorkflowStepExecutionRecord[]>;
   queueWorkflowEmail(message: OutboundEmailMessage): Promise<void>;
-  markWorkflowEnrollmentCompleted(enrollmentId: string, completedAt: string): Promise<void>;
+  markWorkflowStepExecutionCompleted(executionId: string, completedAt: string): Promise<void>;
   buildPortalClientUrl(clientId: string): string;
 };
 
-function escapeHtml(input: string): string {
+function applyWorkflowPlaceholders(input: string, record: DueWorkflowStepExecutionRecord): string {
+  const displayName = record.recipientDisplayName?.trim() || "there";
   return input
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll("\"", "&quot;")
-    .replaceAll("'", "&#39;");
+    .replaceAll("{client_name}", displayName)
+    .replaceAll("{workflow_name}", record.workflow.name)
+    .replaceAll("{step_name}", record.step.stepName);
 }
 
 export async function processWorkflowProcessorJob(
@@ -37,33 +38,31 @@ export async function processWorkflowProcessorJob(
 ): Promise<string> {
   const payload = workflowProcessorPayloadSchema.parse(job.payload);
   const limit = payload.limit ?? 50;
-  const dueEnrollments = await dependencies.listDueWorkflowEnrollments(limit);
+  const dueExecutions = await dependencies.listDueWorkflowStepExecutions(limit);
   let processedCount = 0;
 
-  for (const record of dueEnrollments) {
+  for (const record of dueExecutions) {
     if (!record.workflow.active) {
       continue;
     }
 
     const portalUrl = dependencies.buildPortalClientUrl(record.enrollment.clientId);
-    const displayName = record.recipientDisplayName?.trim() || "there";
+    const messageHtml = applyWorkflowPlaceholders(record.step.emailBodyHtml, record);
 
     await dependencies.queueWorkflowEmail({
       to: [record.recipientEmail],
-      subject: `Workflow: ${record.workflow.name}`,
+      subject: applyWorkflowPlaceholders(record.step.emailSubject, record),
       html: [
-        `<p>Hello ${escapeHtml(displayName)},</p>`,
-        `<p>This workflow update is part of "${escapeHtml(record.workflow.name)}".</p>`,
-        `<p>Trigger: ${escapeHtml(record.workflow.trigger)}</p>`,
+        messageHtml,
         `<p><a href="${portalUrl}">Open your portal</a></p>`
       ].join(""),
-      templateKey: "workflow_notification"
+      templateKey: "workflow_step"
     });
 
-    await dependencies.markWorkflowEnrollmentCompleted(record.enrollment.id, dependencies.now());
+    await dependencies.markWorkflowStepExecutionCompleted(record.execution.id, dependencies.now());
     processedCount += 1;
   }
 
-  const label = processedCount === 1 ? "enrollment" : "enrollments";
-  return `Processed ${processedCount} workflow ${label}.`;
+  const label = processedCount === 1 ? "workflow step execution" : "workflow step executions";
+  return `Processed ${processedCount} ${label}.`;
 }

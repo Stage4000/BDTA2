@@ -1,0 +1,52 @@
+name: bdta-production
+
+x-app-base: &app-base
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: bdta-refactor:production
+  env_file:
+    - .env.production
+  restart: unless-stopped
+
+services:
+  api:
+    <<: *app-base
+    command: ["node", "dist/apps/api/src/main.js"]
+    environment:
+      HOST: 0.0.0.0
+      PORT: "3000"
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "node", "scripts/http-healthcheck.mjs", "http://127.0.0.1:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  web:
+    <<: *app-base
+    command: ["node", "dist/apps/web/src/main.js"]
+    environment:
+      HOST: 0.0.0.0
+      PORT: "3001"
+    ports:
+      - "3001:3001"
+    healthcheck:
+      test: ["CMD", "node", "scripts/http-healthcheck.mjs", "http://127.0.0.1:3001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  jobs:
+    <<: *app-base
+    command: ["node", "dist/apps/jobs/src/main.js"]
+
+  migrate:
+    <<: *app-base
+    command: ["node", "dist/apps/migrate/src/main.js"]
+    restart: "no"
+    profiles:
+      - ops

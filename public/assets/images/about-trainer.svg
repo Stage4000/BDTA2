@@ -1,0 +1,15 @@
+<svg width="800" height="600" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="grad2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#10b981;stop-opacity:0.3" />
+      <stop offset="100%" style="stop-color:#2563eb;stop-opacity:0.3" />
+    </linearGradient>
+  </defs>
+  <rect width="800" height="600" fill="url(#grad2)"/>
+  <text x="50%" y="35%" text-anchor="middle" font-size="42" fill="#1f2937" font-family="Arial, sans-serif" font-weight="bold">Brook Lefkowitz</text>
+  <text x="50%" y="42%" text-anchor="middle" font-size="24" fill="#2563eb" font-family="Arial, sans-serif" font-weight="600">ABC Certified Dog Trainer</text>
+  <text x="50%" y="60%" text-anchor="middle" font-size="24" fill="#6b7280" font-family="Arial, sans-serif">[Professional Photo Placeholder]</text>
+  <circle cx="400" cy="250" r="100" fill="#2563eb" opacity="0.2"/>
+  <circle cx="400" cy="220" r="50" fill="#2563eb" opacity="0.3"/>
+  <ellipse cx="400" cy="310" rx="60" ry="80" fill="#2563eb" opacity="0.3"/>
+</svg>

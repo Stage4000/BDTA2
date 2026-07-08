@@ -1,0 +1,388 @@
+/**
+ * Mobile Optimization Styles for Brooks Dog Training Academy CRM
+ * Phase 1.11: Mobile-first enhancements and touch-friendly UI
+ */
+
+/* ============================================
+   Touch-Friendly Button Sizing
+   ============================================ */
+
+/* Minimum 44x44px touch targets (iOS Human Interface Guidelines) */
+.btn,
+button,
+a.btn,
+input[type="submit"],
+input[type="button"] {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 12px 20px;
+    font-size: 16px;
+}
+
+/* Large action buttons for primary actions */
+.btn-primary,
+.btn-success,
+.btn-warning {
+    min-height: 50px;
+    font-size: 18px;
+    font-weight: 600;
+}
+
+/* Increased spacing between buttons */
+.btn + .btn {
+    margin-left: 10px;
+}
+
+@media (max-width: 768px) {
+    .btn + .btn {
+        margin-left: 0;
+        margin-top: 10px;
+    }
+    
+    /* Stack buttons vertically on mobile */
+    .btn {
+        display: block;
+        width: 100%;
+        margin-bottom: 10px;
+    }
+}
+
+/* ============================================
+   Form Input Optimization
+   ============================================ */
+
+/* Larger form inputs for easier tapping */
+input[type="text"],
+input[type="email"],
+input[type="password"],
+input[type="number"],
+input[type="tel"],
+input[type="url"],
+input[type="date"],
+input[type="time"],
+textarea,
+select {
+    min-height: 44px;
+    font-size: 16px; /* Prevents zoom on iOS */
+    padding: 12px 16px;
+}
+
+textarea {
+    min-height: 120px;
+}
+
+/* Mobile-friendly checkboxes and radios */
+input[type="checkbox"],
+input[type="radio"] {
+    width: 24px;
+    height: 24px;
+    margin-right: 10px;
+}
+
+/* Label spacing for touch */
+label {
+    margin-bottom: 8px;
+    font-weight: 500;
+}
+
+/* ============================================
+   Responsive Table Handling
+   ============================================ */
+
+@media (max-width: 768px) {
+    /* Horizontal scroll for tables */
+    .table-responsive {
+        border: 0;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+    
+    table {
+        font-size: 14px;
+        min-width: 600px;
+    }
+    
+    th, td {
+        padding: 8px 6px !important;
+        white-space: nowrap;
+    }
+}
+
+/* ============================================
+   Card Layout for Mobile
+   ============================================ */
+
+@media (max-width: 768px) {
+    .card {
+        margin-bottom: 15px;
+        border-radius: 12px;
+    }
+    
+    .card-body {
+        padding: 15px;
+    }
+    
+    .card-title {
+        font-size: 18px;
+        margin-bottom: 10px;
+    }
+}
+
+/* ============================================
+   Typography Optimization
+   ============================================ */
+
+@media (max-width: 768px) {
+    h1 {
+        font-size: 28px;
+    }
+    
+    h2 {
+        font-size: 24px;
+    }
+    
+    h3 {
+        font-size: 20px;
+    }
+    
+    h4 {
+        font-size: 18px;
+    }
+    
+    p, li {
+        font-size: 16px;
+        line-height: 1.6;
+    }
+}
+
+/* ============================================
+   Spacing Adjustments
+   ============================================ */
+
+@media (max-width: 768px) {
+    /* Reduce margins and padding */
+    .container,
+    .container-fluid {
+        padding-left: 15px;
+        padding-right: 15px;
+    }
+    
+    /* Section spacing */
+    section {
+        padding: 30px 0;
+    }
+    
+    .mb-3, .my-3 {
+        margin-bottom: 1rem !important;
+    }
+    
+    .mt-3, .my-3 {
+        margin-top: 1rem !important;
+    }
+}
+
+/* ============================================
+   Touch Optimization
+   ============================================ */
+
+/* Remove hover effects on touch devices */
+@media (hover: none) and (pointer: coarse) {
+    .btn:hover,
+    .card:hover,
+    a:hover {
+        transform: none;
+        box-shadow: none;
+    }
+    
+    /* Add active state instead */
+    .btn:active,
+    .card:active {
+        transform: scale(0.98);
+        transition: transform 0.1s;
+    }
+}
+
+/* Prevent text selection on buttons */
+.btn,
+button,
+a.btn {
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+}
+
+/* ============================================
+   Performance Optimizations
+   ============================================ */
+
+/* Hardware acceleration for animations */
+.card,
+.btn,
+.modal {
+    transform: translateZ(0);
+    -webkit-transform: translateZ(0);
+}
+
+/* Optimize font rendering */
+body {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+/* ============================================
+   Accessibility Improvements
+   ============================================ */
+
+/* Focus states for keyboard navigation */
+a:focus,
+button:focus,
+input:focus,
+select:focus,
+textarea:focus {
+    outline: 2px solid #2563eb;
+    outline-offset: 2px;
+}
+
+/* ============================================
+   Dashboard Mobile Optimization
+   ============================================ */
+
+@media (max-width: 768px) {
+    /* Stack dashboard stats */
+    .dashboard-stats .col-md-3 {
+        margin-bottom: 15px;
+    }
+    
+    /* Optimize chart display */
+    canvas {
+        max-height: 250px !important;
+    }
+    
+    /* Widget optimization */
+    .widget {
+        margin-bottom: 20px;
+    }
+}
+
+/* ============================================
+   Modal Optimization
+   ============================================ */
+
+@media (max-width: 768px) {
+    .modal-dialog {
+        margin: 10px;
+        max-width: calc(100% - 20px);
+    }
+    
+    .modal-content {
+        border-radius: 12px;
+    }
+    
+    .modal-header,
+    .modal-body,
+    .modal-footer {
+        padding: 20px;
+    }
+}
+
+/* ============================================
+   Navigation Improvements
+   ============================================ */
+
+@media (max-width: 768px) {
+    /* Make navigation links touch-friendly */
+    .nav-link {
+        padding: 15px 20px;
+        font-size: 16px;
+        min-height: 44px;
+    }
+    
+    /* Dropdown menus */
+    .dropdown-menu {
+        font-size: 16px;
+    }
+    
+    .dropdown-item {
+        padding: 12px 20px;
+        min-height: 44px;
+    }
+}
+
+/* ============================================
+   Client List Action Buttons – Mobile Overrides
+   ============================================ */
+
+/* Keep icon-only action buttons compact; do not override btn-sm in table cells globally */
+.client-action-btns .btn,
+.client-action-dropdown .btn,
+.table-action-buttons .btn,
+.table-action-dropdown .btn {
+    min-height: 36px;
+    min-width: 36px;
+    padding: 6px 10px;
+    font-size: 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: auto;
+}
+
+@media (max-width: 767.98px) {
+    /* Prevent the general block-display override from affecting action dropdowns */
+    .client-action-dropdown .btn,
+    .client-action-dropdown .dropdown-toggle,
+    .table-action-dropdown .btn,
+    .table-action-dropdown .dropdown-toggle {
+        display: inline-flex !important;
+        width: auto !important;
+        min-width: 36px;
+        min-height: 36px;
+        padding: 6px 10px;
+        font-size: 14px;
+        margin-bottom: 0;
+    }
+
+    /* Ensure the dropdown menu items are comfortable to tap */
+    .client-action-dropdown .dropdown-item,
+    .table-action-dropdown .dropdown-item {
+        padding: 10px 16px;
+        font-size: 15px;
+    }
+
+    /* Client list table: override the global min-width so hidden columns
+       don't cause a horizontal scrollbar. Only Name + Actions are visible
+       on small screens — they fit naturally within the viewport. */
+    .client-list-table {
+        min-width: 0;
+    }
+
+    .client-list-table th,
+    .client-list-table td {
+        white-space: normal;
+    }
+
+    /* The name cell can wrap if needed; the action cell stays compact */
+    .client-list-table td.text-nowrap {
+        white-space: nowrap;
+    }
+}
+
+@media print {
+    /* Hide navigation and non-essential elements */
+    .sidebar,
+    .navbar,
+    .btn {
+        display: none !important;
+    }
+    
+    /* Optimize for print */
+    body {
+        font-size: 12pt;
+    }
+    
+    .container {
+        width: 100%;
+        max-width: 100%;
+    }
+}

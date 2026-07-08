@@ -1,15 +1,8 @@
 import { z } from "zod";
 
-export const runtimeEnvironmentSchema = z.object({
-  NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
-  DATABASE_URL: z.string().min(1),
-  STRIPE_SECRET_KEY: z.string().min(1),
-  TURNSTILE_SECRET_KEY: z.string().min(1),
-  IMAP_HOST: z.string().min(1),
-  SMTP_HOST: z.string().min(1),
-  GOOGLE_OAUTH_CLIENT_ID: z.string().min(1),
-  GOOGLE_OAUTH_CLIENT_SECRET: z.string().min(1)
-});
+import { resolveDatabaseUrl, resolveSessionTtlSeconds } from "./environment.js";
+
+const nodeEnvironmentSchema = z.enum(["development", "test", "production"]).default("development");
 
 export const appSurfaces = {
   publicSite: {
@@ -34,8 +27,16 @@ export const providerCapabilities = {
   captcha: ["turnstile"]
 } as const;
 
-export type RuntimeEnvironment = z.infer<typeof runtimeEnvironmentSchema>;
+export type RuntimeEnvironment = {
+  NODE_ENV: z.infer<typeof nodeEnvironmentSchema>;
+  databaseUrl: string;
+  sessionTtlSeconds: number;
+};
 
 export function parseRuntimeEnvironment(env: Record<string, string | undefined>): RuntimeEnvironment {
-  return runtimeEnvironmentSchema.parse(env);
+  return {
+    NODE_ENV: nodeEnvironmentSchema.parse(env.NODE_ENV),
+    databaseUrl: resolveDatabaseUrl(env),
+    sessionTtlSeconds: resolveSessionTtlSeconds(env)
+  };
 }

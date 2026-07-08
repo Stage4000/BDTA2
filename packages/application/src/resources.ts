@@ -21,10 +21,11 @@ import {
   petFileContentSchema,
   petFileCollectionSchema,
   petFileDetailSchema,
+  portalNotificationCollectionSchema,
   quoteCollectionSchema,
   quoteDetailSchema
 } from "@bdta/contracts";
-import type { Booking, Client, Contract, Credit, FormSubmission, Invoice, Package, Pet, PetFile, Quote } from "@bdta/domain";
+import type { Booking, Client, Contract, Credit, FormSubmission, Invoice, Notification, Package, Pet, PetFile, Quote } from "@bdta/domain";
 import {
   bookingSchema,
   clientSchema,
@@ -33,11 +34,16 @@ import {
   formSubmissionSchema,
   idSchema,
   invoiceSchema,
+  notificationSchema,
   packageSchema,
   petSchema,
   petFileSchema,
   quoteSchema
 } from "@bdta/domain";
+import {
+  isFormSubmissionClientPortalVisible,
+  normalizeFormSubmissionPortalMetadata
+} from "./form-portal-visibility.js";
 import { SessionActorError, type SessionSnapshot } from "./session-actors.js";
 
 export type PortalResourceReadDependencies = {
@@ -62,6 +68,7 @@ export type PortalResourceReadDependencies = {
   findPortalContractById(clientId: string, contractId: string): Promise<Contract | null>;
   listPortalForms(clientId: string): Promise<FormSubmission[]>;
   findPortalFormById(clientId: string, formId: string): Promise<FormSubmission | null>;
+  listPortalNotifications(clientId: string): Promise<Notification[]>;
   listPortalPackages(clientId: string): Promise<Package[]>;
   findPortalPackageById(clientId: string, packageId: string): Promise<Package | null>;
   listPortalCredits(clientId: string): Promise<Credit[]>;
@@ -90,7 +97,17 @@ export type AdminResourceReadDependencies = {
   listAdminContracts(): Promise<Contract[]>;
   findAdminContractById(contractId: string): Promise<Contract | null>;
   listAdminForms(): Promise<FormSubmission[]>;
+  listAdminFormsByTemplate(templateId: string): Promise<FormSubmission[]>;
   findAdminFormById(formId: string): Promise<FormSubmission | null>;
+  createAdminFormRequest(input: {
+    templateId: string;
+    clientId: string;
+    bookingId?: string | null;
+    petId?: string | null;
+    sentAt?: string | null;
+  }): Promise<FormSubmission | null>;
+  reviewAdminForm(formId: string, adminUserId: string, notes: string): Promise<FormSubmission | null>;
+  unreviewAdminForm(formId: string): Promise<FormSubmission | null>;
   listAdminPackages(): Promise<Package[]>;
   findAdminPackageById(packageId: string): Promise<Package | null>;
   listAdminCredits(): Promise<Credit[]>;
@@ -239,14 +256,28 @@ export async function getPortalContractDetail(session: SessionSnapshot, contract
 export async function listPortalForms(session: SessionSnapshot, dependencies: PortalResourceReadDependencies) {
   const clientId = requirePortalSession(session);
   return formSubmissionCollectionSchema.parse({
-    items: (await dependencies.listPortalForms(clientId)).map((item) => formSubmissionSchema.parse(item))
+    items: (await dependencies.listPortalForms(clientId))
+      .map((item) => normalizeFormSubmissionPortalMetadata(formSubmissionSchema.parse(item)))
+      .filter((item) => isFormSubmissionClientPortalVisible(item))
   });
 }
 
 export async function getPortalFormDetail(session: SessionSnapshot, formId: string, dependencies: PortalResourceReadDependencies) {
   const clientId = requirePortalSession(session);
   const item = requireFound(await dependencies.findPortalFormById(clientId, idSchema.parse(formId)), "Portal form not found.");
-  return formSubmissionDetailSchema.parse({ item: formSubmissionSchema.parse(item) });
+  const normalized = normalizeFormSubmissionPortalMetadata(formSubmissionSchema.parse(item));
+  if (!isFormSubmissionClientPortalVisible(normalized)) {
+    throw new SessionActorError("actor_not_found", "Portal form not found.");
+  }
+
+  return formSubmissionDetailSchema.parse({ item: normalized });
+}
+
+export async function listPortalNotifications(session: SessionSnapshot, dependencies: PortalResourceReadDependencies) {
+  const clientId = requirePortalSession(session);
+  return portalNotificationCollectionSchema.parse({
+    items: (await dependencies.listPortalNotifications(clientId)).map((item) => notificationSchema.parse(item))
+  });
 }
 
 export async function listPortalPackages(session: SessionSnapshot, dependencies: PortalResourceReadDependencies) {
@@ -408,14 +439,14 @@ export async function getAdminContractDetail(session: SessionSnapshot, contractI
 export async function listAdminForms(session: SessionSnapshot, dependencies: AdminResourceReadDependencies) {
   requireAdminSession(session);
   return formSubmissionCollectionSchema.parse({
-    items: (await dependencies.listAdminForms()).map((item) => formSubmissionSchema.parse(item))
+    items: (await dependencies.listAdminForms()).map((item) => normalizeFormSubmissionPortalMetadata(formSubmissionSchema.parse(item)))
   });
 }
 
 export async function getAdminFormDetail(session: SessionSnapshot, formId: string, dependencies: AdminResourceReadDependencies) {
   requireAdminSession(session);
   const item = requireFound(await dependencies.findAdminFormById(idSchema.parse(formId)), "Admin form not found.");
-  return formSubmissionDetailSchema.parse({ item: formSubmissionSchema.parse(item) });
+  return formSubmissionDetailSchema.parse({ item: normalizeFormSubmissionPortalMetadata(formSubmissionSchema.parse(item)) });
 }
 
 export async function listAdminPackages(session: SessionSnapshot, dependencies: AdminResourceReadDependencies) {

@@ -1,8 +1,12 @@
-import { runMigrationRehearsalFromDatabaseUrl } from "./bootstrap.js";
-import { readMigrationConfig } from "./config.js";
+import { runMigrationCli } from "./cli.js";
+import { resolveStartupEnvironment } from "@bdta/platform";
 
-const config = readMigrationConfig(process.env);
-const runtime = await runMigrationRehearsalFromDatabaseUrl(config);
-
-console.log(JSON.stringify(runtime.report, null, 2));
-await runtime.closePool();
+const environment = await resolveStartupEnvironment({
+  processEnv: process.env
+});
+process.exitCode = await runMigrationCli({
+  env: environment,
+  writeLine(line) {
+    console.log(line);
+  }
+});

@@ -13,7 +13,9 @@ import { invoiceStatusSchema, timestampSchema } from "@bdta/domain";
 const integrationCallbackRequestSchema = z.object({
   provider: integrationCallbackSchema.shape.provider,
   receivedAt: timestampSchema.optional(),
-  payload: integrationCallbackSchema.shape.payload
+  payload: integrationCallbackSchema.shape.payload,
+  rawBody: z.string().optional(),
+  signature: z.string().optional()
 });
 
 export type IntegrationCallbackRecord = IntegrationCallback & {
@@ -37,7 +39,25 @@ export type IntegrationCallbackDependencies = {
     externalEventUrl: string | null;
     syncedAt: string;
   }): Promise<void>;
+  normalizeStripeCallbackPayload?(input: {
+    payload: Record<string, unknown>;
+    rawBody?: string;
+    signature?: string | null;
+    receivedAt: string;
+  }): Promise<StripeCallbackNormalizationResult | null>;
 };
+
+export type StripeCallbackNormalizationResult =
+  | {
+    kind: "invoice_update";
+    invoiceId: string;
+    paymentStatus: Extract<z.infer<typeof invoiceStatusSchema>, "sent" | "partially_paid" | "paid" | "overdue" | "void">;
+    outstandingAmount: number;
+  }
+  | {
+    kind: "ignored";
+    reason: string;
+  };
 
 const stripeInvoiceCallbackPayloadSchema = z.object({
   invoiceId: z.string().min(1),
@@ -76,8 +96,25 @@ export async function acceptIntegrationCallback(
   }
 
   if (request.provider === "stripe") {
-    const stripePayload = stripeInvoiceCallbackPayloadSchema.parse(request.payload);
-    await dependencies.applyStripeInvoiceUpdate(stripePayload);
+    const normalizedStripePayload = dependencies.normalizeStripeCallbackPayload == null
+      ? null
+      : await dependencies.normalizeStripeCallbackPayload({
+        payload: request.payload,
+        rawBody: request.rawBody,
+        signature: request.signature ?? null,
+        receivedAt
+      });
+
+    if (normalizedStripePayload?.kind === "invoice_update") {
+      await dependencies.applyStripeInvoiceUpdate({
+        invoiceId: normalizedStripePayload.invoiceId,
+        paymentStatus: normalizedStripePayload.paymentStatus,
+        outstandingAmount: normalizedStripePayload.outstandingAmount
+      });
+    } else if (normalizedStripePayload == null) {
+      const stripePayload = stripeInvoiceCallbackPayloadSchema.parse(request.payload);
+      await dependencies.applyStripeInvoiceUpdate(stripePayload);
+    }
   }
 
   if (request.provider === "google_calendar") {

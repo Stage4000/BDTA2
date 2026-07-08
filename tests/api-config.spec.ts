@@ -21,6 +21,27 @@ describe("api server config", () => {
     });
   });
 
+  it("accepts legacy database variables and session lifetime alias without requiring portal env", () => {
+    const config = readApiServerConfig({
+      DB_HOST: "legacy-db.example.test",
+      DB_PORT: "3308",
+      DB_NAME: "bdta_legacy",
+      DB_USER: "legacy_user",
+      DB_PASSWORD: "legacy_password",
+      SESSION_LIFETIME_SECONDS: "3600"
+    });
+
+    expect(config).toEqual({
+      databaseUrl: "mysql://legacy_user:legacy_password@legacy-db.example.test:3308/bdta_legacy",
+      portalBaseUrl: undefined,
+      listen: {
+        host: "0.0.0.0",
+        port: 3000
+      },
+      sessionTtlSeconds: 3600
+    });
+  });
+
   it("rejects invalid numeric environment values", () => {
     expect(() => readApiServerConfig({
       DATABASE_URL: "mysql://user:password@db.example.test:3306/bdta",
@@ -33,5 +54,11 @@ describe("api server config", () => {
       PORTAL_BASE_URL: "https://portal.example.test/portal",
       SESSION_TTL_SECONDS: "0"
     })).toThrow("Invalid SESSION_TTL_SECONDS value.");
+  });
+
+  it("rejects missing database configuration", () => {
+    expect(() => readApiServerConfig({
+      SESSION_LIFETIME_SECONDS: "1209600"
+    })).toThrow("Missing required database configuration. Set DATABASE_URL or DB_HOST, DB_NAME, DB_USER, and DB_PASSWORD.");
   });
 });

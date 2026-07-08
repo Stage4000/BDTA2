@@ -8,21 +8,34 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "npm run sync:legacy-assets && node ./node_modules/typescript/bin/tsc -p tsconfig.build.json && node scripts/write-dist-module-manifests.mjs",
+    "start": "node app.js",
     "start:api": "node dist/apps/api/src/main.js",
     "start:jobs": "node dist/apps/jobs/src/main.js",
     "start:migrate": "node dist/apps/migrate/src/main.js",
+    "start:platform": "node dist/apps/platform/src/main.js",
+    "start:release": "node dist/apps/release/src/main.js",
     "start:web": "node dist/apps/web/src/main.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "sync:legacy-assets": "node scripts/sync-legacy-assets.mjs",
+    "typecheck": "node ./node_modules/typescript/bin/tsc -p tsconfig.json --noEmit",
+    "test": "node ./node_modules/vitest/vitest.mjs run --configLoader native --pool threads",
+    "validate:plesk": "node scripts/validate-plesk-single-app.mjs",
+    "validate:env": "npm run build && node dist/apps/release/src/env-validator-cli.js",
+    "validate:release": "npm run build && node scripts/release-validation-artifacts.mjs prepare reports/release-validation/external-verification && (npm run typecheck > reports/release-validation/external-verification/typecheck.stdout.log 2> reports/release-validation/external-verification/typecheck.stderr.log && node scripts/release-validation-artifacts.mjs record reports/release-validation/external-verification typecheck 0 || node scripts/release-validation-artifacts.mjs record reports/release-validation/external-verification typecheck 1) && (npm test > reports/release-validation/external-verification/test.stdout.log 2> reports/release-validation/external-verification/test.stderr.log && node scripts/release-validation-artifacts.mjs record reports/release-validation/external-verification test 0 || node scripts/release-validation-artifacts.mjs record reports/release-validation/external-verification test 1) && (npm run build > reports/release-validation/external-verification/build.stdout.log 2> reports/release-validation/external-verification/build.stderr.log && node scripts/release-validation-artifacts.mjs record reports/release-validation/external-verification build 0 || node scripts/release-validation-artifacts.mjs record reports/release-validation/external-verification build 1) && (npm audit --omit=dev --json > reports/release-validation/external-verification/audit-production.stdout.log 2> reports/release-validation/external-verification/audit-production.stderr.log && node scripts/release-validation-artifacts.mjs record reports/release-validation/external-verification audit-production 0 || node scripts/release-validation-artifacts.mjs record reports/release-validation/external-verification audit-production 1) && php scripts/run-legacy-release-validation-suite.php reports/release-validation/external-verification/legacy-php-results.json && node dist/apps/release/src/validate-main.js reports/release-validation/external-verification"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "playwright": "^1.54.2",
     "typescript": "^5.8.3",
-    "vitest": "^3.2.4"
+    "vitest": "^4.1.8"
   },
   "dependencies": {
+    "@fortawesome/fontawesome-free": "^6.5.2",
     "bcryptjs": "^3.0.2",
+    "bootstrap": "^5.3.3",
+    "grapesjs": "^0.21.9",
+    "grapesjs-blocks-basic": "^1.0.1",
+    "grapesjs-preset-webpage": "^1.0.3",
     "mysql2": "^3.15.3",
     "zod": "^3.25.76"
   }
