@@ -9,11 +9,14 @@ if (!existsSync(platformEntryPath)) {
   console.error(
     [
       "BDTA platform build output is missing.",
-      "Run `npm install` and `npm run build` from the application root before starting the Plesk app.",
+      "Run `npm install` and `npm run build` from application root before starting Plesk app.",
       `Expected startup target: ${platformEntryPath}`
     ].join("\n")
   );
   process.exit(1);
 }
 
-await import(pathToFileURL(platformEntryPath).href);
+void import(pathToFileURL(platformEntryPath).href).catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
