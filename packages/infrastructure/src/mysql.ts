@@ -97,6 +97,31 @@ type StripeCheckoutSessionCreateInput = {
   metadata: Record<string, string>;
 };
 
+async function verifyPasswordWithLegacyBcryptSupport(password: string, passwordHash: string): Promise<boolean> {
+  const normalizedHash = passwordHash.trim();
+  if (normalizedHash === "") {
+    return false;
+  }
+
+  try {
+    if (await compare(password, normalizedHash)) {
+      return true;
+    }
+  } catch {
+    // ponytail: fall through to the PHP bcrypt compatibility retry below.
+  }
+
+  if (!normalizedHash.startsWith("$2y$")) {
+    return false;
+  }
+
+  try {
+    return await compare(password, `$2b$${normalizedHash.slice(4)}`);
+  } catch {
+    return false;
+  }
+}
+
 type StripeCheckoutSessionSnapshot = {
   sessionId: string;
   checkoutUrl: string;
@@ -1215,7 +1240,7 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
   const now = options.now ?? defaultNow;
   const portalBaseUrl = options.portalBaseUrl ?? "http://localhost:3000/portal";
   const captchaVerifier = options.captchaVerifier ?? (async () => true);
-  const passwordVerifier = options.passwordVerifier ?? (async (password: string, hash: string) => compare(password, hash));
+  const passwordVerifier = options.passwordVerifier ?? verifyPasswordWithLegacyBcryptSupport;
   const petUploadsBaseDir = options.petUploadsBaseDir ?? path.resolve(process.cwd(), "..", "backend", "uploads", "pets");
   const petFileContentLoader = options.petFileContentLoader ?? createPetFileContentLoader(petUploadsBaseDir);
   const petFileContentWriter = options.petFileContentWriter ?? createPetFileContentWriter(petUploadsBaseDir);

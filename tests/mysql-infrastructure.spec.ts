@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import { hash as bcryptHash } from "bcryptjs";
 
 import { buildApiRuntime } from "../apps/api/src/index.js";
 import {
@@ -787,6 +788,27 @@ describe("mysql infrastructure", () => {
     expect(executor.calls[1]?.sql).toContain("UPDATE clients SET last_login = CURRENT_TIMESTAMP");
     expect(executor.calls[2]?.sql).toContain("INSERT INTO app_sessions");
     expect(loaded).toBe(JSON.stringify({ actorId: "client-1" }));
+  });
+
+  it("accepts legacy PHP bcrypt hashes for admin login", async () => {
+    const phpBcryptHash = (await bcryptHash("correct-password", 10)).replace("$2b$", "$2y$");
+    const executor = new FakeSqlExecutor([
+      rows([{ id: 1, username: "admin", password_hash: phpBcryptHash, account_type: "main" }])
+    ]);
+    const runtime = buildApiRuntime(
+      createMySqlApiDependencies(executor, {
+        now: () => "2026-07-08T21:30:00.000Z",
+        captchaVerifier: async () => true
+      })
+    );
+
+    const result = await runtime.handlers.handleAdminLogin({
+      username: "admin",
+      password: "correct-password"
+    });
+
+    expect(result.status).toBe(200);
+    expect(executor.calls[0]?.sql).toContain("FROM admin_users");
   });
 
   it("creates portal and admin client profile operations against clients", async () => {
