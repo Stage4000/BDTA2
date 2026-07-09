@@ -1,4 +1,5 @@
 import { once } from "node:events";
+
 import { createHttpApiServer } from "../apps/api/src/server.js";
 import { createUnifiedPlatformServer } from "../apps/platform/src/server.js";
 import { createReleaseValidationState } from "../apps/release/src/fixtures.js";
@@ -32,7 +33,32 @@ function createServer() {
   return createUnifiedPlatformServer({ apiServer, webServer });
 }
 
-describe("web auth redirects", () => {
+describe("web auth screens", () => {
+  it("renders login screens without app sidebars", async () => {
+    const server = createServer();
+    const baseUrl = await startServer(server);
+
+    try {
+      const portalLogin = await fetch(`${baseUrl}/portal/login`);
+      const adminLogin = await fetch(`${baseUrl}/admin/login`);
+
+      expect(portalLogin.status).toBe(200);
+      expect(adminLogin.status).toBe(200);
+
+      const portalMarkup = await portalLogin.text();
+      const adminMarkup = await adminLogin.text();
+
+      expect(portalMarkup).toContain("auth-shell");
+      expect(adminMarkup).toContain("auth-shell");
+      expect(portalMarkup).not.toContain('<nav id="app-sidebar"');
+      expect(adminMarkup).not.toContain('<nav id="app-sidebar"');
+      expect(portalMarkup).not.toContain('<div class="app-mobile-navbar">');
+      expect(adminMarkup).not.toContain('<div class="app-mobile-navbar">');
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it("returns portal users to the protected portal page they asked for", async () => {
     const server = createServer();
     const baseUrl = await startServer(server);

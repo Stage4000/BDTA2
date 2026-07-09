@@ -108,7 +108,7 @@ type ResolvedWebDependencies = {
   sessionStore: SessionStore;
 };
 
-type LayoutVariant = "public" | "portal" | "admin";
+type LayoutVariant = "public" | "portal" | "admin" | "auth";
 
 type SettingConsoleMetadata = {
   launchCritical: boolean;
@@ -2816,30 +2816,102 @@ function buildAbsoluteReturnUrl(request: IncomingMessage, returnPath: string | n
   return returnPath == null ? null : `${getRequestOrigin(request)}${returnPath}`;
 }
 
+function renderAuthLoginPage(input: {
+  title: string;
+  eyebrow: string;
+  introTitle: string;
+  description: string;
+  action: string;
+  identifierFieldHtml: string;
+  returnPath: string | null;
+  errorMessage?: string | null;
+  heroPoints: string[];
+  supportLabel: string;
+}): string {
+  return renderLayout({
+    title: input.title,
+    variant: "auth",
+    body: [
+      '<section class="auth-shell">',
+      '<div class="auth-shell__hero">',
+      `<p class="eyebrow auth-shell__eyebrow">${escapeHtml(input.eyebrow)}</p>`,
+      `<div class="auth-shell__hero-copy"><h1>${escapeHtml(input.introTitle)}</h1><p class="section-copy">${escapeHtml(input.description)}</p></div>`,
+      input.returnPath == null
+        ? '<p class="auth-shell__return">Secure access for existing clients and staff.</p>'
+        : `<p class="auth-shell__return">After sign-in, you will continue to <strong>${escapeHtml(input.returnPath)}</strong>.</p>`,
+      `<ul class="auth-benefits">${input.heroPoints.map((point) => `<li class="auth-benefit">${escapeHtml(point)}</li>`).join("")}</ul>`,
+      `<p class="auth-shell__support">${escapeHtml(input.supportLabel)}</p>`,
+      "</div>",
+      '<div class="auth-shell__panel">',
+      '<article class="auth-card">',
+      '<div class="auth-card__copy">',
+      '<p class="eyebrow">Secure Access</p>',
+      `<h2>${escapeHtml(input.title)}</h2>`,
+      '<p class="section-copy">Use your assigned credentials to continue.</p>',
+      "</div>",
+      input.errorMessage == null || input.errorMessage.trim() === ""
+        ? ""
+        : `<p class="auth-error" role="alert">${escapeHtml(input.errorMessage)}</p>`,
+      `<form class="auth-form" method="post" action="${escapeAttribute(input.action)}">`,
+      input.identifierFieldHtml,
+      '<label>Password<input type="password" name="password" required autocomplete="current-password"></label>',
+      '<button type="submit">Sign In</button>',
+      "</form>",
+      '<p class="meta">If you were given a direct link, sign in here and the next screen will open automatically.</p>',
+      "</article>",
+      "</div>",
+      "</section>"
+    ].join("")
+  });
+}
+
 function renderPortalLoginPage(input: {
   action: string;
   errorMessage?: string | null;
   returnPath: string | null;
 }): string {
-  return renderLayout({
+  return renderAuthLoginPage({
     title: "Portal Login",
-    body: [
-      "<article>",
-      '<p class="eyebrow">Client Portal</p>',
-      "<h1>Portal Login</h1>",
-      input.returnPath == null
-        ? '<p class="section-copy">Sign in to review appointments, invoices, credits, and package access.</p>'
-        : '<p class="section-copy">Sign in and you will be returned to the page you started from.</p>',
-      input.errorMessage == null || input.errorMessage.trim() === ""
-        ? ""
-        : `<p class="meta" style="color:#b91c1c;">${escapeHtml(input.errorMessage)}</p>`,
-      `<form method="post" action="${escapeAttribute(input.action)}" style="display:grid;gap:16px;max-width:420px;">`,
-      '<label>Email<input type="email" name="email" required></label>',
-      '<label>Password<input type="password" name="password" required></label>',
-      '<button type="submit">Sign In</button>',
-      "</form>",
-      "</article>"
-    ].join("")
+    eyebrow: "Client Portal",
+    introTitle: "Client self-service without the clutter.",
+    description: input.returnPath == null
+      ? "Review appointments, invoices, quotes, contracts, forms, and profile details from one sign-in."
+      : "Sign in once and continue exactly where you left off.",
+    action: input.action,
+    identifierFieldHtml: '<label>Email<input type="email" name="email" required autocomplete="username"></label>',
+    returnPath: input.returnPath,
+    errorMessage: input.errorMessage,
+    heroPoints: [
+      "Upcoming appointments and training records in one place.",
+      "Invoices, quotes, contracts, and forms without extra navigation.",
+      "Direct-link friendly sign-in for shared documents and actions."
+    ],
+    supportLabel: "Portal access is intended for active clients and invited household members."
+  });
+}
+
+function renderAdminLoginPage(input: {
+  action: string;
+  errorMessage?: string | null;
+  returnPath: string | null;
+}): string {
+  return renderAuthLoginPage({
+    title: "Admin Login",
+    eyebrow: "Admin CRM",
+    introTitle: "Operations first, noise removed.",
+    description: input.returnPath == null
+      ? "Enter the CRM to manage clients, bookings, billing, forms, and operational tasks."
+      : "Sign in once and return to the exact admin screen you requested.",
+    action: input.action,
+    identifierFieldHtml: '<label>Username<input type="text" name="username" required autocomplete="username"></label>',
+    returnPath: input.returnPath,
+    errorMessage: input.errorMessage,
+    heroPoints: [
+      "Client records, bookings, billing, and forms from one workspace.",
+      "Lean sign-in screen with no sidebar or mobile app chrome.",
+      "Direct return to the requested admin route after authentication."
+    ],
+    supportLabel: "Admin credentials are issued separately from client portal access."
   });
 }
 
@@ -4917,7 +4989,8 @@ function renderSitePageEditorLegacyShell(page: SitePage): string {
     "        headers: { 'content-type': 'application/x-www-form-urlencoded' },",
     "        body: payload.toString()",
     "      });",
-    "      if (!response.ok && response.status !== 302) throw new Error('Save request failed.');",
+    "      const finalPath = new URL(response.url || window.location.href, window.location.origin).pathname;",
+    "      if (!response.ok || finalPath === '/admin/login') throw new Error(finalPath === '/admin/login' ? 'Your session expired. Sign in again.' : 'Save request failed.');",
     "      page.title = readPageTitle();",
     "      syncTitle(true);",
     "      setStatus(nextPublished);",
@@ -5475,7 +5548,8 @@ function renderSitePageEditor(page: SitePage): string {
     "        headers: { 'content-type': 'application/x-www-form-urlencoded' },",
     "        body: payload.toString()",
     "      });",
-    "      if (!response.ok && response.status !== 302) throw new Error('Save request failed.');",
+    "      const finalPath = new URL(response.url || window.location.href, window.location.origin).pathname;",
+    "      if (!response.ok || finalPath === '/admin/login') throw new Error(finalPath === '/admin/login' ? 'Your session expired. Sign in again.' : 'Save request failed.');",
     "      page.slug = nextSlug;",
     "      page.title = nextTitle;",
     "      syncTitle(true);",
@@ -5630,7 +5704,9 @@ function renderLayout(input: {
   const lowerTitle = input.title.toLowerCase();
   const lowerBody = input.body.toLowerCase();
   const variant: LayoutVariant = input.variant ?? (
-    lowerTitle.includes("admin") || lowerBody.includes("/admin/")
+    lowerTitle.includes("login")
+      ? "auth"
+      : lowerTitle.includes("admin") || lowerBody.includes("/admin/")
       ? "admin"
       : lowerTitle.includes("portal") || lowerBody.includes("/portal/")
         ? "portal"
@@ -5742,8 +5818,18 @@ function renderLayout(input: {
     "</div>"
   ].join("");
 
+  const authChrome = [
+    '<main class="auth-main">',
+    '<div class="auth-main__inner">',
+    input.body,
+    "</div>",
+    "</main>"
+  ].join("");
+
   const body = variant === "public"
     ? publicChrome
+    : variant === "auth"
+      ? authChrome
     : variant === "portal"
       ? appChrome("BDTA Client Portal", portalSidebar)
       : appChrome("BDTA Client CRM", adminSidebar);
@@ -5921,6 +6007,24 @@ function renderLayout(input: {
     ".booking-benefits { background: linear-gradient(145deg, rgba(255,255,255,0.98) 0%, rgba(240,249,255,0.98) 100%); }",
     ".benefit-list { display: grid; gap: 0.9rem; margin-top: 1rem; }",
     ".benefit-item { padding: 1rem 1.05rem; border-radius: 1rem; background: rgba(255,255,255,0.85); border: 1px solid rgba(148, 163, 184, 0.16); }",
+    ".auth-main { min-height: 100vh; padding: 1.5rem; background: radial-gradient(circle at top left, rgba(154, 0, 115, 0.16), transparent 32%), radial-gradient(circle at bottom right, rgba(10, 154, 156, 0.18), transparent 28%), linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%); display: flex; align-items: center; justify-content: center; }",
+    ".auth-main__inner { width: min(1100px, 100%); }",
+    ".auth-shell { display: grid; grid-template-columns: minmax(300px, 1fr) minmax(360px, 0.88fr); border-radius: 1.75rem; overflow: hidden; border: 1px solid rgba(148, 163, 184, 0.2); background: rgba(255, 255, 255, 0.9); box-shadow: 0 30px 80px rgba(15, 23, 42, 0.12); }",
+    ".auth-shell__hero { display: grid; gap: 1.25rem; padding: 2.5rem; background: linear-gradient(145deg, rgba(95, 25, 76, 0.98) 0%, rgba(154, 0, 115, 0.94) 55%, rgba(10, 154, 156, 0.86) 100%); color: #fff; }",
+    ".auth-shell__eyebrow, .auth-shell__hero .eyebrow { color: rgba(255, 255, 255, 0.74); }",
+    ".auth-shell__hero-copy h1 { margin-bottom: 0.85rem; color: #fff; font-size: clamp(2.2rem, 4vw, 3.6rem); }",
+    ".auth-shell__hero .section-copy { margin-bottom: 0; color: rgba(255, 255, 255, 0.88); max-width: 32rem; font-size: 1rem; }",
+    ".auth-shell__return { margin: 0; padding: 0.95rem 1rem; border-radius: 1rem; background: rgba(255, 255, 255, 0.14); border: 1px solid rgba(255, 255, 255, 0.18); color: #fff; }",
+    ".auth-shell__return strong { color: #fff; word-break: break-word; }",
+    ".auth-benefits { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.85rem; }",
+    ".auth-benefit { padding: 0.95rem 1rem; border-radius: 1rem; background: rgba(15, 23, 42, 0.18); border: 1px solid rgba(255, 255, 255, 0.12); color: rgba(255, 255, 255, 0.92); }",
+    ".auth-shell__support { margin: 0; color: rgba(255, 255, 255, 0.74); font-size: 0.94rem; }",
+    ".auth-shell__panel { display: flex; align-items: center; justify-content: center; padding: 2rem; background: linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 250, 252, 0.98) 100%); }",
+    ".auth-card { width: min(100%, 28rem); display: grid; gap: 1.2rem; }",
+    ".auth-card__copy .section-copy { margin-bottom: 0; }",
+    ".auth-error { margin: 0; padding: 0.9rem 1rem; border-radius: 1rem; border: 1px solid rgba(220, 38, 38, 0.2); background: #fef2f2; color: #b91c1c; font-weight: 600; }",
+    ".auth-form { display: grid; gap: 1rem; }",
+    ".auth-form button { width: 100%; margin-top: 0.35rem; }",
     ".app-layout { display: grid; grid-template-columns: 280px minmax(0, 1fr); min-height: 100vh; background: linear-gradient(180deg, rgba(148, 163, 184, 0.08), transparent 260px), #f8fafc; }",
     ".app-layout.is-sidebar-collapsed { grid-template-columns: minmax(0, 1fr); }",
     ".app-layout.is-sidebar-collapsed .app-sidebar { display: none; }",
@@ -6001,7 +6105,7 @@ function renderLayout(input: {
     ".settings-usage-list { display: grid; gap: 0.75rem; padding-left: 1.1rem; margin: 0; color: #475569; }",
     ".settings-current-value-panel { padding: 1rem 1.05rem; border-radius: 1rem; border: 1px solid rgba(148, 163, 184, 0.2); background: #f8fafc; margin-bottom: 0.8rem; }",
     ".settings-editor-shell .quick-link-card { box-shadow: none; }",
-    "@media (max-width: 960px) { .app-layout, .app-layout.is-sidebar-collapsed { grid-template-columns: 1fr; } .app-mobile-navbar { display: flex; } .app-sidebar { display: none; padding-top: 1rem; } .app-layout.is-sidebar-open .app-sidebar { display: block; } .app-main-shell { display: block; } .app-main-toolbar { display: none; } .app-main-content { padding: 1rem; } .navbar { flex-direction: column; align-items: flex-start; } .form-grid--two, .settings-shell, .settings-console__hero, .settings-detail-grid, .settings-card__meta-grid { grid-template-columns: 1fr; } .settings-sidebar { position: static; } .marketing-hero__grid, .about-panel__grid, .contact-panel__grid, .booking-shell__grid, .article-shell, .program-grid, .resource-grid, .process-grid, .story-grid, .testimonial-grid, .service-overview-grid, .featured-story__layout { grid-template-columns: 1fr; } .settings-console-toolbar, .settings-card__footer, .settings-detail-hero { align-items: stretch; } .public-cta-banner { flex-direction: column; align-items: flex-start; } .hero-media-frame { min-height: 280px; } .public-site-footer__inner { align-items: flex-start; } .public-social-slot--footer { justify-items: start; } }",
+    "@media (max-width: 960px) { .app-layout, .app-layout.is-sidebar-collapsed, .auth-shell { grid-template-columns: 1fr; } .app-mobile-navbar { display: flex; } .app-sidebar { display: none; padding-top: 1rem; } .app-layout.is-sidebar-open .app-sidebar { display: block; } .app-main-shell { display: block; } .app-main-toolbar { display: none; } .app-main-content, .auth-main, .auth-shell__hero, .auth-shell__panel { padding: 1rem; } .navbar { flex-direction: column; align-items: flex-start; } .form-grid--two, .settings-shell, .settings-console__hero, .settings-detail-grid, .settings-card__meta-grid { grid-template-columns: 1fr; } .settings-sidebar { position: static; } .marketing-hero__grid, .about-panel__grid, .contact-panel__grid, .booking-shell__grid, .article-shell, .program-grid, .resource-grid, .process-grid, .story-grid, .testimonial-grid, .service-overview-grid, .featured-story__layout { grid-template-columns: 1fr; } .settings-console-toolbar, .settings-card__footer, .settings-detail-hero { align-items: stretch; } .public-cta-banner { flex-direction: column; align-items: flex-start; } .hero-media-frame { min-height: 280px; } .public-site-footer__inner { align-items: flex-start; } .public-social-slot--footer { justify-items: start; } }",
     "@media (max-width: 767.98px) { .btn.public-theme-toggle { right: 1rem; left: auto; bottom: calc(5rem + env(safe-area-inset-bottom, 0px)); } }",
     `${input.css ?? ""}`,
     "</style>",
@@ -7148,20 +7252,10 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
         return;
       }
 
-      writeHtml(response, 200, renderLayout({
-        title: "Admin Login",
-        body: [
-            "<article>",
-            '<p class="eyebrow">Admin CRM</p>',
-            "<h1>Admin Login</h1>",
-            '<form method="post" action="/admin/login" style="display:grid;gap:16px;max-width:420px;">',
-            '<label>Username<input type="text" name="username" required></label>',
-            '<label>Password<input type="password" name="password" required></label>',
-            '<button type="submit">Sign In</button>',
-            "</form>",
-            "</article>"
-          ].join("")
-        }));
+      writeHtml(response, 200, renderAdminLoginPage({
+        action: buildAdminLoginPath(returnPath),
+        returnPath
+      }));
         return;
       }
 
@@ -7174,10 +7268,11 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
         });
 
         if ("error" in result.body) {
-          writeHtml(response, result.status, renderLayout({
-            title: "Admin Login",
-            body: `<article><h1>Admin Login</h1><p>${escapeHtml(result.body.error.message)}</p></article>`
-          }));
+        writeHtml(response, result.status, renderAdminLoginPage({
+          action: buildAdminLoginPath(returnPath),
+          returnPath,
+          errorMessage: result.body.error.message
+        }));
           return;
         }
 

@@ -4330,6 +4330,8 @@ describe("web server", () => {
       expect(sitePageEditorHtml).toContain("Desktop");
       expect(sitePageEditorHtml).toContain("Tablet");
       expect(sitePageEditorHtml).toContain("Mobile");
+      expect(sitePageEditorHtml).toContain("const finalPath = new URL(response.url || window.location.href, window.location.origin).pathname;");
+      expect(sitePageEditorHtml).toContain("Your session expired. Sign in again.");
       expect(sitePageEditorHtml).toContain("Save changes");
       expect(sitePageEditorHtml).toContain("Save and publish");
       expect(sitePageEditorHtml).toContain("site_pages_editor");
