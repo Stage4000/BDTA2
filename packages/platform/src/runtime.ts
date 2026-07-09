@@ -10,11 +10,11 @@ export const appSurfaces = {
     parityCritical: true
   },
   adminCrm: {
-    routes: ["/client", "/client/bookings", "/client/settings"],
+    routes: ["/client", "/client/bookings", "/client/settings", "/admin/quotes", "/admin/contracts"],
     parityCritical: true
   },
   customerPortal: {
-    routes: ["/portal", "/portal/appointments", "/portal/invoices"],
+    routes: ["/portal", "/portal/appointments", "/portal/invoices", "/portal/quotes", "/portal/contracts"],
     parityCritical: true
   }
 } as const;

@@ -2784,6 +2784,34 @@ function buildPortalLoginPath(returnPath: string | null): string {
     : `/portal/login?return_to=${encodeURIComponent(returnPath)}`;
 }
 
+function sanitizeAdminReturnPath(value: string | null): string | null {
+  const sanitized = sanitizeLocalReturnPath(value);
+  if (sanitized == null || (!sanitized.startsWith("/admin") && !sanitized.startsWith("/client"))) {
+    return null;
+  }
+
+  return sanitized;
+}
+
+function buildAdminLoginPath(returnPath: string | null): string {
+  return returnPath == null
+    ? "/admin/login"
+    : `/admin/login?return_to=${encodeURIComponent(returnPath)}`;
+}
+
+function getCurrentRequestPath(request: IncomingMessage): string {
+  const url = new URL(request.url ?? "/", "http://localhost");
+  return `${url.pathname}${url.search}`;
+}
+
+function buildPortalLoginRedirectPath(request: IncomingMessage): string {
+  return buildPortalLoginPath(sanitizePortalReturnPath(getCurrentRequestPath(request), "form"));
+}
+
+function buildAdminLoginRedirectPath(request: IncomingMessage): string {
+  return buildAdminLoginPath(sanitizeAdminReturnPath(getCurrentRequestPath(request)));
+}
+
 function buildAbsoluteReturnUrl(request: IncomingMessage, returnPath: string | null): string | null {
   return returnPath == null ? null : `${getRequestOrigin(request)}${returnPath}`;
 }
@@ -5775,12 +5803,12 @@ function renderLayout(input: {
     ".quick-link-card:hover { transform: translateY(-1px); box-shadow: 0 18px 34px rgba(15, 23, 42, 0.1); }",
     ".quick-link-card__label { font-weight: 700; }",
     ".quick-link-card__meta { color: #64748b; font-size: 0.88rem; }",
-    ".content-stack { display: grid; gap: 1.5rem; }",
-    ".surface-block { padding: 1.25rem; border: 1px solid var(--theme-border); border-radius: 1rem; background: #fff; box-shadow: var(--theme-shadow-sm); }",
+    ".content-stack { display: grid; gap: 1.5rem; min-width: 0; }",
+    ".surface-block { min-width: 0; max-width: 100%; padding: 1.25rem; border: 1px solid var(--theme-border); border-radius: 1rem; background: #fff; box-shadow: var(--theme-shadow-sm); }",
     ".surface-block h2 { margin-bottom: 1rem; }",
-    ".data-table { width: 100%; overflow-x: auto; border: 1px solid var(--theme-border); border-radius: 1rem; background: #fff; box-shadow: var(--theme-shadow-sm); }",
+    ".data-table { width: 100%; max-width: 100%; overflow-x: auto; border: 1px solid var(--theme-border); border-radius: 1rem; background: #fff; box-shadow: var(--theme-shadow-sm); }",
     ".data-table table { width: 100%; border-collapse: collapse; }",
-    ".data-table th, .data-table td { padding: 0.9rem 1rem; text-align: left; vertical-align: top; border-bottom: 1px solid rgba(148, 163, 184, 0.18); }",
+    ".data-table th, .data-table td { padding: 0.9rem 1rem; text-align: left; vertical-align: top; border-bottom: 1px solid rgba(148, 163, 184, 0.18); word-break: break-word; }",
     ".data-table th { font-size: 0.84rem; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; background: #f8fafc; }",
     ".data-table tbody tr:last-child td { border-bottom: 0; }",
     ".inline-link-list { display: flex; flex-wrap: wrap; gap: 0.7rem 1rem; margin: 0 0 1.25rem; color: #64748b; }",
@@ -7107,10 +7135,22 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
         }
       }
 
-      if (method === "GET" && url.pathname === "/admin/login") {
-        writeHtml(response, 200, renderLayout({
-          title: "Admin Login",
-          body: [
+    if (method === "GET" && url.pathname === "/admin/login") {
+      const returnPath = sanitizeAdminReturnPath(url.searchParams.get("return_to") ?? url.searchParams.get("returnTo"));
+      const session = await loadPersistedSession(resolved.sessionStore, request);
+      if (session?.actorType === "admin_user") {
+        redirect(response, returnPath ?? "/admin");
+        return;
+      }
+
+      if (session?.actorType === "portal_user") {
+        redirect(response, "/portal");
+        return;
+      }
+
+      writeHtml(response, 200, renderLayout({
+        title: "Admin Login",
+        body: [
             "<article>",
             '<p class="eyebrow">Admin CRM</p>',
             "<h1>Admin Login</h1>",
@@ -7125,11 +7165,12 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
         return;
       }
 
-      if (method === "POST" && url.pathname === "/admin/login" && handlers != null) {
-        const form = await readFormBody(request);
-        const result = await handlers.handleAdminLogin({
-          username: form.get("username"),
-          password: form.get("password")
+    if (method === "POST" && url.pathname === "/admin/login" && handlers != null) {
+      const form = await readFormBody(request);
+      const returnPath = sanitizeAdminReturnPath(url.searchParams.get("return_to") ?? url.searchParams.get("returnTo"));
+      const result = await handlers.handleAdminLogin({
+        username: form.get("username"),
+        password: form.get("password")
         });
 
         if ("error" in result.body) {
@@ -7140,15 +7181,26 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
           return;
         }
 
-        redirect(response, toLocalLocation(result.body.redirectTo), await persistSession(resolved.sessionStore, result.body));
+      redirect(response, returnPath ?? toLocalLocation(result.body.redirectTo), await persistSession(resolved.sessionStore, result.body));
+      return;
+    }
+
+    if (method === "GET" && url.pathname === "/portal/login") {
+      const returnPath = sanitizeLocalReturnPath(url.searchParams.get("return_to") ?? url.searchParams.get("returnTo"));
+      const session = await loadPersistedSession(resolved.sessionStore, request);
+      if (session?.actorType === "portal_user") {
+        redirect(response, returnPath ?? "/portal");
         return;
       }
 
-      if (method === "GET" && url.pathname === "/portal/login") {
-        const returnPath = sanitizeLocalReturnPath(url.searchParams.get("return_to") ?? url.searchParams.get("returnTo"));
-        writeHtml(response, 200, renderPortalLoginPage({
-          action: buildPortalLoginPath(returnPath),
-          returnPath
+      if (session?.actorType === "admin_user") {
+        redirect(response, "/admin");
+        return;
+      }
+
+      writeHtml(response, 200, renderPortalLoginPage({
+        action: buildPortalLoginPath(returnPath),
+        returnPath
         }));
         return;
       }
@@ -7171,9 +7223,9 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
           return;
         }
 
-        redirect(response, toLocalLocation(result.body.redirectTo), await persistSession(resolved.sessionStore, result.body));
-        return;
-      }
+      redirect(response, returnPath ?? toLocalLocation(result.body.redirectTo), await persistSession(resolved.sessionStore, result.body));
+      return;
+    }
 
       if (method === "GET" && url.pathname === "/backend/public/api_services.php") {
         writeJson(response, 200, {
@@ -7967,7 +8019,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && quoteAcceptMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/portal/login");
+          redirect(response, buildPortalLoginRedirectPath(request));
           return;
         }
 
@@ -7988,7 +8040,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && contractSignMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/portal/login");
+          redirect(response, buildPortalLoginRedirectPath(request));
           return;
         }
 
@@ -8009,7 +8061,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && formSubmitMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/portal/login");
+          redirect(response, buildPortalLoginRedirectPath(request));
           return;
         }
 
@@ -8034,7 +8086,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && invoicePayMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/portal/login");
+          redirect(response, buildPortalLoginRedirectPath(request));
           return;
         }
 
@@ -8153,7 +8205,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && url.pathname === "/admin/blog-posts") {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -8184,7 +8236,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && adminBlogPostDetailMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -8216,7 +8268,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && legacyBlogEditPath) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -8258,7 +8310,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && legacyBlogDeletePath) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -8274,7 +8326,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && legacySitePagesListPath) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -8309,7 +8361,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && adminBlogPostDeleteMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -8322,7 +8374,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && url.pathname === "/admin/site-pages") {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -8357,7 +8409,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && adminSitePageDetailMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -8393,7 +8445,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && adminSitePageTogglePublishMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -8432,7 +8484,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && adminSitePageDeleteMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -8445,7 +8497,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && legacyWorkflowEditPath) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -8507,7 +8559,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && legacyWorkflowDeletePath) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -8523,7 +8575,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && url.pathname === "/admin/workflows") {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -8550,7 +8602,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && adminWorkflowDetailMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -8578,7 +8630,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && adminWorkflowTriggersMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -8606,7 +8658,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && adminWorkflowTriggerDeleteMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -8620,7 +8672,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && adminWorkflowDeleteMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -8633,7 +8685,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && legacyWorkflowEnrollPath) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -8657,7 +8709,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && adminWorkflowEnrollMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -8682,7 +8734,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && adminWorkflowEnrollmentsCancelMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -8696,7 +8748,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && legacyWorkflowStepEditPath) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -8748,7 +8800,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && adminWorkflowStepsMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -8785,7 +8837,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && adminWorkflowStepDetailMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -8823,7 +8875,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && legacyWorkflowStepsPath) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -8839,7 +8891,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && adminWorkflowStepDeleteMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -8853,7 +8905,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && url.pathname === "/admin/settings/admin-users") {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -8879,7 +8931,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && adminSettingsUserPermissionsMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -8908,7 +8960,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && adminSettingsUserDeleteMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -8932,7 +8984,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && url.pathname === "/admin/settings/runtime-environment") {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -8958,7 +9010,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
           return;
         } catch (error) {
           if (error instanceof SessionActorError) {
-            redirect(response, "/admin/login");
+            redirect(response, buildAdminLoginRedirectPath(request));
             return;
           }
           redirect(response, `/admin/settings?category=database&error=${encodeURIComponent(error instanceof Error ? error.message : "Unable to update runtime environment settings.")}`);
@@ -8969,7 +9021,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && adminSettingDetailMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -8994,7 +9046,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && url.pathname === "/admin/appointment-types") {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -9016,7 +9068,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && adminAppointmentTypeDetailMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -9043,7 +9095,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && (adminAppointmentTypeDuplicateMatch != null || legacyAppointmentTypeDuplicatePath)) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -9076,7 +9128,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && adminAppointmentTypeDeleteMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -9093,7 +9145,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       ) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -9124,7 +9176,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       ) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -9158,7 +9210,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && (adminFormTemplateDuplicateMatch != null || legacyFormTemplateDuplicatePath)) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -9200,7 +9252,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && (adminFormTemplateDeleteMatch != null || legacyFormTemplateDeletePath)) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -9224,7 +9276,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && url.pathname === "/admin/email-templates") {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -9253,7 +9305,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && adminEmailTemplateDetailMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -9283,7 +9335,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && (adminEmailTemplateDuplicateMatch != null || legacyEmailTemplateDuplicatePath)) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -9319,7 +9371,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && url.pathname === "/admin/scheduled-tasks") {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -9347,7 +9399,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && adminScheduledTaskDetailMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -9376,7 +9428,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && url.pathname === "/portal/profile") {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/portal/login");
+          redirect(response, buildPortalLoginRedirectPath(request));
           return;
         }
 
@@ -9406,7 +9458,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && url.pathname === "/portal/contacts") {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/portal/login");
+          redirect(response, buildPortalLoginRedirectPath(request));
           return;
         }
 
@@ -9433,7 +9485,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && portalContactDetailMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/portal/login");
+          redirect(response, buildPortalLoginRedirectPath(request));
           return;
         }
 
@@ -9461,7 +9513,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && portalContactDeleteMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/portal/login");
+          redirect(response, buildPortalLoginRedirectPath(request));
           return;
         }
 
@@ -9482,7 +9534,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && url.pathname === "/admin/clients") {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -9511,7 +9563,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && adminClientProfileMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -9541,7 +9593,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && adminClientContactsMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -9569,7 +9621,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && adminClientContactDetailMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -9598,7 +9650,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && adminClientContactDeleteMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -9621,7 +9673,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && portalPetFilesMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/portal/login");
+          redirect(response, buildPortalLoginRedirectPath(request));
           return;
         }
 
@@ -9647,7 +9699,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && portalPetFileDeleteMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/portal/login");
+          redirect(response, buildPortalLoginRedirectPath(request));
           return;
         }
 
@@ -9669,7 +9721,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && adminPetFilesMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -9695,7 +9747,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if (method === "POST" && handlers != null && adminPetFileDeleteMatch != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -9747,20 +9799,20 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       ) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/portal/login");
+          redirect(response, buildPortalLoginRedirectPath(request));
           return;
         }
 
         const actor = await handlers.handlePortalActorProfile(session);
         if ("error" in actor.body) {
-          redirect(response, "/portal/login");
+          redirect(response, buildPortalLoginRedirectPath(request));
           return;
         }
 
         if (url.pathname === "/portal") {
           const summary = await handlers.handlePortalSummary(session);
           if ("error" in summary.body) {
-            redirect(response, "/portal/login");
+            redirect(response, buildPortalLoginRedirectPath(request));
             return;
           }
 
@@ -9869,7 +9921,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
         if (url.pathname === "/portal/profile") {
           const profile = await handlers.handlePortalProfile(session);
           if ("error" in profile.body) {
-            redirect(response, "/portal/login");
+            redirect(response, buildPortalLoginRedirectPath(request));
             return;
           }
 
@@ -9914,7 +9966,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
         if (url.pathname === "/portal/appointments") {
           const bookings = await handlers.handlePortalBookings(session);
           if ("error" in bookings.body) {
-            redirect(response, "/portal/login");
+            redirect(response, buildPortalLoginRedirectPath(request));
             return;
           }
 
@@ -9992,7 +10044,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
         if (url.pathname === "/portal/contacts") {
           const contacts = await handlers.handlePortalContacts(session);
           if ("error" in contacts.body) {
-            redirect(response, "/portal/login");
+            redirect(response, buildPortalLoginRedirectPath(request));
             return;
           }
 
@@ -10161,7 +10213,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
         if (url.pathname === "/portal/pets") {
           const pets = await handlers.handlePortalPets(session);
           if ("error" in pets.body) {
-            redirect(response, "/portal/login");
+            redirect(response, buildPortalLoginRedirectPath(request));
             return;
           }
 
@@ -10236,7 +10288,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
         if (url.pathname === "/portal/packages") {
           const packages = await handlers.handlePortalPackages(session);
           if ("error" in packages.body) {
-            redirect(response, "/portal/login");
+            redirect(response, buildPortalLoginRedirectPath(request));
             return;
           }
 
@@ -10309,7 +10361,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
         if (url.pathname === "/portal/credits") {
           const credits = await handlers.handlePortalCredits(session);
           if ("error" in credits.body) {
-            redirect(response, "/portal/login");
+            redirect(response, buildPortalLoginRedirectPath(request));
             return;
           }
 
@@ -10382,7 +10434,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
         if (url.pathname === "/portal/achievements") {
           const achievements = await handlers.handlePortalAchievements(session);
           if ("error" in achievements.body) {
-            redirect(response, "/portal/login");
+            redirect(response, buildPortalLoginRedirectPath(request));
             return;
           }
 
@@ -10477,7 +10529,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
         if (url.pathname === "/portal/invoices") {
           const invoices = await handlers.handlePortalInvoices(session);
           if ("error" in invoices.body) {
-            redirect(response, "/portal/login");
+            redirect(response, buildPortalLoginRedirectPath(request));
             return;
           }
 
@@ -10564,7 +10616,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
         if (url.pathname === "/portal/quotes") {
           const quotes = await handlers.handlePortalQuotes(session);
           if ("error" in quotes.body) {
-            redirect(response, "/portal/login");
+            redirect(response, buildPortalLoginRedirectPath(request));
             return;
           }
 
@@ -10647,7 +10699,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
         if (url.pathname === "/portal/contracts") {
           const contracts = await handlers.handlePortalContracts(session);
           if ("error" in contracts.body) {
-            redirect(response, "/portal/login");
+            redirect(response, buildPortalLoginRedirectPath(request));
             return;
           }
 
@@ -10728,7 +10780,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
         if (url.pathname === "/portal/forms") {
           const forms = await handlers.handlePortalForms(session);
           if ("error" in forms.body) {
-            redirect(response, "/portal/login");
+            redirect(response, buildPortalLoginRedirectPath(request));
             return;
           }
 
@@ -10773,7 +10825,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
         if (url.pathname === "/portal/notifications") {
           const notifications = await handlers.handlePortalNotifications(session);
           if ("error" in notifications.body) {
-            redirect(response, "/portal/login");
+            redirect(response, buildPortalLoginRedirectPath(request));
             return;
           }
 
@@ -10870,13 +10922,13 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       if ((method === "GET" || method === "POST") && legacyFormRequestCreatePath && resolved.api != null && handlers != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
         const actor = await handlers.handleAdminActorProfile(session);
         if ("error" in actor.body) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -11191,13 +11243,13 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       ) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
         const actor = await handlers.handleAdminActorProfile(session);
         if ("error" in actor.body) {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -11229,7 +11281,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
         if (url.pathname === "/admin" || url.pathname === "/admin/dashboard" || url.pathname === "/client/index.php") {
           const dashboard = await handlers.handleAdminDashboard(session);
           if ("error" in dashboard.body) {
-            redirect(response, "/admin/login");
+            redirect(response, buildAdminLoginRedirectPath(request));
             return;
           }
 
@@ -11284,7 +11336,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
         if (url.pathname === "/admin/clients") {
           const clients = await handlers.handleAdminClients(session);
           if ("error" in clients.body) {
-            redirect(response, "/admin/login");
+            redirect(response, buildAdminLoginRedirectPath(request));
             return;
           }
 
@@ -11333,7 +11385,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
           const clientId = decodeURIComponent(adminClientProfileMatch[1] ?? "");
           const profile = await handlers.handleAdminClientProfile(session, clientId);
           if ("error" in profile.body) {
-            redirect(response, "/admin/login");
+            redirect(response, buildAdminLoginRedirectPath(request));
             return;
           }
 
@@ -11384,7 +11436,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
           const clientId = decodeURIComponent(adminClientContactsMatch[1] ?? "");
           const contacts = await handlers.handleAdminClientContacts(session, clientId);
           if ("error" in contacts.body) {
-            redirect(response, "/admin/login");
+            redirect(response, buildAdminLoginRedirectPath(request));
             return;
           }
 
@@ -11480,7 +11532,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
           const clientId = decodeURIComponent(adminClientAchievementsMatch[1] ?? "");
           const achievements = await handlers.handleAdminClientAchievements(session, clientId);
           if ("error" in achievements.body) {
-            redirect(response, "/admin/login");
+            redirect(response, buildAdminLoginRedirectPath(request));
             return;
           }
 
@@ -11576,7 +11628,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
         if (url.pathname === "/admin/bookings") {
           const bookings = await handlers.handleAdminBookings(session);
           if ("error" in bookings.body) {
-            redirect(response, "/admin/login");
+            redirect(response, buildAdminLoginRedirectPath(request));
             return;
           }
 
@@ -11658,7 +11710,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
         if (url.pathname === "/admin/invoices" || url.pathname === "/client/invoices_list.php") {
           const invoices = await handlers.handleAdminInvoices(session);
           if ("error" in invoices.body) {
-            redirect(response, "/admin/login");
+            redirect(response, buildAdminLoginRedirectPath(request));
             return;
           }
 
@@ -11738,7 +11790,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
         if (url.pathname === "/admin/quotes") {
           const quotes = await handlers.handleAdminQuotes(session);
           if ("error" in quotes.body) {
-            redirect(response, "/admin/login");
+            redirect(response, buildAdminLoginRedirectPath(request));
             return;
           }
 
@@ -11814,7 +11866,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
         if (url.pathname === "/admin/contracts") {
           const contracts = await handlers.handleAdminContracts(session);
           if ("error" in contracts.body) {
-            redirect(response, "/admin/login");
+            redirect(response, buildAdminLoginRedirectPath(request));
             return;
           }
 
@@ -11963,7 +12015,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
         if (url.pathname === "/admin/pets") {
           const pets = await handlers.handleAdminPets(session);
           if ("error" in pets.body) {
-            redirect(response, "/admin/login");
+            redirect(response, buildAdminLoginRedirectPath(request));
             return;
           }
 
@@ -12039,7 +12091,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
         if (url.pathname === "/admin/packages") {
           const packages = await handlers.handleAdminPackages(session);
           if ("error" in packages.body) {
-            redirect(response, "/admin/login");
+            redirect(response, buildAdminLoginRedirectPath(request));
             return;
           }
 
@@ -12112,7 +12164,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
         if (url.pathname === "/admin/credits") {
           const credits = await handlers.handleAdminCredits(session);
           if ("error" in credits.body) {
-            redirect(response, "/admin/login");
+            redirect(response, buildAdminLoginRedirectPath(request));
             return;
           }
 
@@ -12186,7 +12238,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
         if (url.pathname === "/admin/achievement-types") {
           const types = await handlers.handleAdminAchievementTypes(session);
           if ("error" in types.body) {
-            redirect(response, "/admin/login");
+            redirect(response, buildAdminLoginRedirectPath(request));
             return;
           }
 
@@ -12258,7 +12310,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
         if (url.pathname === "/admin/blog-posts" || legacyBlogListPath || (legacyBlogEditPath && legacyBlogPostId === "")) {
           const posts = await handlers.handleAdminBlogPosts(session);
           if ("error" in posts.body) {
-            redirect(response, "/admin/login");
+            redirect(response, buildAdminLoginRedirectPath(request));
             return;
           }
           const useLegacyBlogPaths = legacyBlogListPath || legacyBlogEditPath;
@@ -12350,7 +12402,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
         if (url.pathname === "/admin/site-pages" || legacySitePagesListPath) {
           const pages = await handlers.handleAdminSitePages(session);
           if ("error" in pages.body) {
-            redirect(response, "/admin/login");
+            redirect(response, buildAdminLoginRedirectPath(request));
             return;
           }
           const sitePageCreateAction = legacySitePagesListPath ? "/client/site_pages_list.php" : "/admin/site-pages";
@@ -12488,7 +12540,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
         if (url.pathname === "/admin/workflows" || legacyWorkflowListPath || (legacyWorkflowEditPath && legacyWorkflowId === "")) {
           const workflows = await handlers.handleAdminWorkflows(session);
           if ("error" in workflows.body) {
-            redirect(response, "/admin/login");
+            redirect(response, buildAdminLoginRedirectPath(request));
             return;
           }
 
@@ -12968,7 +13020,7 @@ document.addEventListener("DOMContentLoaded", () => {
             settings = await getAdminSettingsOverview(session as z.infer<typeof authSessionSchema>, resolved.content);
           } catch (error) {
             if (error instanceof SessionActorError) {
-              redirect(response, "/admin/login");
+              redirect(response, buildAdminLoginRedirectPath(request));
               return;
             }
             throw error;
@@ -13046,7 +13098,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (url.pathname === "/admin/appointment-types" || url.pathname === "/client/appointment_types_list.php") {
           const appointmentTypes = await handlers.handleAdminAppointmentTypes(session);
           if ("error" in appointmentTypes.body) {
-            redirect(response, "/admin/login");
+            redirect(response, buildAdminLoginRedirectPath(request));
             return;
           }
           const legacyAppointmentTypeListPath = url.pathname === "/client/appointment_types_list.php";
@@ -13135,7 +13187,7 @@ document.addEventListener("DOMContentLoaded", () => {
             handlers.handleAdminAppointmentTypes(session)
           ]);
           if ("error" in formTemplates.body || "error" in appointmentTypes.body) {
-            redirect(response, "/admin/login");
+            redirect(response, buildAdminLoginRedirectPath(request));
             return;
           }
 
@@ -13217,7 +13269,7 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
           }
           if ("error" in appointmentTypes.body) {
-            redirect(response, "/admin/login");
+            redirect(response, buildAdminLoginRedirectPath(request));
             return;
           }
 
@@ -13283,7 +13335,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (legacyFormTemplateEditPath) {
           const appointmentTypes = await handlers.handleAdminAppointmentTypes(session);
           if ("error" in appointmentTypes.body) {
-            redirect(response, "/admin/login");
+            redirect(response, buildAdminLoginRedirectPath(request));
             return;
           }
 
@@ -13315,7 +13367,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (url.pathname === "/admin/email-templates" || url.pathname === "/client/email_templates_list.php") {
           const emailTemplates = await handlers.handleAdminEmailTemplates(session);
           if ("error" in emailTemplates.body) {
-            redirect(response, "/admin/login");
+            redirect(response, buildAdminLoginRedirectPath(request));
             return;
           }
           const legacyEmailTemplateListPath = url.pathname === "/client/email_templates_list.php";
@@ -13388,7 +13440,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (url.pathname === "/admin/scheduled-tasks" || url.pathname === "/client/scheduled_tasks_list.php") {
           const scheduledTasks = await handlers.handleAdminScheduledTasks(session);
           if ("error" in scheduledTasks.body) {
-            redirect(response, "/admin/login");
+            redirect(response, buildAdminLoginRedirectPath(request));
             return;
           }
 
@@ -13459,7 +13511,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (url.pathname === "/admin/operations/jobs") {
           const jobs = await handlers.handleAdminJobLogs(session);
           if ("error" in jobs.body) {
-            redirect(response, "/admin/login");
+            redirect(response, buildAdminLoginRedirectPath(request));
             return;
           }
 
@@ -13529,7 +13581,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (url.pathname === "/admin/operations/callbacks") {
           const callbacks = await handlers.handleAdminIntegrationCallbackLogs(session);
           if ("error" in callbacks.body) {
-            redirect(response, "/admin/login");
+            redirect(response, buildAdminLoginRedirectPath(request));
             return;
           }
 
@@ -13653,7 +13705,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (url.pathname === "/admin/forms" || legacyFormSubmissionsListPath) {
           const forms = await handlers.handleAdminForms(session);
           if ("error" in forms.body) {
-            redirect(response, "/admin/login");
+            redirect(response, buildAdminLoginRedirectPath(request));
             return;
           }
 
@@ -13831,7 +13883,7 @@ document.addEventListener("DOMContentLoaded", () => {
       ) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null || session.actorType !== "admin_user") {
-          redirect(response, "/admin/login");
+          redirect(response, buildAdminLoginRedirectPath(request));
           return;
         }
 
@@ -14008,3 +14060,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 }
+
+
+
+
+
