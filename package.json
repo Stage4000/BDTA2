@@ -8,7 +8,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run sync:legacy-assets && node ./node_modules/typescript/bin/tsc -p tsconfig.build.json && node scripts/write-dist-module-manifests.mjs",
+"build": "node scripts/sync-legacy-assets.mjs && node ./node_modules/typescript/bin/tsc -p tsconfig.build.json && node scripts/write-dist-module-manifests.mjs",
     "start": "node app.js",
     "start:api": "node dist/apps/api/src/main.js",
     "start:jobs": "node dist/apps/jobs/src/main.js",
@@ -20,7 +20,7 @@
     "typecheck": "node ./node_modules/typescript/bin/tsc -p tsconfig.json --noEmit",
     "test": "node ./node_modules/vitest/vitest.mjs run --configLoader native --pool threads",
     "validate:plesk": "node scripts/validate-plesk-single-app.mjs",
-    "validate:env": "npm run build && node dist/apps/release/src/env-validator-cli.js",
+"validate:env": "node scripts/sync-legacy-assets.mjs && node ./node_modules/typescript/bin/tsc -p tsconfig.build.json && node scripts/write-dist-module-manifests.mjs && node dist/apps/release/src/env-validator-cli.js",
     "validate:release": "npm run build && node scripts/release-validation-artifacts.mjs prepare reports/release-validation/external-verification && (npm run typecheck > reports/release-validation/external-verification/typecheck.stdout.log 2> reports/release-validation/external-verification/typecheck.stderr.log && node scripts/release-validation-artifacts.mjs record reports/release-validation/external-verification typecheck 0 || node scripts/release-validation-artifacts.mjs record reports/release-validation/external-verification typecheck 1) && (npm test > reports/release-validation/external-verification/test.stdout.log 2> reports/release-validation/external-verification/test.stderr.log && node scripts/release-validation-artifacts.mjs record reports/release-validation/external-verification test 0 || node scripts/release-validation-artifacts.mjs record reports/release-validation/external-verification test 1) && (npm run build > reports/release-validation/external-verification/build.stdout.log 2> reports/release-validation/external-verification/build.stderr.log && node scripts/release-validation-artifacts.mjs record reports/release-validation/external-verification build 0 || node scripts/release-validation-artifacts.mjs record reports/release-validation/external-verification build 1) && (npm audit --omit=dev --json > reports/release-validation/external-verification/audit-production.stdout.log 2> reports/release-validation/external-verification/audit-production.stderr.log && node scripts/release-validation-artifacts.mjs record reports/release-validation/external-verification audit-production 0 || node scripts/release-validation-artifacts.mjs record reports/release-validation/external-verification audit-production 1) && php scripts/run-legacy-release-validation-suite.php reports/release-validation/external-verification/legacy-php-results.json && node dist/apps/release/src/validate-main.js reports/release-validation/external-verification"
   },
   "devDependencies": {
