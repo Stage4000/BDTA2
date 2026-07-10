@@ -1996,7 +1996,8 @@ function renderAdminSettingsSidebar(model: SettingsConsoleViewModel): string {
   ];
 
   return [
-    '<aside class="surface-block settings-sidebar">',
+'<aside class="settings-sidebar">',
+'<section class="surface-block settings-sidebar__panel">',
     '<p class="eyebrow">Settings Navigation</p>',
     '<h3>Configuration Areas</h3>',
     '<div class="settings-sidebar__nav">',
@@ -2006,8 +2007,9 @@ function renderAdminSettingsSidebar(model: SettingsConsoleViewModel): string {
       `<span class="settings-sidebar__link-meta">${escapeHtml(item.description)}</span>`,
       "</a>"
     ].join("")).join(""),
-    "</div>",
-    '<div class="settings-sidebar__meta">',
+"</div>",
+"</section>",
+'<section class="surface-block settings-sidebar__panel settings-sidebar__panel--meta">',
     '<p class="eyebrow">Current Admin</p>',
     `<h4>${escapeHtml(model.currentAdmin.username)}</h4>`,
     `<p class="meta">${escapeHtml(model.currentAdmin.email)}</p>`,
@@ -2016,8 +2018,8 @@ function renderAdminSettingsSidebar(model: SettingsConsoleViewModel): string {
       renderStatusPill(model.currentAdmin.canManageAdminUsers ? "Manages Admins" : "No Admin Control", model.currentAdmin.canManageAdminUsers ? "success" : "default"),
       renderStatusPill(model.currentAdmin.canManageApiKeys ? "API-Key Access" : "Restricted Keys", model.currentAdmin.canManageApiKeys ? "success" : "warning")
     ].join("")}</div>`,
-    "</div>",
-    "</aside>"
+"</section>",
+"</aside>"
   ].join("");
 }
 
@@ -6191,14 +6193,15 @@ function renderLayout(input: {
     ".app-surface > article:first-child { background: transparent; border: 0; border-radius: 0; padding: 0; box-shadow: none; }",
   ".settings-shell { display: grid; grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); gap: 1.5rem; align-items: start; min-height: 0; }",
   ".settings-shell__content { display: grid; gap: 1.25rem; min-width: 0; }",
-  ".settings-sidebar { position: sticky; top: 1.5rem; display: grid; gap: 1rem; align-self: start; max-height: calc(100vh - 3rem); min-height: 0; overflow: hidden; }",
-  ".settings-sidebar__nav { display: grid; gap: 0.7rem; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-right: 0.2rem; }",
-    ".settings-sidebar__link { display: grid; gap: 0.2rem; padding: 0.95rem 1rem; border-radius: 1rem; border: 1px solid rgba(148, 163, 184, 0.2); background: #f8fafc; color: #1f2937; }",
+  ".settings-sidebar { position: sticky; top: 1.5rem; display: grid; gap: 1rem; align-self: start; min-width: 0; }",
+  ".settings-sidebar__panel { display: grid; gap: 1rem; min-width: 0; }",
+  ".settings-sidebar__nav { display: grid; gap: 0.7rem; min-width: 0; min-height: 0; max-height: calc(100vh - 12rem); overflow-y: auto; overscroll-behavior: contain; padding-right: 0.2rem; }",
+  ".settings-sidebar__link { display: grid; gap: 0.2rem; min-width: 0; padding: 0.95rem 1rem; border-radius: 1rem; border: 1px solid rgba(148, 163, 184, 0.2); background: #f8fafc; color: #1f2937; }",
     ".settings-sidebar__link:hover { border-color: rgba(154, 0, 115, 0.22); background: rgba(154, 0, 115, 0.05); }",
     ".settings-sidebar__link.is-active { border-color: rgba(154, 0, 115, 0.35); background: linear-gradient(135deg, rgba(154, 0, 115, 0.08) 0%, rgba(10, 154, 156, 0.06) 100%); }",
   ".settings-sidebar__link-label { font-weight: 700; overflow-wrap: anywhere; }",
   ".settings-sidebar__link-meta { color: #64748b; font-size: 0.88rem; overflow-wrap: anywhere; }",
-    ".settings-sidebar__meta { display: grid; gap: 0.6rem; padding-top: 0.5rem; border-top: 1px solid rgba(148, 163, 184, 0.18); }",
+  ".settings-sidebar__panel--meta { gap: 0.6rem; }",
     ".settings-notice { border-left: 4px solid transparent; }",
     ".settings-notice--success { border-left-color: #16a34a; background: linear-gradient(135deg, rgba(22, 163, 74, 0.07) 0%, #fff 55%); }",
     ".settings-notice--danger { border-left-color: #dc2626; background: linear-gradient(135deg, rgba(220, 38, 38, 0.07) 0%, #fff 55%); }",
@@ -6250,7 +6253,7 @@ function renderLayout(input: {
     ".settings-usage-list { display: grid; gap: 0.75rem; padding-left: 1.1rem; margin: 0; color: #475569; }",
     ".settings-current-value-panel { padding: 1rem 1.05rem; border-radius: 1rem; border: 1px solid rgba(148, 163, 184, 0.2); background: #f8fafc; margin-bottom: 0.8rem; }",
     ".settings-editor-shell .quick-link-card { box-shadow: none; }",
-  "@media (max-width: 960px) { .app-layout, .app-layout.is-sidebar-collapsed, .auth-shell { grid-template-columns: 1fr; } .app-mobile-navbar { display: flex; } .app-sidebar { display: none; padding-top: 1rem; } .app-layout.is-sidebar-open .app-sidebar { display: block; } .app-main-shell { display: block; } .app-main-toolbar { display: none; } .app-main-content, .auth-main, .auth-shell__hero, .auth-shell__panel { padding: 1rem; } .navbar { flex-direction: column; align-items: flex-start; } .form-grid--two, .settings-shell, .settings-console__hero, .settings-detail-grid, .settings-card__meta-grid { grid-template-columns: 1fr; } .settings-sidebar { position: static; max-height: none; overflow: visible; } .settings-sidebar__nav { overflow: visible; padding-right: 0; } .marketing-hero__grid, .about-panel__grid, .contact-panel__grid, .booking-shell__grid, .article-shell, .program-grid, .resource-grid, .process-grid, .story-grid, .testimonial-grid, .service-overview-grid, .featured-story__layout { grid-template-columns: 1fr; } .settings-console-toolbar, .settings-card__footer, .settings-detail-hero { align-items: stretch; } .public-cta-banner { flex-direction: column; align-items: flex-start; } .hero-media-frame { min-height: 280px; } .public-site-footer__inner { align-items: flex-start; } .public-social-slot--footer { justify-items: start; } }",
+  "@media (max-width: 960px) { .app-layout, .app-layout.is-sidebar-collapsed, .auth-shell { grid-template-columns: 1fr; } .app-mobile-navbar { display: flex; } .app-sidebar { display: none; padding-top: 1rem; } .app-layout.is-sidebar-open .app-sidebar { display: block; } .app-main-shell { display: block; } .app-main-toolbar { display: none; } .app-main-content, .auth-main, .auth-shell__hero, .auth-shell__panel { padding: 1rem; } .navbar { flex-direction: column; align-items: flex-start; } .form-grid--two, .settings-shell, .settings-console__hero, .settings-detail-grid, .settings-card__meta-grid { grid-template-columns: 1fr; } .settings-sidebar { position: static; } .settings-sidebar__nav { max-height: none; overflow: visible; padding-right: 0; } .marketing-hero__grid, .about-panel__grid, .contact-panel__grid, .booking-shell__grid, .article-shell, .program-grid, .resource-grid, .process-grid, .story-grid, .testimonial-grid, .service-overview-grid, .featured-story__layout { grid-template-columns: 1fr; } .settings-console-toolbar, .settings-card__footer, .settings-detail-hero { align-items: stretch; } .public-cta-banner { flex-direction: column; align-items: flex-start; } .hero-media-frame { min-height: 280px; } .public-site-footer__inner { align-items: flex-start; } .public-social-slot--footer { justify-items: start; } }",
     "@media (max-width: 767.98px) { .data-table__toolbar, .data-table__pagination { padding-left: 0.85rem; padding-right: 0.85rem; } .data-table__status, .enhanced-collection__status { justify-content: flex-start; } .enhanced-collection__toolbar { align-items: stretch; } .data-table thead { display: none; } .data-table table, .data-table tbody, .data-table tr, .data-table td { display: block; width: 100%; } .data-table tbody { display: grid; gap: 0.75rem; padding: 0.85rem; } .data-table tbody tr { overflow: hidden; border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 0.95rem; background: #fff; box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05); } .data-table tbody tr td { display: grid; grid-template-columns: minmax(0, 8rem) minmax(0, 1fr); gap: 0.75rem; align-items: start; } .data-table td::before { content: attr(data-label); font-size: 0.74rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #64748b; } .data-table td:last-child { border-bottom: 0; } }",
     "@media (max-width: 767.98px) { .btn.public-theme-toggle { right: 1rem; left: auto; bottom: calc(5rem + env(safe-area-inset-bottom, 0px)); } }",
     `${input.css ?? ""}`,
@@ -13960,6 +13963,29 @@ document.addEventListener("DOMContentLoaded", () => {
             ...settings.categories,
             ...(canAccessRuntimeEnvironmentSettings(settings.currentAdmin) ? ["database"] : [])
           ].filter((value, index, items) => items.indexOf(value) === index);
+          const requestedSettingsCategory = normalizeSettingsCategory(url.searchParams.get("category"));
+          const validSettingsCategories = new Set([
+            settingsDefaultCategory,
+            "admins",
+            ...categories.map((category) => normalizeSettingsCategory(category))
+          ]);
+          const resolvedSettingsCategory = validSettingsCategories.has(requestedSettingsCategory)
+            ? requestedSettingsCategory
+            : settingsDefaultCategory;
+          if ((url.searchParams.get("category") ?? "").trim() !== "") {
+            const canonicalSettingsUrl = new URL(url.toString());
+            if (resolvedSettingsCategory === settingsDefaultCategory) {
+              canonicalSettingsUrl.searchParams.delete("category");
+            } else {
+              canonicalSettingsUrl.searchParams.set("category", resolvedSettingsCategory);
+            }
+            const currentSettingsPath = `${url.pathname}${url.search}`;
+            const canonicalSettingsPath = `${canonicalSettingsUrl.pathname}${canonicalSettingsUrl.search}`;
+            if (canonicalSettingsPath !== currentSettingsPath) {
+              redirect(response, canonicalSettingsPath);
+              return;
+            }
+          }
 
           writeHtml(response, 200, renderLayout({
             title: "Admin Settings",
@@ -13973,7 +13999,7 @@ document.addEventListener("DOMContentLoaded", () => {
               adminNav,
               renderSettingsConsole({
                 basePath: legacySettingsPath ? "/client/settings.php" : "/admin/settings",
-                currentCategory: normalizeSettingsCategory(url.searchParams.get("category")),
+                currentCategory: resolvedSettingsCategory,
                 settings: settings.items,
                 categories,
                 currentAdmin: settings.currentAdmin,

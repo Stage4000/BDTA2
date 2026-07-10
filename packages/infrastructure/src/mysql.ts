@@ -404,6 +404,23 @@ function normalizeLegacyOptionalToken(value: string | null | undefined): string 
   return normalized.length >= 16 ? normalized : null;
 }
 
+function normalizeLegacyReferenceId(
+  value: string | number | null | undefined,
+  fallback: string
+): string {
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value > 0 ? String(value) : fallback;
+  }
+
+  const normalized = value?.trim() ?? "";
+  return normalized === "" ? fallback : normalized;
+}
+
+function normalizeLegacyOptionalText(value: string | null | undefined): string | undefined {
+  const normalized = value?.trim() ?? "";
+  return normalized === "" ? undefined : normalized;
+}
+
 function buildLegacyPublicAccessToken(
   tokenValue: string | null | undefined,
   issuedAt: string,
@@ -563,9 +580,9 @@ function fromLegacyBookingRow(row: {
 
   return {
     id: String(row.id),
-    clientId: String(row.client_id ?? ""),
+    clientId: normalizeLegacyReferenceId(row.client_id, `legacy-client-${row.id}`),
     petIds: [],
-    serviceId: row.service_type,
+    serviceId: normalizeLegacyReferenceId(row.service_type, `legacy-service-${row.id}`),
     startsAt,
     endsAt,
     status: row.status,
@@ -575,7 +592,7 @@ function fromLegacyBookingRow(row: {
 
 function toInvoiceRecord(row: {
   id: number;
-  client_id: number;
+  client_id: number | null;
   status: string | null;
   total_amount: number;
   outstanding_amount: number;
@@ -583,7 +600,7 @@ function toInvoiceRecord(row: {
 }): Invoice {
   return {
     id: String(row.id),
-    clientId: String(row.client_id),
+    clientId: normalizeLegacyReferenceId(row.client_id, `legacy-client-${row.id}`),
     status: normalizeLegacyInvoiceStatus(row.status),
     totalAmount: Number(row.total_amount),
     outstandingAmount: Number(row.outstanding_amount),
@@ -593,7 +610,7 @@ function toInvoiceRecord(row: {
 
 function toQuoteRecord(row: {
   id: number;
-  client_id: number;
+  client_id: number | null;
   status: string | null;
   total_amount: number;
   access_token: string | null;
@@ -607,11 +624,11 @@ function toQuoteRecord(row: {
 }): Quote {
   return {
     id: String(row.id),
-    clientId: String(row.client_id),
+    clientId: normalizeLegacyReferenceId(row.client_id, `legacy-client-${row.id}`),
     status: normalizeLegacyQuoteStatus(row.status),
     totalAmount: Number(row.total_amount),
-    quoteNumber: row.quote_number ?? undefined,
-    title: row.title ?? undefined,
+    quoteNumber: normalizeLegacyOptionalText(row.quote_number),
+    title: normalizeLegacyOptionalText(row.title),
     description: row.description ?? "",
     expiresAt: normalizeLegacyTimestampValue(row.expiration_date),
     acceptedAt: normalizeLegacyTimestampValue(row.accepted_at),

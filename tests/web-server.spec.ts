@@ -4311,6 +4311,12 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
           cookie: adminCookie ?? ""
         }
       });
+      const overviewSettingsRedirect = await fetch(`${baseUrl}/admin/settings?category=overview`, {
+        headers: {
+          cookie: adminCookie ?? ""
+        },
+        redirect: "manual"
+      });
       const databaseSettings = await fetch(`${baseUrl}/admin/settings?category=database`, {
         headers: {
           cookie: adminCookie ?? ""
@@ -4384,6 +4390,7 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
       expect(legacySitePageEditor.status).toBe(200);
       expect(settings.status).toBe(200);
       expect(overviewSettings.status).toBe(200);
+      expect(overviewSettingsRedirect.status).toBe(302);
       expect(databaseSettings.status).toBe(200);
       expect(communicationsSettings.status).toBe(200);
       expect(adminSettingsUsersPage.status).toBe(200);
@@ -4482,6 +4489,7 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
       expect(settingsHtml).toContain("Launch-Critical Settings");
       expect(settingsHtml).toContain("Configuration Areas");
       expect(settingsHtml).toContain('href="/admin/settings" aria-current="page"');
+      expect(settingsHtml).toContain("settings-sidebar__panel");
       expect(settingsHtml).toContain("API-Key Access");
       expect(settingsHtml).toContain("?category=database");
       expect(settingsHtml).toContain("settings-summary-grid");
@@ -4495,6 +4503,7 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
       expect(settingsHtml).toContain("Communications");
       expect(settingsHtml).toContain("Advanced");
       expect(settingsHtml).toContain("Launch Critical");
+      expect(overviewSettingsRedirect.headers.get("location")).toBe("/admin/settings");
       expect(overviewSettingsHtml).toContain('href="/admin/settings" aria-current="page"');
       expect(overviewSettingsHtml).not.toContain('href="/admin/settings?category=overview"');
       expect(databaseSettingsHtml).toContain("Runtime Environment");

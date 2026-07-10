@@ -23,6 +23,7 @@ import {
 } from "./common.js";
 
 const blankStringToNull = (value: unknown) => value === "" ? null : value;
+const blankStringToUndefined = (value: unknown) => value === "" ? undefined : value;
 
 export const adminUserSchema = z.object({
   id: idSchema,
@@ -293,8 +294,8 @@ export const quoteSchema = z.object({
   clientId: idSchema,
   status: quoteStatusSchema,
   totalAmount: moneySchema,
-  quoteNumber: z.string().min(1).optional(),
-  title: z.string().min(1).optional(),
+  quoteNumber: z.preprocess(blankStringToUndefined, z.string().min(1).optional()),
+  title: z.preprocess(blankStringToUndefined, z.string().min(1).optional()),
   description: z.string().optional(),
   expiresAt: z.preprocess(blankStringToNull, timestampSchema.nullable().optional()),
   acceptedAt: z.preprocess(blankStringToNull, timestampSchema.nullable().optional()),
@@ -307,8 +308,8 @@ export const contractSchema = z.object({
   id: idSchema,
   clientId: idSchema,
   status: contractStatusSchema,
-  contractNumber: z.string().min(1).optional(),
-  title: z.string().min(1).optional(),
+  contractNumber: z.preprocess(blankStringToUndefined, z.string().min(1).optional()),
+  title: z.preprocess(blankStringToUndefined, z.string().min(1).optional()),
   description: z.string().optional(),
   contractText: z.string().optional(),
   effectiveDate: z.preprocess(blankStringToNull, dateSchema.nullable().optional()),
