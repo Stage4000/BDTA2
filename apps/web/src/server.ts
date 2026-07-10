@@ -1486,14 +1486,44 @@ function renderDataTable(input: {
 
   return [
     '<div class="data-table">',
+    `<div class="data-table__surface" data-enhanced-table data-empty-message="${escapeAttribute(input.emptyMessage)}">`,
+    '<div class="data-table__toolbar" data-enhanced-table-toolbar hidden>',
+    '<label class="data-table__search">',
+    '<span class="data-table__search-label">Search this list</span>',
+    '<input type="search" data-enhanced-table-search placeholder="Search this table" autocomplete="off" inputmode="search">',
+    "</label>",
+    '<div class="data-table__status">',
+    '<span class="data-table__summary" data-enhanced-table-summary aria-live="polite"></span>',
+    '<label class="data-table__page-size-label">',
+    '<span>Rows per page</span>',
+    '<select data-enhanced-table-page-size>',
+    '<option value="5">5</option>',
+    '<option value="10" selected>10</option>',
+    '<option value="20">20</option>',
+    '<option value="50">50</option>',
+    "</select>",
+    "</label>",
+    "</div>",
+    "</div>",
+    '<div class="data-table__viewport">',
     "<table>",
     "<thead><tr>",
-    input.headers.map((header) => `<th>${escapeHtml(header)}</th>`).join(""),
+    input.headers.map((header) => `<th scope="col">${escapeHtml(header)}</th>`).join(""),
     "</tr></thead>",
     "<tbody>",
-    input.rows.map((row) => `<tr>${row.map((cell) => `<td>${cell}</td>`).join("")}</tr>`).join(""),
+    input.rows.map((row) => `<tr>${row.map((cell, index) => `<td data-label="${escapeAttribute(input.headers[index] ?? `Column ${index + 1}`)}">${cell}</td>`).join("")}</tr>`).join(""),
     "</tbody>",
     "</table>",
+    "</div>",
+    '<div class="data-table__pagination" data-enhanced-table-pagination hidden>',
+    '<span class="data-table__page-count" data-enhanced-table-page-count aria-live="polite"></span>',
+    '<div class="data-table__pagination-buttons">',
+    '<button type="button" data-enhanced-table-prev>Previous</button>',
+    '<button type="button" data-enhanced-table-next>Next</button>',
+    "</div>",
+    "</div>",
+    '<p class="meta data-table__empty-state" data-enhanced-table-empty hidden>No results match this view.</p>',
+    "</div>",
     "</div>"
   ].join("");
 }
@@ -5896,11 +5926,30 @@ function renderLayout(input: {
     ".content-stack { display: grid; gap: 1.5rem; min-width: 0; }",
     ".surface-block { min-width: 0; max-width: 100%; padding: 1.25rem; border: 1px solid var(--theme-border); border-radius: 1rem; background: #fff; box-shadow: var(--theme-shadow-sm); }",
     ".surface-block h2 { margin-bottom: 1rem; }",
-    ".data-table { width: 100%; max-width: 100%; overflow-x: auto; border: 1px solid var(--theme-border); border-radius: 1rem; background: #fff; box-shadow: var(--theme-shadow-sm); }",
+    ".surface-block, .summary-card, .quick-link-card, .detail-card, .data-table, .portal-card, .blog-card { transition: transform 220ms ease, box-shadow 220ms ease, border-color 220ms ease, opacity 220ms ease; }",
+    ".reveal-on-scroll { opacity: 0; transform: translateY(18px); transition: opacity 320ms ease, transform 420ms cubic-bezier(0.22, 1, 0.36, 1); transition-delay: var(--reveal-delay, 0ms); }",
+    ".reveal-on-scroll.is-visible { opacity: 1; transform: translateY(0); }",
+    ".data-table { width: 100%; max-width: 100%; overflow: hidden; border: 1px solid var(--theme-border); border-radius: 1rem; background: #fff; box-shadow: var(--theme-shadow-sm); }",
+    ".data-table__surface { display: grid; gap: 1rem; }",
+    ".data-table__toolbar { display: flex; flex-wrap: wrap; gap: 1rem; align-items: end; justify-content: space-between; padding: 1rem 1rem 0; }",
+    ".data-table__status { display: flex; flex-wrap: wrap; gap: 0.85rem; align-items: center; justify-content: flex-end; color: #64748b; font-size: 0.9rem; }",
+    ".data-table__summary, .data-table__page-count { font-weight: 600; }",
+    ".data-table__search, .data-table__page-size-label { display: grid; gap: 0.45rem; color: #475569; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }",
+    ".data-table__search { flex: 1 1 260px; min-width: min(100%, 280px); }",
+    ".data-table__page-size-label { min-width: 8.5rem; }",
+    ".data-table__search input, .data-table__page-size-label select { margin-top: 0; }",
+    ".data-table__viewport { overflow-x: auto; }",
     ".data-table table { width: 100%; border-collapse: collapse; }",
     ".data-table th, .data-table td { padding: 0.9rem 1rem; text-align: left; vertical-align: top; border-bottom: 1px solid rgba(148, 163, 184, 0.18); word-break: break-word; }",
-    ".data-table th { font-size: 0.84rem; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; background: #f8fafc; }",
+    ".data-table th { position: sticky; top: 0; z-index: 1; font-size: 0.84rem; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; background: #f8fafc; }",
     ".data-table tbody tr:last-child td { border-bottom: 0; }",
+    ".data-table tbody tr:hover { background: rgba(248, 250, 252, 0.9); }",
+    ".data-table tbody tr[hidden] { display: none; }",
+    ".data-table__pagination { display: flex; flex-wrap: wrap; gap: 0.85rem; align-items: center; justify-content: space-between; padding: 0 1rem 1rem; }",
+    ".data-table__pagination-buttons { display: flex; flex-wrap: wrap; gap: 0.65rem; }",
+    ".data-table__pagination button { box-shadow: none; padding: 0.7rem 1rem; }",
+    ".data-table__pagination button[disabled] { opacity: 0.45; cursor: not-allowed; }",
+    ".data-table__empty-state { margin: 0; padding: 0 1rem 1rem; }",
     ".inline-link-list { display: flex; flex-wrap: wrap; gap: 0.7rem 1rem; margin: 0 0 1.25rem; color: #64748b; }",
     ".inline-link-list a { font-weight: 500; }",
     ".detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin: 0 0 1.5rem; }",
@@ -5946,6 +5995,13 @@ function renderLayout(input: {
     ".btn.public-theme-toggle { position: fixed; z-index: 1100; top: auto; right: auto; bottom: calc(1rem + env(safe-area-inset-bottom, 0px)); left: 1rem; margin: 0; display: inline-flex; align-items: center; gap: 0.55rem; border: 1px solid rgba(148, 163, 184, 0.32); background: rgba(255, 255, 255, 0.95); color: #1f2937; box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.15); }",
     ".public-theme-toggle__icon { display: inline-flex; align-items: center; justify-content: center; width: 1.2rem; height: 1.2rem; font-weight: 700; }",
     ".public-theme-toggle__label { font-size: 0.88rem; }",
+    "@media (hover: hover) and (pointer: fine) { .surface-block:hover, .summary-card:hover, .quick-link-card:hover, .detail-card:hover, .data-table:hover, .portal-card:hover, .blog-card:hover { transform: translateY(-2px); box-shadow: var(--theme-shadow-lg); border-color: rgba(148, 163, 184, 0.34); } }",
+    "html[data-bs-theme='dark'] .data-table { background: rgba(15, 23, 42, 0.92); border-color: rgba(148, 163, 184, 0.2); }",
+    "html[data-bs-theme='dark'] .data-table th { background: rgba(30, 41, 59, 0.94); color: #94a3b8; }",
+    "html[data-bs-theme='dark'] .data-table th, html[data-bs-theme='dark'] .data-table td { border-bottom-color: rgba(148, 163, 184, 0.14); }",
+    "html[data-bs-theme='dark'] .data-table tbody tr { background: rgba(15, 23, 42, 0.88); }",
+    "html[data-bs-theme='dark'] .data-table tbody tr:hover { background: rgba(30, 41, 59, 0.78); }",
+    "html[data-bs-theme='dark'] .data-table__search, html[data-bs-theme='dark'] .data-table__page-size-label, html[data-bs-theme='dark'] .data-table__status, html[data-bs-theme='dark'] .data-table__empty-state { color: #cbd5e1; }",
     "html[data-bs-theme='dark'] body { color: #e5e7eb; background: #0f172a; }",
     "html[data-bs-theme='dark'] h1, html[data-bs-theme='dark'] h2, html[data-bs-theme='dark'] h3, html[data-bs-theme='dark'] h4, html[data-bs-theme='dark'] h5, html[data-bs-theme='dark'] h6 { color: #f8fafc; }",
     "html[data-bs-theme='dark'] .site-header { background: rgba(15, 23, 42, 0.94); border-bottom-color: rgba(148, 163, 184, 0.18); }",
@@ -6110,6 +6166,7 @@ function renderLayout(input: {
     ".settings-current-value-panel { padding: 1rem 1.05rem; border-radius: 1rem; border: 1px solid rgba(148, 163, 184, 0.2); background: #f8fafc; margin-bottom: 0.8rem; }",
     ".settings-editor-shell .quick-link-card { box-shadow: none; }",
     "@media (max-width: 960px) { .app-layout, .app-layout.is-sidebar-collapsed, .auth-shell { grid-template-columns: 1fr; } .app-mobile-navbar { display: flex; } .app-sidebar { display: none; padding-top: 1rem; } .app-layout.is-sidebar-open .app-sidebar { display: block; } .app-main-shell { display: block; } .app-main-toolbar { display: none; } .app-main-content, .auth-main, .auth-shell__hero, .auth-shell__panel { padding: 1rem; } .navbar { flex-direction: column; align-items: flex-start; } .form-grid--two, .settings-shell, .settings-console__hero, .settings-detail-grid, .settings-card__meta-grid { grid-template-columns: 1fr; } .settings-sidebar { position: static; } .marketing-hero__grid, .about-panel__grid, .contact-panel__grid, .booking-shell__grid, .article-shell, .program-grid, .resource-grid, .process-grid, .story-grid, .testimonial-grid, .service-overview-grid, .featured-story__layout { grid-template-columns: 1fr; } .settings-console-toolbar, .settings-card__footer, .settings-detail-hero { align-items: stretch; } .public-cta-banner { flex-direction: column; align-items: flex-start; } .hero-media-frame { min-height: 280px; } .public-site-footer__inner { align-items: flex-start; } .public-social-slot--footer { justify-items: start; } }",
+    "@media (max-width: 767.98px) { .data-table__toolbar, .data-table__pagination { padding-left: 0.85rem; padding-right: 0.85rem; } .data-table__status { justify-content: flex-start; } .data-table thead { display: none; } .data-table table, .data-table tbody, .data-table tr, .data-table td { display: block; width: 100%; } .data-table tbody { display: grid; gap: 0.75rem; padding: 0.85rem; } .data-table tbody tr { overflow: hidden; border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 0.95rem; background: #fff; box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05); } .data-table tbody tr td { display: grid; grid-template-columns: minmax(0, 8rem) minmax(0, 1fr); gap: 0.75rem; align-items: start; } .data-table td::before { content: attr(data-label); font-size: 0.74rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #64748b; } .data-table td:last-child { border-bottom: 0; } }",
     "@media (max-width: 767.98px) { .btn.public-theme-toggle { right: 1rem; left: auto; bottom: calc(5rem + env(safe-area-inset-bottom, 0px)); } }",
     `${input.css ?? ""}`,
     "</style>",
@@ -10441,12 +10498,19 @@ return;
           return;
         }
 
-        if (url.pathname === "/portal/pets") {
-          const pets = await handlers.handlePortalPets(session);
-          if ("error" in pets.body) {
-            redirect(response, buildPortalLoginRedirectPath(request));
-            return;
-          }
+if (url.pathname === "/portal/pets") {
+const pets = await handlers.handlePortalPets(session);
+if ("error" in pets.body) {
+await handleProtectedRouteFailure({
+response,
+request,
+sessionStore: resolved.sessionStore,
+loginPath: buildPortalLoginRedirectPath(request),
+title: "Pets",
+result: pets
+});
+return;
+}
 
           writeHtml(response, 200, renderLayout({
             title: "Pets",
@@ -10676,12 +10740,19 @@ return;
           return;
         }
 
-        if (url.pathname === "/portal/achievements") {
-          const achievements = await handlers.handlePortalAchievements(session);
-          if ("error" in achievements.body) {
-            redirect(response, buildPortalLoginRedirectPath(request));
-            return;
-          }
+if (url.pathname === "/portal/achievements") {
+const achievements = await handlers.handlePortalAchievements(session);
+if ("error" in achievements.body) {
+await handleProtectedRouteFailure({
+response,
+request,
+sessionStore: resolved.sessionStore,
+loginPath: buildPortalLoginRedirectPath(request),
+title: "Achievements",
+result: achievements
+});
+return;
+}
 
           writeHtml(response, 200, renderLayout({
             title: "Achievements",
@@ -10771,12 +10842,19 @@ return;
           return;
         }
 
-        if (url.pathname === "/portal/invoices") {
-          const invoices = await handlers.handlePortalInvoices(session);
-          if ("error" in invoices.body) {
-            redirect(response, buildPortalLoginRedirectPath(request));
-            return;
-          }
+if (url.pathname === "/portal/invoices") {
+const invoices = await handlers.handlePortalInvoices(session);
+if ("error" in invoices.body) {
+await handleProtectedRouteFailure({
+response,
+request,
+sessionStore: resolved.sessionStore,
+loginPath: buildPortalLoginRedirectPath(request),
+title: "Invoices",
+result: invoices
+});
+return;
+}
 
           writeHtml(response, 200, renderLayout({
             title: "Invoices",
@@ -10858,12 +10936,19 @@ return;
           return;
         }
 
-        if (url.pathname === "/portal/quotes") {
-          const quotes = await handlers.handlePortalQuotes(session);
-          if ("error" in quotes.body) {
-            redirect(response, buildPortalLoginRedirectPath(request));
-            return;
-          }
+if (url.pathname === "/portal/quotes") {
+const quotes = await handlers.handlePortalQuotes(session);
+if ("error" in quotes.body) {
+await handleProtectedRouteFailure({
+response,
+request,
+sessionStore: resolved.sessionStore,
+loginPath: buildPortalLoginRedirectPath(request),
+title: "Quotes",
+result: quotes
+});
+return;
+}
 
           writeHtml(response, 200, renderLayout({
             title: "Quotes",
@@ -10941,12 +11026,19 @@ return;
           return;
         }
 
-        if (url.pathname === "/portal/contracts") {
-          const contracts = await handlers.handlePortalContracts(session);
-          if ("error" in contracts.body) {
-            redirect(response, buildPortalLoginRedirectPath(request));
-            return;
-          }
+if (url.pathname === "/portal/contracts") {
+const contracts = await handlers.handlePortalContracts(session);
+if ("error" in contracts.body) {
+await handleProtectedRouteFailure({
+response,
+request,
+sessionStore: resolved.sessionStore,
+loginPath: buildPortalLoginRedirectPath(request),
+title: "Contracts",
+result: contracts
+});
+return;
+}
 
           writeHtml(response, 200, renderLayout({
             title: "Contracts",
@@ -11022,12 +11114,19 @@ return;
           return;
         }
 
-        if (url.pathname === "/portal/forms") {
-          const forms = await handlers.handlePortalForms(session);
-          if ("error" in forms.body) {
-            redirect(response, buildPortalLoginRedirectPath(request));
-            return;
-          }
+if (url.pathname === "/portal/forms") {
+const forms = await handlers.handlePortalForms(session);
+if ("error" in forms.body) {
+await handleProtectedRouteFailure({
+response,
+request,
+sessionStore: resolved.sessionStore,
+loginPath: buildPortalLoginRedirectPath(request),
+title: "Forms",
+result: forms
+});
+return;
+}
 
           writeHtml(response, 200, renderLayout({
             title: "Forms",
@@ -11067,12 +11166,19 @@ return;
           return;
         }
 
-        if (url.pathname === "/portal/notifications") {
-          const notifications = await handlers.handlePortalNotifications(session);
-          if ("error" in notifications.body) {
-            redirect(response, buildPortalLoginRedirectPath(request));
-            return;
-          }
+if (url.pathname === "/portal/notifications") {
+const notifications = await handlers.handlePortalNotifications(session);
+if ("error" in notifications.body) {
+await handleProtectedRouteFailure({
+response,
+request,
+sessionStore: resolved.sessionStore,
+loginPath: buildPortalLoginRedirectPath(request),
+title: "Notifications",
+result: notifications
+});
+return;
+}
 
           writeHtml(response, 200, renderLayout({
             title: "Notifications",
@@ -11586,12 +11692,19 @@ return;
           return;
         }
 
-        if (url.pathname === "/admin/clients") {
-          const clients = await handlers.handleAdminClients(session);
-          if ("error" in clients.body) {
-            redirect(response, buildAdminLoginRedirectPath(request));
-            return;
-          }
+if (url.pathname === "/admin/clients") {
+const clients = await handlers.handleAdminClients(session);
+if ("error" in clients.body) {
+await handleProtectedRouteFailure({
+response,
+request,
+sessionStore: resolved.sessionStore,
+loginPath: buildAdminLoginRedirectPath(request),
+title: "Admin Clients",
+result: clients
+});
+return;
+}
 
           writeHtml(response, 200, renderLayout({
             title: "Admin Clients",
@@ -11634,13 +11747,20 @@ return;
           return;
         }
 
-        if (adminClientProfileMatch != null) {
-          const clientId = decodeURIComponent(adminClientProfileMatch[1] ?? "");
-          const profile = await handlers.handleAdminClientProfile(session, clientId);
-          if ("error" in profile.body) {
-            redirect(response, buildAdminLoginRedirectPath(request));
-            return;
-          }
+if (adminClientProfileMatch != null) {
+const clientId = decodeURIComponent(adminClientProfileMatch[1] ?? "");
+const profile = await handlers.handleAdminClientProfile(session, clientId);
+if ("error" in profile.body) {
+await handleProtectedRouteFailure({
+response,
+request,
+sessionStore: resolved.sessionStore,
+loginPath: buildAdminLoginRedirectPath(request),
+title: "Client Profile",
+result: profile
+});
+return;
+}
 
           writeHtml(response, 200, renderLayout({
             title: "Client Profile",
@@ -11685,13 +11805,20 @@ return;
           return;
         }
 
-        if (adminClientContactsMatch != null) {
-          const clientId = decodeURIComponent(adminClientContactsMatch[1] ?? "");
-          const contacts = await handlers.handleAdminClientContacts(session, clientId);
-          if ("error" in contacts.body) {
-            redirect(response, buildAdminLoginRedirectPath(request));
-            return;
-          }
+if (adminClientContactsMatch != null) {
+const clientId = decodeURIComponent(adminClientContactsMatch[1] ?? "");
+const contacts = await handlers.handleAdminClientContacts(session, clientId);
+if ("error" in contacts.body) {
+await handleProtectedRouteFailure({
+response,
+request,
+sessionStore: resolved.sessionStore,
+loginPath: buildAdminLoginRedirectPath(request),
+title: "Client Contacts",
+result: contacts
+});
+return;
+}
 
           writeHtml(response, 200, renderLayout({
             title: "Client Contacts",
@@ -11781,13 +11908,20 @@ return;
           return;
         }
 
-        if (adminClientAchievementsMatch != null) {
-          const clientId = decodeURIComponent(adminClientAchievementsMatch[1] ?? "");
-          const achievements = await handlers.handleAdminClientAchievements(session, clientId);
-          if ("error" in achievements.body) {
-            redirect(response, buildAdminLoginRedirectPath(request));
-            return;
-          }
+if (adminClientAchievementsMatch != null) {
+const clientId = decodeURIComponent(adminClientAchievementsMatch[1] ?? "");
+const achievements = await handlers.handleAdminClientAchievements(session, clientId);
+if ("error" in achievements.body) {
+await handleProtectedRouteFailure({
+response,
+request,
+sessionStore: resolved.sessionStore,
+loginPath: buildAdminLoginRedirectPath(request),
+title: "Client Achievements",
+result: achievements
+});
+return;
+}
 
           writeHtml(response, 200, renderLayout({
             title: "Client Achievements",
@@ -12293,12 +12427,19 @@ return;
           return;
         }
 
-        if (url.pathname === "/admin/pets") {
-          const pets = await handlers.handleAdminPets(session);
-          if ("error" in pets.body) {
-            redirect(response, buildAdminLoginRedirectPath(request));
-            return;
-          }
+if (url.pathname === "/admin/pets") {
+const pets = await handlers.handleAdminPets(session);
+if ("error" in pets.body) {
+await handleProtectedRouteFailure({
+response,
+request,
+sessionStore: resolved.sessionStore,
+loginPath: buildAdminLoginRedirectPath(request),
+title: "Admin Pets",
+result: pets
+});
+return;
+}
 
           writeHtml(response, 200, renderLayout({
             title: "Admin Pets",
@@ -12530,12 +12671,19 @@ return;
           return;
         }
 
-        if (url.pathname === "/admin/achievement-types") {
-          const types = await handlers.handleAdminAchievementTypes(session);
-          if ("error" in types.body) {
-            redirect(response, buildAdminLoginRedirectPath(request));
-            return;
-          }
+if (url.pathname === "/admin/achievement-types") {
+const types = await handlers.handleAdminAchievementTypes(session);
+if ("error" in types.body) {
+await handleProtectedRouteFailure({
+response,
+request,
+sessionStore: resolved.sessionStore,
+loginPath: buildAdminLoginRedirectPath(request),
+title: "Achievement Types",
+result: types
+});
+return;
+}
 
           writeHtml(response, 200, renderLayout({
             title: "Achievement Types",
@@ -12602,12 +12750,19 @@ return;
           return;
         }
 
-        if (url.pathname === "/admin/blog-posts" || legacyBlogListPath || (legacyBlogEditPath && legacyBlogPostId === "")) {
-          const posts = await handlers.handleAdminBlogPosts(session);
-          if ("error" in posts.body) {
-            redirect(response, buildAdminLoginRedirectPath(request));
-            return;
-          }
+if (url.pathname === "/admin/blog-posts" || legacyBlogListPath || (legacyBlogEditPath && legacyBlogPostId === "")) {
+const posts = await handlers.handleAdminBlogPosts(session);
+if ("error" in posts.body) {
+await handleProtectedRouteFailure({
+response,
+request,
+sessionStore: resolved.sessionStore,
+loginPath: buildAdminLoginRedirectPath(request),
+title: "Admin Blog Posts",
+result: posts
+});
+return;
+}
           const useLegacyBlogPaths = legacyBlogListPath || legacyBlogEditPath;
 
           writeHtml(response, 200, renderLayout({
@@ -12694,12 +12849,19 @@ return;
           return;
         }
 
-        if (url.pathname === "/admin/site-pages" || legacySitePagesListPath) {
-          const pages = await handlers.handleAdminSitePages(session);
-          if ("error" in pages.body) {
-            redirect(response, buildAdminLoginRedirectPath(request));
-            return;
-          }
+if (url.pathname === "/admin/site-pages" || legacySitePagesListPath) {
+const pages = await handlers.handleAdminSitePages(session);
+if ("error" in pages.body) {
+await handleProtectedRouteFailure({
+response,
+request,
+sessionStore: resolved.sessionStore,
+loginPath: buildAdminLoginRedirectPath(request),
+title: "Admin Site Pages",
+result: pages
+});
+return;
+}
           const sitePageCreateAction = legacySitePagesListPath ? "/client/site_pages_list.php" : "/admin/site-pages";
 
           writeHtml(response, 200, renderLayout({
@@ -12832,12 +12994,19 @@ return;
           return;
         }
 
-        if (url.pathname === "/admin/workflows" || legacyWorkflowListPath || (legacyWorkflowEditPath && legacyWorkflowId === "")) {
-          const workflows = await handlers.handleAdminWorkflows(session);
-          if ("error" in workflows.body) {
-            redirect(response, buildAdminLoginRedirectPath(request));
-            return;
-          }
+if (url.pathname === "/admin/workflows" || legacyWorkflowListPath || (legacyWorkflowEditPath && legacyWorkflowId === "")) {
+const workflows = await handlers.handleAdminWorkflows(session);
+if ("error" in workflows.body) {
+await handleProtectedRouteFailure({
+response,
+request,
+sessionStore: resolved.sessionStore,
+loginPath: buildAdminLoginRedirectPath(request),
+title: "Admin Workflows",
+result: workflows
+});
+return;
+}
 
           const workflowItems = workflows.body.items;
           const useLegacyWorkflowPaths = legacyWorkflowListPath || legacyWorkflowEditPath;
@@ -13390,12 +13559,19 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
           }
 
-        if (url.pathname === "/admin/appointment-types" || url.pathname === "/client/appointment_types_list.php") {
-          const appointmentTypes = await handlers.handleAdminAppointmentTypes(session);
-          if ("error" in appointmentTypes.body) {
-            redirect(response, buildAdminLoginRedirectPath(request));
-            return;
-          }
+if (url.pathname === "/admin/appointment-types" || url.pathname === "/client/appointment_types_list.php") {
+const appointmentTypes = await handlers.handleAdminAppointmentTypes(session);
+if ("error" in appointmentTypes.body) {
+await handleProtectedRouteFailure({
+response,
+request,
+sessionStore: resolved.sessionStore,
+loginPath: buildAdminLoginRedirectPath(request),
+title: "Admin Appointment Types",
+result: appointmentTypes
+});
+return;
+}
           const legacyAppointmentTypeListPath = url.pathname === "/client/appointment_types_list.php";
 
           writeHtml(response, 200, renderLayout({
@@ -13477,14 +13653,32 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         if (url.pathname === "/admin/form-templates" || legacyFormTemplateListPath) {
-          const [formTemplates, appointmentTypes] = await Promise.all([
-            handlers.handleAdminFormTemplates(session),
-            handlers.handleAdminAppointmentTypes(session)
-          ]);
-          if ("error" in formTemplates.body || "error" in appointmentTypes.body) {
-            redirect(response, buildAdminLoginRedirectPath(request));
-            return;
-          }
+const [formTemplates, appointmentTypes] = await Promise.all([
+handlers.handleAdminFormTemplates(session),
+handlers.handleAdminAppointmentTypes(session)
+]);
+if ("error" in formTemplates.body) {
+await handleProtectedRouteFailure({
+response,
+request,
+sessionStore: resolved.sessionStore,
+loginPath: buildAdminLoginRedirectPath(request),
+title: "Admin Form Templates",
+result: formTemplates
+});
+return;
+}
+if ("error" in appointmentTypes.body) {
+await handleProtectedRouteFailure({
+response,
+request,
+sessionStore: resolved.sessionStore,
+loginPath: buildAdminLoginRedirectPath(request),
+title: "Admin Form Templates",
+result: appointmentTypes
+});
+return;
+}
 
           const typeFilter = url.searchParams.get("type") ?? "all";
           const filteredTemplates = filterAdminFormTemplates(formTemplates.body.items, typeFilter);
@@ -13563,10 +13757,17 @@ document.addEventListener("DOMContentLoaded", () => {
             redirect(response, legacyFormTemplateEditPath ? "/client/form_templates_list.php" : "/admin/form-templates");
             return;
           }
-          if ("error" in appointmentTypes.body) {
-            redirect(response, buildAdminLoginRedirectPath(request));
-            return;
-          }
+if ("error" in appointmentTypes.body) {
+await handleProtectedRouteFailure({
+response,
+request,
+sessionStore: resolved.sessionStore,
+loginPath: buildAdminLoginRedirectPath(request),
+title: "Admin Form Template",
+result: appointmentTypes
+});
+return;
+}
 
           const formTemplateItem = formTemplate.body.item;
           const appointmentTypeName = formTemplateItem.appointmentTypeId == null
@@ -13627,12 +13828,19 @@ document.addEventListener("DOMContentLoaded", () => {
           return;
         }
 
-        if (legacyFormTemplateEditPath) {
-          const appointmentTypes = await handlers.handleAdminAppointmentTypes(session);
-          if ("error" in appointmentTypes.body) {
-            redirect(response, buildAdminLoginRedirectPath(request));
-            return;
-          }
+if (legacyFormTemplateEditPath) {
+const appointmentTypes = await handlers.handleAdminAppointmentTypes(session);
+if ("error" in appointmentTypes.body) {
+await handleProtectedRouteFailure({
+response,
+request,
+sessionStore: resolved.sessionStore,
+loginPath: buildAdminLoginRedirectPath(request),
+title: "Admin Form Template",
+result: appointmentTypes
+});
+return;
+}
 
           const internalAccess = url.searchParams.get("access") === "internal";
           const action = internalAccess ? "/client/form_templates_edit.php?access=internal" : "/client/form_templates_edit.php";
@@ -13660,11 +13868,18 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         if (url.pathname === "/admin/email-templates" || url.pathname === "/client/email_templates_list.php") {
-          const emailTemplates = await handlers.handleAdminEmailTemplates(session);
-          if ("error" in emailTemplates.body) {
-            redirect(response, buildAdminLoginRedirectPath(request));
-            return;
-          }
+const emailTemplates = await handlers.handleAdminEmailTemplates(session);
+if ("error" in emailTemplates.body) {
+await handleProtectedRouteFailure({
+response,
+request,
+sessionStore: resolved.sessionStore,
+loginPath: buildAdminLoginRedirectPath(request),
+title: "Admin Email Templates",
+result: emailTemplates
+});
+return;
+}
           const legacyEmailTemplateListPath = url.pathname === "/client/email_templates_list.php";
 
           writeHtml(response, 200, renderLayout({
@@ -13732,12 +13947,19 @@ document.addEventListener("DOMContentLoaded", () => {
           return;
         }
 
-        if (url.pathname === "/admin/scheduled-tasks" || url.pathname === "/client/scheduled_tasks_list.php") {
-          const scheduledTasks = await handlers.handleAdminScheduledTasks(session);
-          if ("error" in scheduledTasks.body) {
-            redirect(response, buildAdminLoginRedirectPath(request));
-            return;
-          }
+if (url.pathname === "/admin/scheduled-tasks" || url.pathname === "/client/scheduled_tasks_list.php") {
+const scheduledTasks = await handlers.handleAdminScheduledTasks(session);
+if ("error" in scheduledTasks.body) {
+await handleProtectedRouteFailure({
+response,
+request,
+sessionStore: resolved.sessionStore,
+loginPath: buildAdminLoginRedirectPath(request),
+title: "Admin Scheduled Tasks",
+result: scheduledTasks
+});
+return;
+}
 
           writeHtml(response, 200, renderLayout({
             title: "Admin Scheduled Tasks",
@@ -13803,12 +14025,19 @@ document.addEventListener("DOMContentLoaded", () => {
           return;
         }
 
-        if (url.pathname === "/admin/operations/jobs") {
-          const jobs = await handlers.handleAdminJobLogs(session);
-          if ("error" in jobs.body) {
-            redirect(response, buildAdminLoginRedirectPath(request));
-            return;
-          }
+if (url.pathname === "/admin/operations/jobs") {
+const jobs = await handlers.handleAdminJobLogs(session);
+if ("error" in jobs.body) {
+await handleProtectedRouteFailure({
+response,
+request,
+sessionStore: resolved.sessionStore,
+loginPath: buildAdminLoginRedirectPath(request),
+title: "Admin Job Logs",
+result: jobs
+});
+return;
+}
 
           writeHtml(response, 200, renderLayout({
             title: "Admin Job Logs",
@@ -13873,12 +14102,19 @@ document.addEventListener("DOMContentLoaded", () => {
           return;
         }
 
-        if (url.pathname === "/admin/operations/callbacks") {
-          const callbacks = await handlers.handleAdminIntegrationCallbackLogs(session);
-          if ("error" in callbacks.body) {
-            redirect(response, buildAdminLoginRedirectPath(request));
-            return;
-          }
+if (url.pathname === "/admin/operations/callbacks") {
+const callbacks = await handlers.handleAdminIntegrationCallbackLogs(session);
+if ("error" in callbacks.body) {
+await handleProtectedRouteFailure({
+response,
+request,
+sessionStore: resolved.sessionStore,
+loginPath: buildAdminLoginRedirectPath(request),
+title: "Admin Callback Logs",
+result: callbacks
+});
+return;
+}
 
           writeHtml(response, 200, renderLayout({
             title: "Admin Callback Logs",
@@ -13997,12 +14233,19 @@ document.addEventListener("DOMContentLoaded", () => {
           return;
         }
 
-        if (url.pathname === "/admin/forms" || legacyFormSubmissionsListPath) {
-          const forms = await handlers.handleAdminForms(session);
-          if ("error" in forms.body) {
-            redirect(response, buildAdminLoginRedirectPath(request));
-            return;
-          }
+if (url.pathname === "/admin/forms" || legacyFormSubmissionsListPath) {
+const forms = await handlers.handleAdminForms(session);
+if ("error" in forms.body) {
+await handleProtectedRouteFailure({
+response,
+request,
+sessionStore: resolved.sessionStore,
+loginPath: buildAdminLoginRedirectPath(request),
+title: "Admin Forms",
+result: forms
+});
+return;
+}
 
           const clientFilter = url.searchParams.get("client_id")?.trim() ?? "";
           const templateFilter = url.searchParams.get("template_id")?.trim() ?? "";
