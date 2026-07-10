@@ -100,9 +100,63 @@ describe("content api handlers", () => {
     expect(blogPosts.body.items).toHaveLength(1);
     expect(blogPosts.body.items[0]?.slug).toBe("loose-leash-training-tips");
     expect(blogPost.body.item.title).toBe("Loose Leash Training Tips");
-    expect(homepage.body.item.isHomepage).toBe(true);
-    expect(servicesPage.body.item.slug).toBe("services");
-  });
+ expect(homepage.body.item.isHomepage).toBe(true);
+ expect(servicesPage.body.item.slug).toBe("services");
+ });
+
+ it("accepts Date timestamps from persisted public content records", async () => {
+ const state = createInMemoryPlatformState({
+ blogPosts: [
+ {
+ id: "blog-1",
+ title: "Loose Leash Training Tips",
+ slug: "loose-leash-training-tips",
+ content: "<p>Walks start before leash clips on.</p>",
+ excerpt: "Walks start before leash clips on.",
+ coverPhoto: "/images/blog/loose-leash.jpg",
+ author: "Brook",
+ published: true,
+ publishDate: new Date("2026-05-28T15:00:00.000Z") as unknown as string,
+ createdAt: new Date("2026-05-20T10:00:00.000Z") as unknown as string,
+ updatedAt: new Date("2026-05-28T15:00:00.000Z") as unknown as string
+ }
+ ],
+ sitePages: [
+ {
+ id: "page-home",
+ slug: "home",
+ title: "Brook's Dog Training Academy",
+ htmlContent: "<section><h1>Train the dog in front of you.</h1></section>",
+ cssContent: "",
+ metaDescription: "Private lessons and board-and-train programs.",
+ metaKeywords: "dog training, obedience",
+ ogTitle: "BDTA Home",
+ ogDescription: "Dog training for real family life.",
+ ogImage: "/images/og/home.jpg",
+ isHomepage: true,
+ published: true,
+ sortOrder: 1,
+ updatedByAdminUserId: "admin-1",
+ createdAt: new Date("2026-05-01T10:00:00.000Z") as unknown as string,
+ updatedAt: new Date("2026-05-28T12:00:00.000Z") as unknown as string
+ }
+ ]
+ });
+
+ const handlers = createApiHandlers(createInMemoryApiDependencies(state));
+ const blogPosts = await handlers.handlePublicBlogPosts();
+ const homepage = await handlers.handlePublicSitePage(null);
+
+ expect(blogPosts.status).toBe(200);
+ expect(homepage.status).toBe(200);
+
+ if ("error" in blogPosts.body || "error" in homepage.body) {
+ throw new Error("Expected successful public content responses for Date-backed timestamps.");
+ }
+
+ expect(blogPosts.body.items[0]?.createdAt).toBe("2026-05-20T10:00:00.000Z");
+ expect(homepage.body.item.updatedAt).toBe("2026-05-28T12:00:00.000Z");
+ });
 
   it("returns and updates admin content and settings for a valid admin session", async () => {
     const state = createInMemoryPlatformState({

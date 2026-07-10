@@ -2092,6 +2092,35 @@ describe("api handlers", () => {
     expect(result.body).toEqual({ success: true });
   });
 
+  it("returns field-level details for invalid request payloads", async () => {
+    const handlers = createApiHandlers(createApiDependencies());
+
+    const result = await handlers.handlePublicBooking({
+      serviceId: "",
+      clientEmail: "not-an-email",
+      petIds: [],
+      requestedStart: "not-a-date",
+      requestedEnd: "",
+      turnstileToken: ""
+    });
+
+    expect(result.status).toBe(400);
+    if (!("error" in result.body)) {
+      throw new Error("Expected invalid public booking response.");
+    }
+    expect(result.body.error.code).toBe("invalid_request");
+    expect(result.body.error.message).toContain("serviceId");
+    expect(result.body.error.message).toContain("clientEmail");
+    expect(result.body.error).toMatchObject({
+      details: {
+        issues: expect.arrayContaining([
+          expect.objectContaining({ path: "serviceId" }),
+          expect.objectContaining({ path: "clientEmail" })
+        ])
+      }
+    });
+  });
+
   it("maps public contact captcha failures to 400 responses", async () => {
     const handlers = createApiHandlers(createApiDependencies({
       publicContact: createPublicContactDependencies({

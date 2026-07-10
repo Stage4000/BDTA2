@@ -1528,6 +1528,49 @@ function renderDataTable(input: {
   ].join("");
 }
 
+function renderEnhancedCollection(input: {
+  collectionClassName: string;
+  items: Array<{
+    content: string;
+    searchText: string;
+  }>;
+  emptyMessage: string;
+  searchLabel: string;
+  searchPlaceholder: string;
+  defaultPageSize?: number;
+  pageSizeOptions?: number[];
+}): string {
+  if (input.items.length === 0) {
+    return `<p>${escapeHtml(input.emptyMessage)}</p>`;
+  }
+
+  const pageSizeOptions = input.pageSizeOptions == null || input.pageSizeOptions.length === 0
+    ? [6, 12, 24]
+    : input.pageSizeOptions;
+  const defaultPageSize = pageSizeOptions.includes(input.defaultPageSize ?? 0)
+    ? input.defaultPageSize ?? pageSizeOptions[0] ?? 6
+    : pageSizeOptions[0] ?? 6;
+
+  return [
+    `<div class="enhanced-collection" data-enhanced-collection data-empty-message="${escapeAttribute(input.emptyMessage)}" data-default-page-size="${escapeAttribute(String(defaultPageSize))}">`,
+    '<div class="enhanced-collection__toolbar" data-enhanced-collection-toolbar hidden>',
+    `<label class="enhanced-collection__search"><span>${escapeHtml(input.searchLabel)}</span><input type="search" data-enhanced-collection-search placeholder="${escapeAttribute(input.searchPlaceholder)}" autocomplete="off" inputmode="search"></label>`,
+    '<div class="enhanced-collection__status">',
+    '<span class="enhanced-collection__summary" data-enhanced-collection-summary aria-live="polite"></span>',
+    '<label class="enhanced-collection__page-size-label"><span>Cards per page</span><select data-enhanced-collection-page-size>',
+    pageSizeOptions.map((size) => `<option value="${size}"${size === defaultPageSize ? " selected" : ""}>${size}</option>`).join(""),
+    "</select></label>",
+    "</div>",
+    "</div>",
+    `<div class="${escapeAttribute(input.collectionClassName)}" data-enhanced-collection-grid>`,
+    input.items.map((item) => `<div data-enhanced-collection-item data-search="${escapeAttribute(item.searchText)}">${item.content}</div>`).join(""),
+    "</div>",
+    '<div class="enhanced-collection__pagination" data-enhanced-collection-pagination hidden><span class="enhanced-collection__page-count" data-enhanced-collection-page-count aria-live="polite"></span><div class="enhanced-collection__pagination-buttons"><button type="button" data-enhanced-collection-prev>Previous</button><button type="button" data-enhanced-collection-next>Next</button></div></div>',
+    '<p class="meta enhanced-collection__empty-state" data-enhanced-collection-empty hidden>No matching items.</p>',
+    "</div>"
+  ].join("");
+}
+
 function renderSectionIntro(input: {
   eyebrow: string;
   title: string;
@@ -1986,44 +2029,32 @@ function renderAdminSettingsUsersSection(model: SettingsConsoleViewModel): strin
     '<section class="surface-block">',
     '<p class="eyebrow">Access Matrix</p>',
     '<h3>Existing Admin Accounts</h3>',
-    '<div class="data-table">',
-    "<table>",
-    "<thead><tr><th>Admin User</th><th>Account Type</th><th>Permissions</th><th>Actions</th></tr></thead>",
-    "<tbody>",
-    model.adminUsers.map((user) => {
-      const canEditPermissions = model.currentAdmin.isMainAccount && !user.isMainAccount && user.accountType !== "accountant";
-      const canDeleteUser = canManageAdminUsers && !user.isMainAccount && user.actorId !== model.currentAdmin.actorId;
+    renderDataTable({
+      headers: ["Admin User", "Account Type", "Permissions", "Actions"],
+      rows: model.adminUsers.map((user) => {
+        const canEditPermissions = model.currentAdmin.isMainAccount && !user.isMainAccount && user.accountType !== "accountant";
+        const canDeleteUser = canManageAdminUsers && !user.isMainAccount && user.actorId !== model.currentAdmin.actorId;
 
-      return [
-        "<tr>",
-        `<td><strong>${escapeHtml(user.username)}</strong><div class="meta">${escapeHtml(user.email)}</div></td>`,
-        `<td>${[
-          user.isMainAccount ? renderStatusPill("Main Account", "success") : "",
-          renderStatusPill(formatSettingCategoryLabel(user.accountType), user.accountType === "accountant" ? "info" : "default")
-        ].join("")}</td>`,
-        `<td>${user.isMainAccount
-          ? '<div class="settings-badge-row">' + renderStatusPill("Manage Admin Users", "success") + renderStatusPill("API-Key Access", "success") + "</div>"
-          : user.accountType === "accountant"
-            ? '<div class="settings-badge-row">' + renderStatusPill("Read-only Accounting", "info") + renderStatusPill("Fixed Access", "default") + "</div>"
-            : canEditPermissions
-              ? [
-                `<form class="settings-inline-form" method="post" action="/admin/settings/admin-users/${encodeURIComponent(user.actorId)}/permissions">`,
-                `<label><input type="checkbox" name="canManageAdminUsers"${user.canManageAdminUsers ? " checked" : ""}> Manage admin users</label>`,
-                `<label><input type="checkbox" name="canManageApiKeys"${user.canManageApiKeys ? " checked" : ""}> Access API-key settings</label>`,
-                '<button type="submit">Save Permissions</button>',
-                "</form>"
-              ].join("")
-              : '<div class="settings-badge-row">' + renderStatusPill(user.canManageAdminUsers ? "Manages Admins" : "No Admin Control", user.canManageAdminUsers ? "success" : "default") + renderStatusPill(user.canManageApiKeys ? "API-Key Access" : "Restricted Keys", user.canManageApiKeys ? "success" : "warning") + "</div>"
-        }</td>`,
-        `<td>${canDeleteUser
-          ? `<form method="post" action="/admin/settings/admin-users/${encodeURIComponent(user.actorId)}/delete" onsubmit="return confirm('Delete this admin user? Their booking and appointment assignments will be cleared.');"><button type="submit">Delete</button></form>`
-          : '<span class="meta">No changes available</span>'}</td>`,
-        "</tr>"
-      ].join("");
-    }).join(""),
-    "</tbody>",
-    "</table>",
-    "</div>",
+        return [
+          `<strong>${escapeHtml(user.username)}</strong><div class="meta">${escapeHtml(user.email)}</div>`,
+          [
+            user.isMainAccount ? renderStatusPill("Main Account", "success") : "",
+            renderStatusPill(formatSettingCategoryLabel(user.accountType), user.accountType === "accountant" ? "info" : "default")
+          ].join(""),
+          user.isMainAccount
+            ? '<div class="settings-badge-row">' + renderStatusPill("Manage Admin Users", "success") + renderStatusPill("API-Key Access", "success") + "</div>"
+            : user.accountType === "accountant"
+              ? '<div class="settings-badge-row">' + renderStatusPill("Read-only Accounting", "info") + renderStatusPill("Fixed Access", "default") + "</div>"
+              : canEditPermissions
+                ? `<form class="settings-inline-permissions" method="post" action="/admin/settings/admin-users/${encodeURIComponent(user.actorId)}/permissions"><label><input type="checkbox" name="canManageAdminUsers" value="1"${user.canManageAdminUsers ? " checked" : ""}> Manage Admin Users</label><label><input type="checkbox" name="canManageApiKeys" value="1"${user.canManageApiKeys ? " checked" : ""}> API-Key Access</label><button type="submit">Save Permissions</button></form>`
+                : '<div class="settings-badge-row">' + renderStatusPill(user.canManageAdminUsers ? "Manages Admins" : "No Admin Control", user.canManageAdminUsers ? "success" : "default") + renderStatusPill(user.canManageApiKeys ? "API-Key Access" : "Restricted Keys", user.canManageApiKeys ? "success" : "warning") + "</div>",
+          canDeleteUser
+            ? `<form method="post" action="/admin/settings/admin-users/${encodeURIComponent(user.actorId)}/delete" onsubmit="return confirm('Delete admin user? Existing booking and appointment assignments will be cleared.');"><button type="submit">Delete</button></form>`
+            : '<span class="meta">No changes available</span>'
+        ];
+      }),
+      emptyMessage: "No admin users are configured yet."
+    }),
     "</section>"
   ].join("");
 }
@@ -2321,7 +2352,7 @@ function renderSettingsConsole(model: SettingsConsoleViewModel): string {
     '<div class="settings-shell__content">',
     renderSettingsNotice(model.notice),
     selectedCategory === "admins"
-      ? renderAdminSettingsUsersSection(model)
+        ? renderAdminSettingsUsersSection(model)
       : selectedCategory === "database"
         ? renderRuntimeEnvironmentSettingsPanel({
           currentAdmin: model.currentAdmin,
@@ -3061,16 +3092,16 @@ function renderLegacyQuoteItemsTable(items: Quote["items"] | undefined): string 
     return '<p class="section-copy">No quote line items are currently attached to this proposal.</p>';
   }
 
-  return [
-    '<div class="data-table">',
-    "<table>",
-    "<thead><tr><th>Description</th><th>Qty</th><th>Unit Price</th><th>Amount</th></tr></thead>",
-    "<tbody>",
-    items.map((item) => `<tr><td>${escapeHtml(item.description)}</td><td>${escapeHtml(String(item.quantity))}</td><td>${escapeHtml(formatCurrency(item.unitPrice))}</td><td>${escapeHtml(formatCurrency(item.amount))}</td></tr>`).join(""),
-    "</tbody>",
-    "</table>",
-    "</div>"
-  ].join("");
+  return renderDataTable({
+    headers: ["Description", "Qty", "Unit Price", "Amount"],
+    rows: items.map((item) => [
+      escapeHtml(item.description),
+      escapeHtml(String(item.quantity)),
+      escapeHtml(formatCurrency(item.unitPrice)),
+      escapeHtml(formatCurrency(item.amount))
+    ]),
+    emptyMessage: "No quote line items are currently attached to this proposal."
+  });
 }
 
 function renderLegacyPublicQuoteDetailPage(input: {
@@ -4473,13 +4504,29 @@ function renderPublicBlogIndexPage(posts: Array<{
         ].join(""),
     '<section class="public-section">',
     '<div class="section-heading"><p class="eyebrow">Recent Posts</p><h2>Keep the approach consistent between sessions.</h2></div>',
-    `<div class="story-grid">${posts.map((post) => [
-      '<article class="blog-card story-card">',
-      `<p class="meta">${escapeHtml(post.author)}${post.publishDate ? ` | ${escapeHtml(post.publishDate.slice(0, 10))}` : ""}</p>`,
-      `<h3><a href="/blog/${encodeURIComponent(post.slug)}">${escapeHtml(post.title)}</a></h3>`,
-      `<p>${escapeHtml(post.excerpt)}</p>`,
-      "</article>"
-    ].join("")).join("")}</div>`,
+    renderEnhancedCollection({
+      collectionClassName: "story-grid",
+      items: posts.map((post) => ({
+        content: [
+          '<article class="blog-card story-card">',
+          `<p class="meta">${escapeHtml(post.author)}${post.publishDate ? ` | ${escapeHtml(post.publishDate.slice(0, 10))}` : ""}</p>`,
+          `<h3><a href="/blog/${encodeURIComponent(post.slug)}">${escapeHtml(post.title)}</a></h3>`,
+          `<p>${escapeHtml(post.excerpt)}</p>`,
+          "</article>"
+        ].join(""),
+        searchText: [
+          post.title,
+          post.author,
+          post.excerpt,
+          post.publishDate == null ? "" : post.publishDate.slice(0, 10)
+        ].filter((value) => value.trim() !== "").join(" ")
+      })),
+      emptyMessage: "Blog posts are on the way.",
+      searchLabel: "Search posts",
+      searchPlaceholder: "Search posts by title, topic, or trainer",
+      defaultPageSize: 6,
+      pageSizeOptions: [3, 6, 9, 12]
+    }),
     "</section>",
     "</div>"
   ].join("");
@@ -5950,6 +5997,19 @@ function renderLayout(input: {
     ".data-table__pagination button { box-shadow: none; padding: 0.7rem 1rem; }",
     ".data-table__pagination button[disabled] { opacity: 0.45; cursor: not-allowed; }",
     ".data-table__empty-state { margin: 0; padding: 0 1rem 1rem; }",
+    ".enhanced-collection { display: grid; gap: 1rem; }",
+    ".enhanced-collection__toolbar { display: flex; flex-wrap: wrap; gap: 1rem; align-items: end; justify-content: space-between; }",
+    ".enhanced-collection__search, .enhanced-collection__page-size-label { display: grid; gap: 0.45rem; color: #475569; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }",
+    ".enhanced-collection__search { flex: 1 1 260px; min-width: min(100%, 280px); }",
+    ".enhanced-collection__status { display: flex; flex-wrap: wrap; gap: 0.85rem; align-items: center; justify-content: flex-end; color: #64748b; font-size: 0.9rem; }",
+    ".enhanced-collection__summary, .enhanced-collection__page-count { font-weight: 600; }",
+    ".enhanced-collection__search input, .enhanced-collection__page-size-label select { margin-top: 0; }",
+    ".enhanced-collection [data-enhanced-collection-item][hidden] { display: none; }",
+    ".enhanced-collection__pagination { display: flex; flex-wrap: wrap; gap: 0.85rem; align-items: center; justify-content: space-between; }",
+    ".enhanced-collection__pagination-buttons { display: flex; flex-wrap: wrap; gap: 0.65rem; }",
+    ".enhanced-collection__pagination button { box-shadow: none; padding: 0.7rem 1rem; }",
+    ".enhanced-collection__pagination button[disabled] { opacity: 0.45; cursor: not-allowed; }",
+    ".enhanced-collection__empty-state { margin: 0; }",
     ".debug-error-pre { margin: 1rem 0 0; padding: 1rem; overflow-x: auto; border-radius: 1rem; background: #0f172a; color: #e2e8f0; font: 0.88rem/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-word; }",
     ".surface-block details > summary, details.surface-block > summary { cursor: pointer; }",
     ".inline-link-list { display: flex; flex-wrap: wrap; gap: 0.7rem 1rem; margin: 0 0 1.25rem; color: #64748b; }",
@@ -6004,6 +6064,7 @@ function renderLayout(input: {
     "html[data-bs-theme='dark'] .data-table tbody tr { background: rgba(15, 23, 42, 0.88); }",
     "html[data-bs-theme='dark'] .data-table tbody tr:hover { background: rgba(30, 41, 59, 0.78); }",
     "html[data-bs-theme='dark'] .data-table__search, html[data-bs-theme='dark'] .data-table__page-size-label, html[data-bs-theme='dark'] .data-table__status, html[data-bs-theme='dark'] .data-table__empty-state { color: #cbd5e1; }",
+    "html[data-bs-theme='dark'] .enhanced-collection__search, html[data-bs-theme='dark'] .enhanced-collection__page-size-label, html[data-bs-theme='dark'] .enhanced-collection__status, html[data-bs-theme='dark'] .enhanced-collection__empty-state { color: #cbd5e1; }",
     "html[data-bs-theme='dark'] body { color: #e5e7eb; background: #0f172a; }",
     "html[data-bs-theme='dark'] h1, html[data-bs-theme='dark'] h2, html[data-bs-theme='dark'] h3, html[data-bs-theme='dark'] h4, html[data-bs-theme='dark'] h5, html[data-bs-theme='dark'] h6 { color: #f8fafc; }",
     "html[data-bs-theme='dark'] .site-header { background: rgba(15, 23, 42, 0.94); border-bottom-color: rgba(148, 163, 184, 0.18); }",
@@ -6168,7 +6229,7 @@ function renderLayout(input: {
     ".settings-current-value-panel { padding: 1rem 1.05rem; border-radius: 1rem; border: 1px solid rgba(148, 163, 184, 0.2); background: #f8fafc; margin-bottom: 0.8rem; }",
     ".settings-editor-shell .quick-link-card { box-shadow: none; }",
     "@media (max-width: 960px) { .app-layout, .app-layout.is-sidebar-collapsed, .auth-shell { grid-template-columns: 1fr; } .app-mobile-navbar { display: flex; } .app-sidebar { display: none; padding-top: 1rem; } .app-layout.is-sidebar-open .app-sidebar { display: block; } .app-main-shell { display: block; } .app-main-toolbar { display: none; } .app-main-content, .auth-main, .auth-shell__hero, .auth-shell__panel { padding: 1rem; } .navbar { flex-direction: column; align-items: flex-start; } .form-grid--two, .settings-shell, .settings-console__hero, .settings-detail-grid, .settings-card__meta-grid { grid-template-columns: 1fr; } .settings-sidebar { position: static; } .marketing-hero__grid, .about-panel__grid, .contact-panel__grid, .booking-shell__grid, .article-shell, .program-grid, .resource-grid, .process-grid, .story-grid, .testimonial-grid, .service-overview-grid, .featured-story__layout { grid-template-columns: 1fr; } .settings-console-toolbar, .settings-card__footer, .settings-detail-hero { align-items: stretch; } .public-cta-banner { flex-direction: column; align-items: flex-start; } .hero-media-frame { min-height: 280px; } .public-site-footer__inner { align-items: flex-start; } .public-social-slot--footer { justify-items: start; } }",
-    "@media (max-width: 767.98px) { .data-table__toolbar, .data-table__pagination { padding-left: 0.85rem; padding-right: 0.85rem; } .data-table__status { justify-content: flex-start; } .data-table thead { display: none; } .data-table table, .data-table tbody, .data-table tr, .data-table td { display: block; width: 100%; } .data-table tbody { display: grid; gap: 0.75rem; padding: 0.85rem; } .data-table tbody tr { overflow: hidden; border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 0.95rem; background: #fff; box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05); } .data-table tbody tr td { display: grid; grid-template-columns: minmax(0, 8rem) minmax(0, 1fr); gap: 0.75rem; align-items: start; } .data-table td::before { content: attr(data-label); font-size: 0.74rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #64748b; } .data-table td:last-child { border-bottom: 0; } }",
+    "@media (max-width: 767.98px) { .data-table__toolbar, .data-table__pagination { padding-left: 0.85rem; padding-right: 0.85rem; } .data-table__status, .enhanced-collection__status { justify-content: flex-start; } .enhanced-collection__toolbar { align-items: stretch; } .data-table thead { display: none; } .data-table table, .data-table tbody, .data-table tr, .data-table td { display: block; width: 100%; } .data-table tbody { display: grid; gap: 0.75rem; padding: 0.85rem; } .data-table tbody tr { overflow: hidden; border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 0.95rem; background: #fff; box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05); } .data-table tbody tr td { display: grid; grid-template-columns: minmax(0, 8rem) minmax(0, 1fr); gap: 0.75rem; align-items: start; } .data-table td::before { content: attr(data-label); font-size: 0.74rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #64748b; } .data-table td:last-child { border-bottom: 0; } }",
     "@media (max-width: 767.98px) { .btn.public-theme-toggle { right: 1rem; left: auto; bottom: calc(5rem + env(safe-area-inset-bottom, 0px)); } }",
     `${input.css ?? ""}`,
     "</style>",
@@ -6351,6 +6412,98 @@ function renderLayout(input: {
     "    if (pageSizeSelect instanceof HTMLSelectElement) {",
     "      pageSizeSelect.addEventListener('change', () => {",
     "        pageSize = Number.parseInt(pageSizeSelect.value, 10) || 10;",
+    "        currentPage = 1;",
+    "        render();",
+    "      });",
+    "    }",
+    "    if (prevButton instanceof HTMLButtonElement) {",
+    "      prevButton.addEventListener('click', () => {",
+    "        currentPage = Math.max(1, currentPage - 1);",
+    "        render();",
+    "      });",
+    "    }",
+    "    if (nextButton instanceof HTMLButtonElement) {",
+    "      nextButton.addEventListener('click', () => {",
+    "        currentPage += 1;",
+    "        render();",
+    "      });",
+    "    }",
+    "    render();",
+    "  }",
+    "  for (const container of document.querySelectorAll('[data-enhanced-collection]')) {",
+    "    if (!(container instanceof HTMLElement)) {",
+    "      continue;",
+    "    }",
+    "    const grid = container.querySelector('[data-enhanced-collection-grid]');",
+    "    if (!(grid instanceof HTMLElement)) {",
+    "      continue;",
+    "    }",
+    "    const items = Array.from(container.querySelectorAll('[data-enhanced-collection-item]')).filter((item) => item instanceof HTMLElement);",
+    "    if (items.length === 0) {",
+    "      continue;",
+    "    }",
+    "    const toolbar = container.querySelector('[data-enhanced-collection-toolbar]');",
+    "    const searchInput = container.querySelector('[data-enhanced-collection-search]');",
+    "    const pageSizeSelect = container.querySelector('[data-enhanced-collection-page-size]');",
+    "    const summary = container.querySelector('[data-enhanced-collection-summary]');",
+    "    const pagination = container.querySelector('[data-enhanced-collection-pagination]');",
+    "    const pageCount = container.querySelector('[data-enhanced-collection-page-count]');",
+    "    const prevButton = container.querySelector('[data-enhanced-collection-prev]');",
+    "    const nextButton = container.querySelector('[data-enhanced-collection-next]');",
+    "    const emptyState = container.querySelector('[data-enhanced-collection-empty]');",
+    "    if (toolbar instanceof HTMLElement) {",
+    "      toolbar.hidden = false;",
+    "    }",
+    "    const indexedItems = items.map((item) => ({",
+    "      item,",
+    "      text: (item.dataset.search || item.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase()",
+    "    }));",
+    "    let query = '';",
+    "    let currentPage = 1;",
+    "    let pageSize = pageSizeSelect instanceof HTMLSelectElement ? Number.parseInt(pageSizeSelect.value, 10) || Number.parseInt(container.dataset.defaultPageSize || '', 10) || 6 : Number.parseInt(container.dataset.defaultPageSize || '', 10) || 6;",
+    "    const render = () => {",
+    "      const filtered = query === '' ? indexedItems : indexedItems.filter((entry) => entry.text.includes(query));",
+    "      const total = filtered.length;",
+    "      const totalPages = total === 0 ? 0 : Math.max(1, Math.ceil(total / pageSize));",
+    "      currentPage = totalPages === 0 ? 1 : Math.min(currentPage, totalPages);",
+    "      const pageStart = total === 0 ? 0 : (currentPage - 1) * pageSize;",
+    "      const pageItems = filtered.slice(pageStart, pageStart + pageSize);",
+    "      const filteredItems = new Set(filtered.map((entry) => entry.item));",
+    "      const visibleItems = new Set(pageItems.map((entry) => entry.item));",
+    "      for (const { item } of indexedItems) {",
+    "        item.hidden = !visibleItems.has(item);",
+    "        item.classList.toggle('is-filtered-out', query !== '' && !filteredItems.has(item));",
+    "      }",
+    "      if (summary instanceof HTMLElement) {",
+    "        summary.textContent = total === 0 ? (query === '' ? 'No items available' : `No results for \"${query}\"`) : `Showing ${pageStart + 1}-${Math.min(pageStart + pageSize, total)} of ${total} items`;",
+    "      }",
+    "      if (pageCount instanceof HTMLElement) {",
+    "        pageCount.textContent = total === 0 ? 'Page 0 of 0' : `Page ${currentPage} of ${totalPages}`;",
+    "      }",
+    "      if (pagination instanceof HTMLElement) {",
+    "        pagination.hidden = total <= pageSize;",
+    "      }",
+    "      if (prevButton instanceof HTMLButtonElement) {",
+    "        prevButton.disabled = total === 0 || currentPage <= 1;",
+    "      }",
+    "      if (nextButton instanceof HTMLButtonElement) {",
+    "        nextButton.disabled = total === 0 || currentPage >= totalPages;",
+    "      }",
+    "      if (emptyState instanceof HTMLElement) {",
+    "        emptyState.hidden = total !== 0;",
+    "        emptyState.textContent = query === '' ? (container.dataset.emptyMessage || 'No items available.') : `No results match \"${query}\".`;",
+    "      }",
+    "    };",
+    "    if (searchInput instanceof HTMLInputElement) {",
+    "      searchInput.addEventListener('input', () => {",
+    "        query = searchInput.value.trim().toLowerCase();",
+    "        currentPage = 1;",
+    "        render();",
+    "      });",
+    "    }",
+    "    if (pageSizeSelect instanceof HTMLSelectElement) {",
+    "      pageSizeSelect.addEventListener('change', () => {",
+    "        pageSize = Number.parseInt(pageSizeSelect.value, 10) || Number.parseInt(container.dataset.defaultPageSize || '', 10) || 6;",
     "        currentPage = 1;",
     "        render();",
     "      });",

@@ -1,6 +1,9 @@
 import { z } from "zod";
 
-export const timestampSchema = z.string().datetime();
+export const timestampSchema = z.union([
+  z.string().datetime(),
+  z.date().transform((value) => value.toISOString())
+]);
 export const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 export const idSchema = z.string().min(1);
 export const emailSchema = z.string().email();

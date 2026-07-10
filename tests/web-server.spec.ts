@@ -97,6 +97,9 @@ describe("web server", () => {
       expect(homeHtml).toContain("Train the dog in front of you.");
       expect(servicesHtml).toContain("Private lessons and board-and-train.");
       expect(blogIndexHtml).toContain("Loose Leash Training Tips");
+      expect(blogIndexHtml).toContain("data-enhanced-collection");
+      expect(blogIndexHtml).toContain("data-enhanced-collection-search");
+      expect(blogIndexHtml).toContain("data-enhanced-collection-page-count");
       expect(blogPostHtml).toContain("Walks start before the leash clips on.");
       expect(homeHtml).toContain("hero-section");
       expect(homeHtml).toContain("navbar");
@@ -2308,6 +2311,8 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
       expect(quoteHtml).toContain("Private Coaching Session");
       expect(quoteHtml).toContain("$450.00");
       expect(quoteHtml).toContain('href="/portal/quotes"');
+      expect(quoteHtml).toContain("data-enhanced-table");
+      expect(quoteHtml).toContain("data-enhanced-table-page-count");
       expect(quoteHtml).toContain('name="action" value="accept"');
       expect(quoteHtml).toContain('name="action" value="decline"');
 
@@ -4493,6 +4498,9 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
       expect(adminSettingsUsersHtml).toContain("Admin User Management");
       expect(adminSettingsUsersHtml).toContain("Add Admin User");
       expect(adminSettingsUsersHtml).toContain("Access Matrix");
+      expect(adminSettingsUsersHtml).toContain("data-enhanced-table");
+      expect(adminSettingsUsersHtml).toContain("data-enhanced-table-search");
+      expect(adminSettingsUsersHtml).toContain("data-enhanced-table-page-count");
       expect(legacySettingsHtml).toContain("Launch-Critical Settings");
       expect(settingDetailHtml).toContain("site-key-1");
       expect(settingDetailHtml).toContain("Settings Detail");

@@ -2,10 +2,17 @@ import {
   bookingSchema,
   contractSchema,
   invoiceSchema,
-  quoteSchema
+  quoteSchema,
+  timestampSchema
 } from "@bdta/domain";
 
 describe("domain entities", () => {
+  it("normalizes Date timestamps to ISO strings", () => {
+    const value = new Date("2026-07-10T20:52:44.000Z");
+
+    expect(timestampSchema.parse(value)).toBe("2026-07-10T20:52:44.000Z");
+  });
+
   it("models a booking with tokenized iCal access", () => {
     const result = bookingSchema.parse({
       id: "booking-1",
