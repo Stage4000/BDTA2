@@ -50,9 +50,9 @@ export async function buildPortalSummary(
   ]);
 
   return portalSummarySchema.parse({
-    upcomingBookings: upcomingBookings.map((booking) => bookingSchema.parse(booking)),
-    openInvoices: openInvoices.map((invoice) => invoiceSchema.parse(invoice)),
-    activeQuotes: activeQuotes.map((quote) => quoteSchema.parse(quote))
+    upcomingBookings: collectValidItems(upcomingBookings, bookingSchema),
+    openInvoices: collectValidItems(openInvoices, invoiceSchema),
+    activeQuotes: collectValidItems(activeQuotes, quoteSchema)
   });
 }
 
@@ -80,6 +80,6 @@ export async function buildAdminDashboard(
       overdueInvoices,
       activeClients
     },
-    recentBookings: recentBookings.map((booking) => bookingSchema.parse(booking))
+    recentBookings: collectValidItems(recentBookings, bookingSchema)
   });
 }
