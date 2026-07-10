@@ -2564,6 +2564,49 @@ expect(result.body.metrics.overdueInvoices).toBe(2);
 expect(result.body.recentBookings).toHaveLength(1);
 });
 
+it("filters malformed recent bookings instead of failing the admin dashboard", async () => {
+  const handlers = createApiHandlers(createApiDependencies({
+    adminDashboard: createAdminDashboardDependencies({
+      listRecentBookings: async () => [
+        {
+          id: "booking-2",
+          clientId: "client-2",
+          petIds: ["pet-9"],
+          serviceId: "svc-board-train",
+          startsAt: "2026-05-28T17:00:00.000Z",
+          endsAt: "2026-05-28T18:00:00.000Z",
+          status: "pending",
+          icalAccess: null
+        },
+        {
+          id: "",
+          clientId: "",
+          petIds: [],
+          serviceId: "",
+          startsAt: "not-a-timestamp",
+          endsAt: "not-a-timestamp",
+          status: "scheduled"
+        } as never
+      ]
+    })
+  }));
+
+  const result = await handlers.handleAdminDashboard({
+    actorId: "admin-1",
+    actorType: "admin_user",
+    role: "accountant",
+    issuedAt: "2026-05-27T18:00:00.000Z",
+    expiresAt: "2026-05-27T18:00:00.000Z"
+  });
+
+  expect(result.status).toBe(200);
+  if ("error" in result.body) {
+    throw new Error("Expected successful admin dashboard response.");
+  }
+  expect(result.body.recentBookings).toHaveLength(1);
+  expect(result.body.recentBookings[0]?.id).toBe("booking-2");
+});
+
 it("returns an admin dashboard when recent bookings contain Date timestamps", async () => {
 const handlers = createApiHandlers(createApiDependencies({
 adminDashboard: createAdminDashboardDependencies({
