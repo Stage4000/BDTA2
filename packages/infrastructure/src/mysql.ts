@@ -2341,7 +2341,7 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
       };
     },
     verifyPassword: passwordVerifier,
-    buildAdminRedirectPath: (role) => role === "accountant" ? "/client/invoices_list.php" : "/client/index.php",
+    buildAdminRedirectPath: (role) => role === "accountant" ? "/client/invoices_list.php" : "/admin",
     async recordSuccessfulLogin(identity: AdminIdentity) {
       if (identity.source !== "client_admin") {
         return;
@@ -2918,7 +2918,7 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
 
   async function persistAppointmentTypeFormLinks(appointmentTypeId: string, formTemplateIds: string[]): Promise<void> {
     await executor.execute(
-      "DELETE FROM appointment_type_forms WHERE appointment_type_id = ?",
+        "DELETE FROM appointment_type_forms WHERE appointment_type_id = ?",
       [appointmentTypeId]
     );
 
@@ -3382,15 +3382,15 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
 
       try {
         await executor.execute(
-          "DELETE FROM appointment_type_forms WHERE form_template_id = ?",
+        "DELETE FROM appointment_type_forms WHERE form_template_id = ?",
           [templateId]
         );
         await executor.execute(
-          "DELETE FROM workflow_triggers WHERE form_template_id = ?",
+        "DELETE FROM workflow_triggers WHERE form_template_id = ?",
           [templateId]
         );
         const [, result] = await executor.execute(
-          "DELETE FROM form_templates WHERE id = ?",
+        "DELETE FROM form_templates WHERE id = ?",
           [templateId]
         );
 
@@ -4264,7 +4264,7 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
           [actorId]
         );
         const [, result] = await executor.execute(
-          "DELETE FROM admin_users WHERE id = ?",
+        "DELETE FROM admin_users WHERE id = ?",
           [actorId]
         );
         await executor.execute("COMMIT");
@@ -6875,11 +6875,11 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         );
 
         await executor.execute(
-          "DELETE FROM workflow_step_executions WHERE step_id = ?",
+        "DELETE FROM workflow_step_executions WHERE step_id = ?",
           [stepId]
         );
         const [, result] = await executor.execute(
-          "DELETE FROM workflow_steps WHERE workflow_id = ? AND workflow_step_id = ?",
+        "DELETE FROM workflow_steps WHERE workflow_id = ? AND workflow_step_id = ?",
           [workflowId, stepId]
         );
 
@@ -7627,6 +7627,15 @@ const mySqlBootstrapTableStatements = [
     "label VARCHAR(255) NOT NULL DEFAULT '',",
     "description TEXT NULL,",
     "is_secret TINYINT(1) NOT NULL DEFAULT 0,",
+    "updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
+    ")"
+  ].join(" "),
+  [
+    "CREATE TABLE IF NOT EXISTS app_sessions (",
+    "session_id VARCHAR(191) PRIMARY KEY,",
+    "session_data LONGTEXT NOT NULL,",
+    "expires_at TIMESTAMP NOT NULL,",
+    "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,",
     "updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
     ")"
   ].join(" "),

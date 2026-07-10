@@ -174,13 +174,13 @@ const runtimeEnvironmentFieldDefinitions: RuntimeEnvironmentFieldDefinition[] = 
   {
     key: "DB_PORT",
     label: "MySQL Port",
-    description: "MySQL server port. The single-app runtime defaults to 3306 if this is blank.",
+    description: "MySQL server port. Defaults to 3306 when this is left blank.",
     placeholder: "3306"
   },
   {
     key: "DB_NAME",
     label: "MySQL Database Name",
-    description: "Database name used for the unified platform runtime.",
+    description: "Database name used by the live site and staff tools.",
     placeholder: "bdta",
     required: true
   },
@@ -375,8 +375,8 @@ const SETTINGS_CATEGORY_DESCRIPTIONS = new Map<string, string>([
   ["payments", "Manage Stripe mode, production keys, and the switches that control payment availability."],
   ["security", "Review verification, bot protection, and other settings that protect public form entry points."],
   ["communications", "Tune outbound email delivery, inbox processing, and follow-up channels used after bookings."],
-  ["integrations", "Authorize calendar and external platform access used by sync-heavy internal workflows."],
-  ["general", "Core business and website settings used across the public site, portal, and CRM."],
+  ["integrations", "Authorize calendar and other external services used by scheduling and follow-up work."],
+  ["general", "Core business and website settings used across the public site, client accounts, and staff tools."],
   ["email", "Outbound and inbound mail delivery settings used by reminders, confirmations, and follow-up workflows."],
   ["payment", "Stripe mode, webhook credentials, and payment behavior used by invoices and package checkout."],
   ["booking", "Settings that shape booking requests, intake defaults, and customer scheduling flows."],
@@ -384,7 +384,7 @@ const SETTINGS_CATEGORY_DESCRIPTIONS = new Map<string, string>([
   ["invoice", "Invoice behavior, defaults, and client-facing payment settings."],
   ["time_tracking", "Operational settings that affect time tracking and staff workflow capture."],
   ["social", "Public-facing social links and embed settings shown on the website."],
-  ["database", "Database connection and deployment-level runtime values used by the single-app platform."],
+  ["database", "Database connection values used by the live site and staff tools."],
   ["theme", "Brand colors and front-end appearance settings used across the public site and portal."],
   ["advanced", "Advanced integrations, embeds, and operational switches that do not fit simpler categories."],
   ["admins", "Manage admin accounts, account types, and who can access sensitive operational settings."]
@@ -1542,7 +1542,7 @@ function getSettingConsoleMetadata(setting: Setting): SettingConsoleMetadata {
     launchCritical: false,
     usage: [
       SETTINGS_CATEGORY_DESCRIPTIONS.get(setting.category)
-        ?? `Used within the ${formatSettingCategoryLabel(setting.category).toLowerCase()} area of the platform.`
+        ?? `Used within the ${formatSettingCategoryLabel(setting.category).toLowerCase()} area of the business.`
     ],
     multiline: setting.value.includes("\n")
   };
@@ -1567,7 +1567,7 @@ function formatSettingTypeLabel(type: string): string {
 
 function getSettingCategoryDescription(category: string): string {
   return SETTINGS_CATEGORY_DESCRIPTIONS.get(category)
-    ?? "Additional configuration for this area of the platform.";
+    ?? "Additional configuration for this area of the business.";
 }
 
 function isTruthySettingValue(value: string): boolean {
@@ -1864,7 +1864,7 @@ function renderRuntimeEnvironmentSettingsPanel(input: {
     '<section class="surface-block">',
     '<p class="eyebrow">Database</p>',
     '<h2>Runtime Environment</h2>',
-    '<p class="section-copy">Edit the single-app runtime values stored in <code>.env.production</code>. The values shown below reflect the effective runtime seen by the current app process, so Plesk-managed process env overrides appear here when they differ from the file.</p>',
+    '<p class="section-copy">Edit the live environment values stored in <code>.env.production</code>. The values shown below reflect what this site is using right now, including any Plesk overrides that differ from the file.</p>',
     "</section>",
     '<section class="surface-block">',
     '<p class="eyebrow">Environment File</p>',
@@ -1938,7 +1938,7 @@ function renderAdminSettingsUsersSection(model: SettingsConsoleViewModel): strin
     '<section class="surface-block">',
     '<p class="eyebrow">Admin Users</p>',
     '<h2>Admin User Management</h2>',
-    '<p class="section-copy">Manage who can access the admin platform, who can grant other admins access, and who can view sensitive API-key and integration settings.</p>',
+    '<p class="section-copy">Manage who can sign in, who can grant staff access, and who can view sensitive API-key and integration settings.</p>',
     "</section>",
     canManageAdminUsers ? [
       '<section class="surface-block settings-admin-form">',
@@ -2392,8 +2392,8 @@ function renderSettingDetail(setting: Setting): string {
     "<p class=\"eyebrow\">Edit</p>",
     `<h3>${metadata.launchCritical ? "Launch Critical" : "Standard Setting"}</h3>`,
     `<p class="section-copy">${escapeHtml(metadata.launchCritical
-      ? "Saving this value changes release-critical behavior immediately for the single-app runtime."
-      : "Save changes here to update the live value used by the platform.")}</p>`,
+      ? "Saving this value changes release-critical behavior immediately for the live site."
+      : "Save changes here to update the live setting used by the business.")}</p>`,
     `<form class="form-grid" method="post" action="/admin/settings/${encodeURIComponent(setting.key)}">`,
     renderSettingEditorControl(setting),
     '<div class="form-actions"><button type="submit">Save Setting</button><a class="quick-link-card quick-link-card--inline" href="/admin/settings"><span class="quick-link-card__label">Back to Settings</span><span class="quick-link-card__meta">Return to the full console</span></a></div>',
@@ -2799,6 +2799,10 @@ function buildAdminLoginPath(returnPath: string | null): string {
     : `/admin/login?return_to=${encodeURIComponent(returnPath)}`;
 }
 
+function resultAdminLandingPath(role: unknown): string {
+  return role === "accountant" ? "/client/invoices_list.php" : "/admin";
+}
+
 function getCurrentRequestPath(request: IncomingMessage): string {
   const url = new URL(request.url ?? "/", "http://localhost");
   return `${url.pathname}${url.search}`;
@@ -2872,11 +2876,11 @@ function renderPortalLoginPage(input: {
 }): string {
   return renderAuthLoginPage({
     title: "Portal Login",
-    eyebrow: "Client Portal",
-    introTitle: "Client self-service without the clutter.",
+    eyebrow: "Brook's Dog Training Academy",
+    introTitle: "Stay close to your dog's training plan.",
     description: input.returnPath == null
-      ? "Review appointments, invoices, quotes, contracts, forms, and profile details from one sign-in."
-      : "Sign in once and continue exactly where you left off.",
+      ? "Review appointments, invoices, quotes, contracts, forms, and account details from one sign-in."
+      : "Sign in to continue where you left off.",
     action: input.action,
     identifierFieldHtml: '<label>Email<input type="email" name="email" required autocomplete="username"></label>',
     returnPath: input.returnPath,
@@ -2886,7 +2890,7 @@ function renderPortalLoginPage(input: {
       "Invoices, quotes, contracts, and forms without extra navigation.",
       "Direct-link friendly sign-in for shared documents and actions."
     ],
-    supportLabel: "Portal access is intended for active clients and invited household members."
+    supportLabel: "Access is for active clients and invited household members."
   });
 }
 
@@ -2897,21 +2901,21 @@ function renderAdminLoginPage(input: {
 }): string {
   return renderAuthLoginPage({
     title: "Admin Login",
-    eyebrow: "Admin CRM",
-    introTitle: "Operations first, noise removed.",
+    eyebrow: "Brook's Dog Training Academy",
+    introTitle: "Keep clients, bookings, and billing moving.",
     description: input.returnPath == null
-      ? "Enter the CRM to manage clients, bookings, billing, forms, and operational tasks."
-      : "Sign in once and return to the exact admin screen you requested.",
+      ? "Sign in to manage clients, bookings, billing, forms, and day-to-day operations."
+      : "Sign in to return to the staff page you requested.",
     action: input.action,
     identifierFieldHtml: '<label>Username<input type="text" name="username" required autocomplete="username"></label>',
     returnPath: input.returnPath,
     errorMessage: input.errorMessage,
     heroPoints: [
-      "Client records, bookings, billing, and forms from one workspace.",
-      "Lean sign-in screen with no sidebar or mobile app chrome.",
-      "Direct return to the requested admin route after authentication."
+      "See today's schedule, client records, billing, and open tasks.",
+      "Handle forms, documents, and follow-up without extra clicks.",
+      "Return directly to the requested staff page after sign-in."
     ],
-    supportLabel: "Admin credentials are issued separately from client portal access."
+    supportLabel: "Staff access is issued separately from client accounts."
   });
 }
 
@@ -2957,9 +2961,9 @@ function renderLegacyPublicDocumentActionPanel(input: {
         : `/admin/forms/${encodeURIComponent(input.resourceId)}`;
 
     return {
-      title: "Admin CRM",
-      description: "This record is available from the authenticated admin workspace.",
-      actionMarkup: `<div class="form-actions"><a class="nav-cta" href="${escapeAttribute(adminHref)}">Open in Admin CRM</a></div>`
+      title: "Staff View",
+      description: "This record is available from your signed-in staff account.",
+      actionMarkup: `<div class="form-actions"><a class="nav-cta" href="${escapeAttribute(adminHref)}">Open Staff View</a></div>`
     };
   }
 
@@ -3925,8 +3929,8 @@ function renderLegacyPublicPackageDetailPage(input: {
           '<section class="marketing-hero marketing-hero--compact">',
           '<p class="eyebrow">Package Unavailable</p>',
           "<h1>Package not found</h1>",
-          '<p class="section-copy">The link you followed may be invalid, unavailable, or no longer active.</p>',
-          '<div class="form-actions"><a class="nav-cta" href="/services">Explore Services</a><a class="quick-link-card quick-link-card--inline" href="/portal/login"><span class="quick-link-card__label">Open Portal</span><span class="quick-link-card__meta">Existing clients can sign in here</span></a></div>',
+      '<p class="section-copy">The link you followed may be invalid, unavailable, or no longer active.</p>',
+      '<div class="form-actions"><a class="nav-cta" href="/services">Explore Services</a><a class="quick-link-card quick-link-card--inline" href="/contact"><span class="quick-link-card__label">Talk With Brook</span><span class="quick-link-card__meta">Get matched with the right next step</span></a></div>',
           "</section>"
         ].join("")
       })
@@ -3941,7 +3945,7 @@ function renderLegacyPublicPackageDetailPage(input: {
     ? ""
     : `<ul class="detail-list">${(input.packageItem.bulletPoints ?? []).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`;
   const packageItems = (input.packageItem.items ?? []).length === 0
-    ? '<p class="section-copy">No appointment credits are currently attached to this package.</p>'
+      ? '<p class="section-copy">No appointment credits are currently attached to this package.</p>'
     : `<div class="summary-grid">${(input.packageItem.items ?? []).map((item) => [
       '<section class="summary-card is-primary">',
       `<div class="summary-card__value">${escapeHtml(String(item.quantity))}</div>`,
@@ -3961,7 +3965,7 @@ function renderLegacyPublicPackageDetailPage(input: {
   };
   const packageFormValues = input.purchaseState?.packageFormValues ?? {};
   const purchaseFeedback = input.purchaseState?.status === "success"
-    ? '<div class="surface-block" style="border-color:#15803d;background:#f0fdf4;"><strong>Package purchase complete</strong><p class="section-copy">Credits were added to the matching client record. Use the portal login flow if the client already has an account password.</p></div>'
+        ? '<div class="surface-block" style="border-color:#15803d;background:#f0fdf4;"><strong>Package purchase complete</strong><p class="section-copy">Credits were added to the matching client record. If the client already has a password, they can sign in to review everything there.</p></div>'
     : input.purchaseState?.status === "error"
       ? `<div class="surface-block" style="border-color:#b91c1c;background:#fef2f2;"><strong>Purchase could not be completed</strong><p class="section-copy">${escapeHtml(input.purchaseState.errorMessage ?? "Review the form and try again.")}</p></div>`
       : input.purchaseState?.status === "info"
@@ -4021,7 +4025,7 @@ function renderLegacyPublicPackageDetailPage(input: {
         '<aside class="booking-benefits">',
         "<h2>Package Access</h2>",
         '<div class="benefit-list">',
-        '<section class="benefit-item"><strong>Client Portal</strong><p>Existing clients can sign in to review active packages, credits, and upcoming appointments.</p></section>',
+      '<section class="benefit-item"><strong>Client Account</strong><p>Existing clients can sign in to review active packages, credits, and upcoming appointments.</p></section>',
         '<section class="benefit-item"><strong>Purchase Support</strong><p>Need help completing or reviewing a package purchase? Contact the team directly from the public site.</p></section>',
         '<section class="benefit-item"><strong>Booking Follow-Through</strong><p>After package credits are active, appointments continue through the authenticated portal experience.</p></section>',
         "</div>",
@@ -4129,11 +4133,11 @@ function renderLegacyBookingPage(
       '<aside class="booking-benefits">',
       "<h2>What happens next</h2>",
       '<div class="benefit-list">',
-      '<section class="benefit-item"><strong>Request Review</strong><p>Your request is matched to this appointment type and validated against availability.</p></section>',
-      '<section class="benefit-item"><strong>Confirmation Email</strong><p>You receive a confirmation after the booking request is accepted.</p></section>',
+      '<section class="benefit-item"><strong>Request Review</strong><p>Your request is reviewed against the appointment type and current availability.</p></section>',
+      '<section class="benefit-item"><strong>Confirmation Email</strong><p>You receive confirmation after the booking request is accepted.</p></section>',
       appointmentType.portalAvailable
-        ? '<section class="benefit-item"><strong>Portal Access</strong><p>Existing clients can keep using the portal for invoices, forms, and future appointments.</p></section>'
-        : '<section class="benefit-item"><strong>Follow-Up</strong><p>The team follows up directly with any remaining intake details.</p></section>',
+        ? '<section class="benefit-item"><strong>Progress Stays Organized</strong><p>Your next steps, documents, and scheduling details stay in one place after booking is approved.</p></section>'
+      : '<section class="benefit-item"><strong>Follow-Up</strong><p>The team follows up directly with any remaining intake details.</p></section>',
       "</div>",
       "</aside>",
       "</section>",
@@ -4381,11 +4385,11 @@ function renderPublicPageContent(page: {
       '<section class="public-section">',
       '<div class="resource-grid">',
       '<article class="resource-card"><h3>Training Prep</h3><p>Session-ready notes for gear, household setup, and what to bring to an evaluation.</p></article>',
-      '<article class="resource-card"><h3>Trusted Referrals</h3><p>Directory pages can surface recommended local partners and complementary services.</p></article>',
-      '<article class="resource-card"><h3>Follow-Through Tools</h3><p>Quick access to articles, booking, and the portal when families need the next step fast.</p></article>',
+      '<article class="resource-card"><h3>Trusted Referrals</h3><p>Directory pages highlight recommended local partners for complementary services.</p></article>',
+      '<article class="resource-card"><h3>Follow-Through Support</h3><p>Helpful articles, booking guidance, and practical next steps for families moving forward.</p></article>',
       "</div>",
       "</section>",
-      '<section class="public-cta-banner"><div><p class="eyebrow">Need Direct Help</p><h2>Use the portal or request a booking when you want a specific plan.</h2></div><div class="form-actions"><a class="nav-cta" href="/book">Book Training</a><a class="quick-link-card quick-link-card--inline" href="/portal/login"><span class="quick-link-card__label">Open Portal</span><span class="quick-link-card__meta">Existing clients can self-serve here</span></a></div></section>',
+      '<section class="public-cta-banner"><div><p class="eyebrow">Need Direct Help</p><h2>Book training or reach out if you want a plan tailored to your dog.</h2></div><div class="form-actions"><a class="nav-cta" href="/book">Book Training</a><a class="quick-link-card quick-link-card--inline" href="/contact"><span class="quick-link-card__label">Ask a Question</span><span class="quick-link-card__meta">Get help choosing the right service</span></a></div></section>',
       "</div>"
     ].join("");
   }
@@ -5761,7 +5765,7 @@ function renderLayout(input: {
 
   const portalSidebar = [
     '<nav id="app-sidebar" class="app-sidebar sidebar" data-app-sidebar>',
-    '<div class="app-sidebar__brand">BDTA Client Portal</div>',
+    '<div class="app-sidebar__brand">Brook\'s Dog Training Academy</div>',
     '<div class="app-sidebar__subtitle">Client access and self-service</div>',
     '<a class="app-sidebar__link" href="/portal">Home</a>',
     '<a class="app-sidebar__link" href="/portal/appointments">Appointments</a>',
@@ -5779,8 +5783,8 @@ function renderLayout(input: {
 
   const adminSidebar = [
     '<nav id="app-sidebar" class="app-sidebar sidebar" data-app-sidebar>',
-    '<div class="app-sidebar__brand">BDTA Client CRM</div>',
-    '<div class="app-sidebar__subtitle">Admin operations and CRM</div>',
+    '<div class="app-sidebar__brand">Brook\'s Dog Training Academy</div>',
+    '<div class="app-sidebar__subtitle">Clients, bookings, and billing</div>',
     '<a class="app-sidebar__link" href="/client/index.php">Dashboard</a>',
     '<a class="app-sidebar__link" href="/admin/clients">Clients</a>',
     '<a class="app-sidebar__link" href="/admin/bookings">Bookings</a>',
@@ -5831,8 +5835,8 @@ function renderLayout(input: {
     : variant === "auth"
       ? authChrome
     : variant === "portal"
-      ? appChrome("BDTA Client Portal", portalSidebar)
-      : appChrome("BDTA Client CRM", adminSidebar);
+      ? appChrome("Brook's Dog Training Academy", portalSidebar)
+      : appChrome("Brook's Dog Training Academy", adminSidebar);
   const publicHeadScripts = variant === "public"
     ? '<script src="/assets/js/theme-init.js"></script>'
     : "";
@@ -7243,7 +7247,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       const returnPath = sanitizeAdminReturnPath(url.searchParams.get("return_to") ?? url.searchParams.get("returnTo"));
       const session = await loadPersistedSession(resolved.sessionStore, request);
       if (session?.actorType === "admin_user") {
-        redirect(response, returnPath ?? "/admin");
+        redirect(response, returnPath ?? toLocalLocation(resultAdminLandingPath(session.role)));
         return;
       }
 
@@ -7276,7 +7280,11 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
           return;
         }
 
-      redirect(response, returnPath ?? toLocalLocation(result.body.redirectTo), await persistSession(resolved.sessionStore, result.body));
+      redirect(
+        response,
+        returnPath ?? toLocalLocation(resultAdminLandingPath(result.body.session.role)),
+        await persistSession(resolved.sessionStore, result.body)
+      );
       return;
     }
 
@@ -7837,7 +7845,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
               : [
                 '<section class="surface-block">',
                 '<h3>Pending Submission</h3>',
-                '<p class="section-copy">This form is still pending. Continue through the authenticated workspace or use the secure submission flow attached to this link.</p>',
+                '<p class="section-copy">This form is still pending. Continue from your signed-in account or use the secure submission link attached here.</p>',
                 result.body.item.responses != null && result.body.item.responses.length > 0
                   ? renderLegacyPublicFormResponses(result.body.item)
                   : "",
@@ -7996,7 +8004,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
             '<div class="benefit-list">',
             '<section class="benefit-item"><strong>Intake Review</strong><p>We review the request against service type, timing, and current availability.</p></section>',
             '<section class="benefit-item"><strong>Scheduling Follow-Up</strong><p>Confirmation and reminders are generated once the booking is accepted.</p></section>',
-            '<section class="benefit-item"><strong>Client Portal Access</strong><p>Existing clients can review documents, invoices, and future appointments in the portal.</p></section>',
+            '<section class="benefit-item"><strong>Progress Stays Organized</strong><p>After approval, reminders, forms, invoices, and upcoming sessions stay easy to review in one place.</p></section>',
             "</div>",
             "</aside>",
             "</section>",
@@ -9916,7 +9924,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
             body: [
               "<article>",
               renderSectionIntro({
-                eyebrow: "Client Portal",
+                eyebrow: "Brook's Dog Training Academy",
                 title: actor.body.actor.displayName,
                 description: "Your appointments, invoices, documents, pets, and training account details."
               }),
@@ -9940,9 +9948,9 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
                   accent: "success"
                 },
                 {
-                  label: "Portal Access",
+                  label: "Account Status",
                   value: "Ready",
-                  meta: "Self-service tools available",
+                  meta: "Records and next steps available",
                   accent: "warning"
                 }
               ]),
@@ -10027,7 +10035,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
               renderSectionIntro({
                 eyebrow: "Profile",
                 title: profile.body.item.name,
-                description: "Manage the primary contact information and password used for your client portal access."
+                  description: "Manage the primary contact information and password used for your client access."
               }),
               portalNav,
               renderDetailGrid([
@@ -10431,7 +10439,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
               renderSectionIntro({
                 eyebrow: "Packages",
                 title: packageDetail.body.item.name,
-                description: "Review the package pricing and active state tied to your portal account."
+                  description: "Review package pricing and active status tied to your account."
               }),
               portalNav,
               '<section class="surface-block">',
@@ -10843,7 +10851,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
               renderSectionIntro({
                 eyebrow: "Contracts",
                 title: contract.body.item.id,
-                description: "Review the signature state and any remaining action for this agreement."
+                  description: "Review the signature status and any remaining action for this agreement."
               }),
               portalNav,
               '<section class="surface-block">',
@@ -11385,7 +11393,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
             body: [
               "<article>",
               renderSectionIntro({
-                eyebrow: "Admin CRM",
+                eyebrow: "Brook's Dog Training Academy",
                 title: actor.body.actor.displayName,
                 description: `Signed in as ${actor.body.actor.role}. Review client activity, bookings, invoices, and operational work from one place.`
               }),
@@ -14155,6 +14163,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 }
+
+
 
 
 

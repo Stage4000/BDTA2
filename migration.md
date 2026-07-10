@@ -233,8 +233,7 @@ It also adds required columns and indexes when they are missing and seeds manage
 Current codebase note:
 
 - launch preflight expects `app_sessions` to exist
-- the current migration bootstrap statement list does not create `app_sessions`
-- if preflight reports `app_sessions` as missing, create it before cutover or extend the bootstrap SQL before relying on this procedure
+- the migration bootstrap now creates `app_sessions` alongside the other runtime support tables
 
 ## Start The TypeScript Platform
 

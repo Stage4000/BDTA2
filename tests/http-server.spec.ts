@@ -807,7 +807,7 @@ describe("http api server", () => {
           actorType: "portal_user",
           role: null,
           issuedAt: "2026-05-27T18:00:00.000Z",
-          expiresAt: "2026-05-27T18:00:00.000Z"
+          expiresAt: "2026-06-10T18:00:00.000Z"
         }
       });
 

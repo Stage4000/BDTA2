@@ -8,6 +8,10 @@ const sessionSnapshotSchema = authSessionSchema.extend({
   roleRefreshedAt: timestampSchema.optional()
 });
 
+function buildDefaultSessionExpiry(issuedAt: string): string {
+  return new Date(Date.parse(issuedAt) + 60 * 60 * 24 * 14 * 1000).toISOString();
+}
+
 const portalLoginInputSchema = z.object({
   email: emailSchema,
   password: z.string().min(1),
@@ -123,7 +127,7 @@ export async function authenticateAdminLogin(
       role: adminIdentity.role,
       roleRefreshedAt: now,
       issuedAt: now,
-      expiresAt: now
+    expiresAt: buildDefaultSessionExpiry(now)
     }
   });
 }
@@ -155,7 +159,7 @@ export async function authenticatePortalLogin(
       actorType: "portal_user",
       role: null,
       issuedAt: now,
-      expiresAt: now
+    expiresAt: buildDefaultSessionExpiry(now)
     }
   });
 }

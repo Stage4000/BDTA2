@@ -23,6 +23,7 @@ describe("production bootstrap", () => {
 
     expect(executor.calls.length).toBeGreaterThanOrEqual(4);
     expect(executor.calls[0]?.sql).toContain("CREATE TABLE IF NOT EXISTS settings");
+    expect(executor.calls.some((call) => call.sql.includes("CREATE TABLE IF NOT EXISTS app_sessions"))).toBe(true);
     expect(executor.calls.some((call) => call.sql.includes("CREATE TABLE IF NOT EXISTS email_outbox"))).toBe(true);
     expect(executor.calls.some((call) => call.sql.includes("CREATE TABLE IF NOT EXISTS job_queue"))).toBe(true);
     expect(runtime.server).toBeDefined();

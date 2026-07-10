@@ -140,4 +140,28 @@ describe("web auth screens", () => {
       await closeServer(server);
     }
   });
+
+  it("sends admin users without a requested page to the unified admin view", async () => {
+    const server = createServer();
+    const baseUrl = await startServer(server);
+
+    try {
+      const login = await fetch(`${baseUrl}/admin/login`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded"
+        },
+        body: new URLSearchParams({
+          username: "brook",
+          password: "admin-password"
+        }),
+        redirect: "manual"
+      });
+
+      expect(login.status).toBe(302);
+      expect(login.headers.get("location")).toBe("/admin");
+    } finally {
+      await closeServer(server);
+    }
+  });
 });

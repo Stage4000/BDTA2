@@ -77,7 +77,7 @@ function createAdminLoginDependencies(overrides: Partial<AdminLoginDependencies>
       (password === "correct-password" && hash === "admin-hash")
       || (password === "client-password" && hash === "client-hash")
     ),
-    buildAdminRedirectPath: (role) => role === "accountant" ? "/client/invoices_list.php" : "/client/index.php",
+buildAdminRedirectPath: (role) => role === "accountant" ? "/client/invoices_list.php" : "/admin",
     recordSuccessfulLogin: async () => undefined,
     ...overrides
   };
@@ -180,7 +180,7 @@ describe("auth and access control", () => {
     expect(result.actorId).toBe("admin-1");
     expect(result.session.actorType).toBe("admin_user");
     expect(result.session.role).toBe("accountant");
-    expect(result.redirectTo).toBe("/client/invoices_list.php");
+expect(result.redirectTo).toBe("/client/invoices_list.php");
     expect(loginEvents).toEqual(["admin-1"]);
   });
 
@@ -197,6 +197,6 @@ describe("auth and access control", () => {
 
     expect(result.actorId).toBe("client-admin-1");
     expect(result.session.role).toBe("admin");
-    expect(result.redirectTo).toBe("/client/index.php");
+expect(result.redirectTo).toBe("/admin");
   });
 });

@@ -963,7 +963,10 @@ describe("web server", () => {
     try {
       const loginPage = await fetch(`${baseUrl}/portal/login`);
       expect(loginPage.status).toBe(200);
-      expect(await loginPage.text()).toContain("Portal Login");
+      const loginPageHtml = await loginPage.text();
+      expect(loginPageHtml).toContain("Portal Login");
+      expect(loginPageHtml).toContain("Dog Training Academy");
+      expect(loginPageHtml).not.toContain("Client self-service without clutter.");
 
       const login = await fetch(`${baseUrl}/portal/login`, {
         method: "POST",
@@ -1036,7 +1039,7 @@ describe("web server", () => {
 
       expect(portalHomeHtml).toContain("Portal User");
       expect(portalHomeHtml).toContain("svc-private-lesson");
-      expect(portalHomeHtml).toContain("BDTA Client Portal");
+      expect(portalHomeHtml).toContain("Dog Training Academy");
       expect(portalHomeHtml).toContain("sidebar");
       expect(portalHomeHtml).toContain("app-main-content");
       expect(portalHomeHtml).toContain('data-app-layout');
@@ -2884,7 +2887,10 @@ describe("web server", () => {
     try {
       const loginPage = await fetch(`${baseUrl}/admin/login`);
       expect(loginPage.status).toBe(200);
-      expect(await loginPage.text()).toContain("Admin Login");
+      const adminLoginPageHtml = await loginPage.text();
+      expect(adminLoginPageHtml).toContain("Admin Login");
+      expect(adminLoginPageHtml).toContain("Dog Training Academy");
+      expect(adminLoginPageHtml).not.toContain("Admin CRM");
 
       const login = await fetch(`${baseUrl}/admin/login`, {
         method: "POST",
@@ -2899,11 +2905,11 @@ describe("web server", () => {
       });
 
       expect(login.status).toBe(302);
-      expect(login.headers.get("location")).toBe("/client/index.php");
+      expect(login.headers.get("location")).toBe("/admin");
       const cookie = login.headers.get("set-cookie");
       expect(cookie).toContain("bdta_session=");
 
-      const dashboard = await fetch(`${baseUrl}/client/index.php`, {
+      const dashboard = await fetch(`${baseUrl}/admin`, {
         headers: {
           cookie: cookie ?? ""
         }
@@ -2958,7 +2964,7 @@ describe("web server", () => {
       expect(dashboardHtml).toContain("Brook Admin");
       expect(dashboardHtml).toContain("pendingBookings");
       expect(dashboardHtml).toContain("booking-1");
-      expect(dashboardHtml).toContain("Client CRM");
+      expect(dashboardHtml).toContain("Dog Training Academy");
       expect(dashboardHtml).toContain("sidebar");
       expect(dashboardHtml).toContain("app-main-content");
       expect(dashboardHtml).toContain("summary-grid");
@@ -6332,3 +6338,5 @@ describe("web server", () => {
     }
   });
 });
+
+

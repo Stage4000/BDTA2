@@ -1843,6 +1843,9 @@ describe("mysql infrastructure", () => {
     expect("options" in workflowStepEditor.body && workflowStepEditor.body.options.processorIntervalMinutes).toBe(90);
     expect(executor.calls[1]?.sql).toContain("FROM workflow_steps");
     expect(executor.calls[3]?.sql).toContain("WHERE workflow_id = ? AND workflow_step_id = ?");
+    expect(executor.calls[4]?.sql).toBe("SELECT id, name FROM contract_templates WHERE COALESCE(is_active, 1) = 1 ORDER BY name ASC");
+    expect(executor.calls[5]?.sql).toBe("SELECT id, name FROM form_templates WHERE COALESCE(is_active, 1) = 1 ORDER BY name ASC");
+    expect(executor.calls[6]?.sql).toBe("SELECT id, name FROM appointment_types WHERE COALESCE(is_active, 1) = 1 ORDER BY name ASC");
     expect(executor.calls[10]?.sql).toContain("FROM scheduled_tasks");
   });
 

@@ -1082,7 +1082,7 @@ function createAdminLoginDependencies(state: InMemoryPlatformState): AdminLoginD
       };
     },
     verifyPassword: state.passwordVerifier,
-    buildAdminRedirectPath: (role) => role === "accountant" ? "/client/invoices_list.php" : "/client/index.php",
+    buildAdminRedirectPath: (role) => role === "accountant" ? "/client/invoices_list.php" : "/admin",
     recordSuccessfulLogin: async (identity: AdminIdentity) => {
       state.loginEvents.push(identity.actorId);
     }

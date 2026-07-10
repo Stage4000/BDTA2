@@ -141,7 +141,7 @@ function createAdminDependencies(overrides: Partial<AdminLoginDependencies> = {}
       (password === "correct-password" && hash === "admin-hash")
       || (password === "client-password" && hash === "client-hash")
     ),
-    buildAdminRedirectPath: (role) => role === "accountant" ? "/client/invoices_list.php" : "/client/index.php",
+buildAdminRedirectPath: (role) => role === "accountant" ? "/client/invoices_list.php" : "/admin",
     recordSuccessfulLogin: async () => undefined,
     ...overrides
   };

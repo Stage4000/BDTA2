@@ -147,6 +147,7 @@ describe("migration bootstrap", () => {
     expect(runtime.report.bootstrapApplied).toBe(true);
     expect(executor.calls.some((call) => call.sql.includes("SELECT COUNT(*) AS rowCount FROM clients"))).toBe(true);
     expect(executor.calls.some((call) => call.sql.includes("information_schema.tables"))).toBe(true);
+    expect(executor.calls.some((call) => call.sql.includes("CREATE TABLE IF NOT EXISTS app_sessions"))).toBe(true);
     expect(executor.calls.some((call) => call.sql.includes("CREATE TABLE IF NOT EXISTS email_outbox"))).toBe(true);
   });
 
