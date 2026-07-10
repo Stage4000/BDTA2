@@ -10411,22 +10411,7 @@ return;
           return;
         }
 
-        const portalNav = renderInlineLinkList([
-          { href: "/portal", label: "Overview" },
-          { href: "/portal/profile", label: "Profile" },
-          { href: "/portal/appointments", label: "Appointments" },
-          { href: "/portal/invoices", label: "Invoices" },
-          { href: "/portal/quotes", label: "Quotes" },
-          { href: "/portal/contracts", label: "Contracts" },
-          { href: "/portal/forms", label: "Forms" },
-          { href: "/portal/notifications", label: "Notifications" },
-          { href: "/portal/contacts", label: "Contacts" },
-          { href: "/portal/pets", label: "Pets" },
-          { href: "/portal/packages", label: "Packages" },
-          { href: "/portal/credits", label: "Credits" },
-          { href: "/portal/achievements", label: "Achievements" },
-          { href: "/portal/logout", label: "Logout" }
-        ]);
+const portalNav = "";
 
         if (url.pathname === "/portal/profile") {
           const profile = await handlers.handlePortalProfile(session);
@@ -11526,14 +11511,7 @@ return;
           return;
         }
 
-        const adminNav = renderInlineLinkList([
-          { href: "/admin", label: "Dashboard" },
-          { href: "/admin/clients", label: "Clients" },
-          { href: "/admin/bookings", label: "Bookings" },
-          { href: "/admin/forms", label: "Forms" },
-          { href: "/admin/appointment-types", label: "Appointment Types" },
-          { href: "/admin/form-templates", label: "Form Templates" }
-        ]);
+const adminNav = "";
         const source = method === "POST" ? await readFormBody(request) : url.searchParams;
         const readSourceValue = (key: string) => String(source.get(key) ?? "").trim();
         const requestOrigin = buildRequestOrigin(request);
@@ -11847,30 +11825,7 @@ return;
           return;
         }
 
-        const adminNav = renderInlineLinkList([
-          { href: "/admin", label: "Dashboard" },
-          { href: "/admin/clients", label: "Clients" },
-          { href: "/admin/bookings", label: "Bookings" },
-          { href: "/admin/invoices", label: "Invoices" },
-          { href: "/admin/quotes", label: "Quotes" },
-          { href: "/admin/contracts", label: "Contracts" },
-          { href: "/admin/forms", label: "Forms" },
-          { href: "/admin/pets", label: "Pets" },
-          { href: "/admin/workflows", label: "Workflows" },
-          { href: "/admin/appointment-types", label: "Appointment Types" },
-          { href: "/admin/form-templates", label: "Form Templates" },
-          { href: "/admin/email-templates", label: "Email Templates" },
-          { href: "/admin/scheduled-tasks", label: "Scheduled Tasks" },
-          { href: "/admin/packages", label: "Packages" },
-          { href: "/admin/credits", label: "Credits" },
-          { href: "/admin/achievement-types", label: "Achievement Types" },
-          { href: "/admin/blog-posts", label: "Blog Posts" },
-          { href: "/admin/site-pages", label: "Site Pages" },
-          { href: "/admin/settings", label: "Settings" },
-          { href: "/admin/operations/jobs", label: "Job Logs" },
-          { href: "/admin/operations/callbacks", label: "Callback Logs" },
-          { href: "/admin/logout", label: "Logout" }
-        ]);
+const adminNav = "";
 
 if (url.pathname === "/admin" || url.pathname === "/admin/dashboard" || url.pathname === "/client/index.php") {
 const dashboard = await handlers.handleAdminDashboard(session);

@@ -3065,6 +3065,7 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
       expect(dashboardHtml).toContain("app-main-content");
       expect(dashboardHtml).toContain("summary-grid");
       expect(dashboardHtml).toContain("data-table");
+      expect(dashboardHtml).not.toContain('class="inline-link-list"');
       expect(clientsHtml).toContain("client-portal-1");
       expect(clientsHtml).toContain("Casey");
       expect(clientsHtml).toContain("<h2>Client Directory</h2>");
@@ -3296,6 +3297,7 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
       expect(portalProfileHtml).toContain("123 Harbor Way");
       expect(portalProfileHtml).toContain("Manage the primary contact information");
       expect(portalProfileHtml).toContain('<form class="form-grid" method="post" action="/portal/profile">');
+      expect(portalProfileHtml).not.toContain('class="inline-link-list"');
       expect(portalAppointmentsHtml).toContain("<h2>Appointment Schedule</h2>");
       expect(portalAppointmentsHtml).toContain("No appointments.");
       expect(portalContactsHtml).toContain("contact-1");
