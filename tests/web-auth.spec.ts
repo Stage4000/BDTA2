@@ -33,6 +33,19 @@ function createServer() {
   return createUnifiedPlatformServer({ apiServer, webServer });
 }
 
+function createServerContext() {
+  const state = createReleaseValidationState();
+  const dependencies = createInMemoryApiDependencies(state);
+  const sessionStore = createInMemorySessionStore(state);
+  const apiServer = createHttpApiServer({ dependencies, sessionStore });
+  const webServer = createHttpWebServer({ dependencies, sessionStore });
+
+  return {
+    state,
+    server: createUnifiedPlatformServer({ apiServer, webServer })
+  };
+}
+
 describe("web auth screens", () => {
   it("renders login screens without app sidebars", async () => {
     const server = createServer();
@@ -158,10 +171,80 @@ describe("web auth screens", () => {
         redirect: "manual"
       });
 
-      expect(login.status).toBe(302);
-      expect(login.headers.get("location")).toBe("/admin");
-    } finally {
-      await closeServer(server);
+  expect(login.status).toBe(302);
+  expect(login.headers.get("location")).toBe("/admin");
+} finally {
+  await closeServer(server);
+}
+});
+
+it("clears stale admin sessions instead of redirect loops", async () => {
+  const { state, server } = createServerContext();
+  const baseUrl = await startServer(server);
+
+  try {
+    const login = await fetch(`${baseUrl}/admin/login`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded"
+      },
+      body: new URLSearchParams({
+        username: "brook",
+        password: "admin-password"
+      }),
+      redirect: "manual"
+    });
+
+    expect(login.status).toBe(302);
+    const firstCookie = login.headers.get("set-cookie");
+    expect(firstCookie).toContain("bdta_session=");
+
+    const secondLogin = await fetch(`${baseUrl}/admin/login`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded"
+      },
+      body: new URLSearchParams({
+        username: "brook",
+        password: "admin-password"
+      }),
+      redirect: "manual"
+    });
+
+    expect(secondLogin.status).toBe(302);
+    const secondCookie = secondLogin.headers.get("set-cookie");
+    expect(secondCookie).toContain("bdta_session=");
+
+    const adminUser = state.adminUsers.find((user) => user.username === "brook");
+    if (adminUser == null) {
+      throw new Error("Expected seeded admin user.");
     }
-  });
+
+    adminUser.active = false;
+
+    const protectedPage = await fetch(`${baseUrl}/admin`, {
+      headers: {
+        cookie: firstCookie ?? ""
+      },
+      redirect: "manual"
+    });
+
+    expect(protectedPage.status).toBe(302);
+    expect(protectedPage.headers.get("location")).toBe("/admin/login?return_to=%2Fadmin");
+    expect(protectedPage.headers.get("set-cookie")).toContain("Max-Age=0");
+
+    const loginPage = await fetch(`${baseUrl}/admin/login?return_to=%2Fadmin`, {
+      headers: {
+        cookie: secondCookie ?? ""
+      },
+      redirect: "manual"
+    });
+
+    expect(loginPage.status).toBe(200);
+    expect(loginPage.headers.get("set-cookie")).toContain("Max-Age=0");
+    expect(await loginPage.text()).toContain("auth-shell");
+  } finally {
+    await closeServer(server);
+  }
+});
 });

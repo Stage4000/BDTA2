@@ -7088,6 +7088,22 @@ async function persistSession(sessionStore: SessionStore, body: unknown): Promis
   };
 }
 
+const expiredSessionCookie = "bdta_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0";
+
+async function clearPersistedSession(
+  sessionStore: SessionStore,
+  request: IncomingMessage
+): Promise<Record<string, string>> {
+  const sessionId = readSessionIdFromCookie(request);
+  if (sessionStore != null && sessionId != null) {
+    await sessionStore.delete(sessionId);
+  }
+
+  return {
+    "set-cookie": expiredSessionCookie
+  };
+}
+
 function toLocalLocation(value: string): string {
   if (value.startsWith("/")) {
     return value;
@@ -7243,18 +7259,40 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
         }
       }
 
-    if (method === "GET" && url.pathname === "/admin/login") {
-      const returnPath = sanitizeAdminReturnPath(url.searchParams.get("return_to") ?? url.searchParams.get("returnTo"));
-      const session = await loadPersistedSession(resolved.sessionStore, request);
-      if (session?.actorType === "admin_user") {
-        redirect(response, returnPath ?? toLocalLocation(resultAdminLandingPath(session.role)));
-        return;
-      }
+if (method === "GET" && url.pathname === "/admin/login") {
+const returnPath = sanitizeAdminReturnPath(url.searchParams.get("return_to") ?? url.searchParams.get("returnTo"));
+const session = await loadPersistedSession(resolved.sessionStore, request);
+if (session?.actorType === "admin_user") {
+if (handlers != null) {
+const actor = await handlers.handleAdminActorProfile(session);
+if ("error" in actor.body) {
+writeHtml(response, 200, renderAdminLoginPage({
+action: buildAdminLoginPath(returnPath),
+returnPath
+}), await clearPersistedSession(resolved.sessionStore, request));
+return;
+}
+}
 
-      if (session?.actorType === "portal_user") {
-        redirect(response, "/portal");
-        return;
-      }
+redirect(response, returnPath ?? toLocalLocation(resultAdminLandingPath(session.role)));
+return;
+}
+
+if (session?.actorType === "portal_user") {
+if (handlers != null) {
+const actor = await handlers.handlePortalActorProfile(session);
+if ("error" in actor.body) {
+writeHtml(response, 200, renderAdminLoginPage({
+action: buildAdminLoginPath(returnPath),
+returnPath
+}), await clearPersistedSession(resolved.sessionStore, request));
+return;
+}
+}
+
+redirect(response, "/portal");
+return;
+}
 
       writeHtml(response, 200, renderAdminLoginPage({
         action: buildAdminLoginPath(returnPath),
@@ -7288,18 +7326,40 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
       return;
     }
 
-    if (method === "GET" && url.pathname === "/portal/login") {
-      const returnPath = sanitizeLocalReturnPath(url.searchParams.get("return_to") ?? url.searchParams.get("returnTo"));
-      const session = await loadPersistedSession(resolved.sessionStore, request);
-      if (session?.actorType === "portal_user") {
-        redirect(response, returnPath ?? "/portal");
-        return;
-      }
+if (method === "GET" && url.pathname === "/portal/login") {
+const returnPath = sanitizeLocalReturnPath(url.searchParams.get("return_to") ?? url.searchParams.get("returnTo"));
+const session = await loadPersistedSession(resolved.sessionStore, request);
+if (session?.actorType === "portal_user") {
+if (handlers != null) {
+const actor = await handlers.handlePortalActorProfile(session);
+if ("error" in actor.body) {
+writeHtml(response, 200, renderPortalLoginPage({
+action: buildPortalLoginPath(returnPath),
+returnPath
+}), await clearPersistedSession(resolved.sessionStore, request));
+return;
+}
+}
 
-      if (session?.actorType === "admin_user") {
-        redirect(response, "/admin");
-        return;
-      }
+redirect(response, returnPath ?? "/portal");
+return;
+}
+
+if (session?.actorType === "admin_user") {
+if (handlers != null) {
+const actor = await handlers.handleAdminActorProfile(session);
+if ("error" in actor.body) {
+writeHtml(response, 200, renderPortalLoginPage({
+action: buildPortalLoginPath(returnPath),
+returnPath
+}), await clearPersistedSession(resolved.sessionStore, request));
+return;
+}
+}
+
+redirect(response, "/admin");
+return;
+}
 
       writeHtml(response, 200, renderPortalLoginPage({
         action: buildPortalLoginPath(returnPath),
@@ -8094,29 +8154,15 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
         return;
       }
 
-      if (method === "GET" && url.pathname === "/portal/logout") {
-        const sessionId = readSessionIdFromCookie(request);
-        if (resolved.sessionStore != null && sessionId != null) {
-          await resolved.sessionStore.delete(sessionId);
-        }
+if (method === "GET" && url.pathname === "/portal/logout") {
+redirect(response, "/portal/login", await clearPersistedSession(resolved.sessionStore, request));
+return;
+}
 
-        redirect(response, "/portal/login", {
-          "set-cookie": "bdta_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
-        });
-        return;
-      }
-
-      if (method === "GET" && url.pathname === "/admin/logout") {
-        const sessionId = readSessionIdFromCookie(request);
-        if (resolved.sessionStore != null && sessionId != null) {
-          await resolved.sessionStore.delete(sessionId);
-        }
-
-        redirect(response, "/admin/login", {
-          "set-cookie": "bdta_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
-        });
-        return;
-      }
+if (method === "GET" && url.pathname === "/admin/logout") {
+redirect(response, "/admin/login", await clearPersistedSession(resolved.sessionStore, request));
+return;
+}
 
       const quoteAcceptMatch = /^\/portal\/quotes\/([^/]+)\/accept$/.exec(url.pathname);
       if (method === "POST" && handlers != null && quoteAcceptMatch != null) {
@@ -9908,7 +9954,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
 
         const actor = await handlers.handlePortalActorProfile(session);
         if ("error" in actor.body) {
-          redirect(response, buildPortalLoginRedirectPath(request));
+          redirect(response, buildPortalLoginRedirectPath(request), await clearPersistedSession(resolved.sessionStore, request));
           return;
         }
 
@@ -11031,7 +11077,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
 
         const actor = await handlers.handleAdminActorProfile(session);
         if ("error" in actor.body) {
-          redirect(response, buildAdminLoginRedirectPath(request));
+          redirect(response, buildAdminLoginRedirectPath(request), await clearPersistedSession(resolved.sessionStore, request));
           return;
         }
 
@@ -11352,7 +11398,7 @@ export function createHttpWebServer(options: HttpWebServerOptions): Server {
 
         const actor = await handlers.handleAdminActorProfile(session);
         if ("error" in actor.body) {
-          redirect(response, buildAdminLoginRedirectPath(request));
+          redirect(response, buildAdminLoginRedirectPath(request), await clearPersistedSession(resolved.sessionStore, request));
           return;
         }
 
