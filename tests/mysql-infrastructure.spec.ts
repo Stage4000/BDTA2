@@ -203,7 +203,40 @@ describe("mysql infrastructure", () => {
     expect(executor.calls[8]?.sql).toContain("INSERT INTO job_queue");
   });
 
-  it("auto-enrolls MySQL workflow clients from appointment booking triggers", async () => {
+it("normalizes legacy booking timestamps before listing admin bookings", async () => {
+  const executor = new FakeSqlExecutor([
+    rows([{
+      id: 42,
+      client_id: 7,
+      service_type: "svc-group-class",
+      appointment_date: "2026-06-02",
+      appointment_time: "4:15 PM",
+      duration_minutes: 45,
+      status: "confirmed",
+      ical_token: null
+    }])
+  ]);
+
+  const bookings = await createMySqlApiDependencies(executor, {
+    now: () => "2026-06-01T12:00:00.000Z"
+  }).adminResources.listAdminBookings();
+
+  expect(bookings).toEqual([
+    {
+      id: "42",
+      clientId: "7",
+      petIds: [],
+      serviceId: "svc-group-class",
+      startsAt: "2026-06-02T16:15:00.000Z",
+      endsAt: "2026-06-02T17:00:00.000Z",
+      status: "confirmed",
+      icalAccess: null
+    }
+  ]);
+  expect(executor.calls[0]?.sql).toContain("FROM bookings");
+});
+
+it("auto-enrolls MySQL workflow clients from appointment booking triggers", async () => {
     const executor = new FakeSqlExecutor([
       rows([{ overlapCount: 0 }]),
       rows([{ id: 12, name: "Existing Client", password_hash: null }]),

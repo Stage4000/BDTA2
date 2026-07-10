@@ -126,7 +126,98 @@ describe("web server", () => {
     }
   });
 
-  it("renders newsletter and Tawk settings on eligible public pages and suppresses them when legacy rules require it", async () => {
+it("renders public content when migrated blog and page metadata uses blank strings", async () => {
+  const state = createInMemoryPlatformState({
+    blogPosts: [
+      {
+        id: "blog-legacy-1",
+        title: "Legacy Training Notes",
+        slug: "legacy-training-notes",
+        content: "<p>Legacy migration content still needs to render.</p>",
+        excerpt: "Legacy migration content still needs to render.",
+        coverPhoto: null,
+        author: "",
+        published: true,
+        publishDate: "2026-06-01T12:00:00.000Z",
+        createdAt: "2026-06-01T12:00:00.000Z",
+        updatedAt: "2026-06-01T12:00:00.000Z"
+      }
+    ],
+    sitePages: [
+      {
+        id: "page-home-legacy",
+        slug: "home",
+        title: "Brook's Dog Training Academy",
+        htmlContent: "<section><h1>Legacy homepage content</h1></section>",
+        cssContent: "",
+        metaDescription: "Legacy homepage description.",
+        metaKeywords: "legacy, home",
+        ogTitle: "",
+        ogDescription: "",
+        ogImage: "",
+        isHomepage: true,
+        published: true,
+        sortOrder: 1,
+        updatedByAdminUserId: null,
+        createdAt: "2026-06-01T12:00:00.000Z",
+        updatedAt: "2026-06-01T12:00:00.000Z"
+      },
+      {
+        id: "page-directory-legacy",
+        slug: "directory",
+        title: "Directory",
+        htmlContent: "<section><h1>Directory</h1><p>Legacy directory copy.</p></section>",
+        cssContent: "",
+        metaDescription: "Legacy directory description.",
+        metaKeywords: "legacy, directory",
+        ogTitle: "",
+        ogDescription: "",
+        ogImage: "",
+        isHomepage: false,
+        published: true,
+        sortOrder: 2,
+        updatedByAdminUserId: null,
+        createdAt: "2026-06-01T12:00:00.000Z",
+        updatedAt: "2026-06-01T12:00:00.000Z"
+      }
+    ]
+  });
+
+  const server = createHttpWebServer({ state });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  if (address == null || typeof address === "string") {
+    throw new Error("Expected TCP server address.");
+  }
+
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+
+  try {
+    const [home, directory, blogIndex, blogPost] = await Promise.all([
+      fetch(`${baseUrl}/`),
+      fetch(`${baseUrl}/directory`),
+      fetch(`${baseUrl}/blog`),
+      fetch(`${baseUrl}/blog/legacy-training-notes`)
+    ]);
+
+    expect(home.status).toBe(200);
+    expect(directory.status).toBe(200);
+    expect(blogIndex.status).toBe(200);
+    expect(blogPost.status).toBe(200);
+
+    expect(await home.text()).toContain("Legacy homepage content");
+    expect(await directory.text()).toContain("Legacy directory copy.");
+    expect(await blogIndex.text()).toContain("Legacy Training Notes");
+    expect(await blogPost.text()).toContain("Legacy migration content still needs to render.");
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error?: Error) => error ? reject(error) : resolve());
+    });
+  }
+});
+
+it("renders newsletter and Tawk settings on eligible public pages and suppresses them when legacy rules require it", async () => {
     const state = createInMemoryPlatformState({
       adminUsers: [
         {

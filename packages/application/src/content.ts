@@ -135,10 +135,38 @@ function requireFound<T>(item: T | null, message: string): T {
   return item;
 }
 
+function normalizeOptionalTrimmedString(value: string | null): string | null {
+  if (value == null) {
+    return null;
+  }
+
+  const normalized = value.trim();
+  return normalized === "" ? null : normalized;
+}
+
+function normalizeRequiredTrimmedString(value: string, fallback: string): string {
+  const normalized = value.trim();
+  return normalized === "" ? fallback : normalized;
+}
+
 function normalizeBlogPost(item: BlogPost): BlogPost {
   return {
     ...item,
+    title: normalizeRequiredTrimmedString(item.title, "Untitled Post"),
+    slug: normalizeRequiredTrimmedString(item.slug, `blog-post-${item.id}`),
+    author: normalizeRequiredTrimmedString(item.author, "Brook's Dog Training Academy"),
     coverPhoto: normalizeNullableBlogCoverPhotoPath(item.coverPhoto)
+  };
+}
+
+function normalizeSitePage(item: SitePage): SitePage {
+  return {
+    ...item,
+    slug: normalizeRequiredTrimmedString(item.slug, item.isHomepage ? "home" : `page-${item.id}`),
+    title: normalizeRequiredTrimmedString(item.title, item.isHomepage ? "Home" : "Untitled Page"),
+    ogTitle: normalizeOptionalTrimmedString(item.ogTitle),
+    ogDescription: normalizeOptionalTrimmedString(item.ogDescription),
+    ogImage: normalizeOptionalTrimmedString(item.ogImage)
   };
 }
 
@@ -212,7 +240,7 @@ export async function getPublicSitePage(slug: string | null, dependencies: Conte
     "Public site page not found."
   );
 
-  return sitePageDetailSchema.parse({ item: sitePageSchema.parse(item) });
+  return sitePageDetailSchema.parse({ item: sitePageSchema.parse(normalizeSitePage(item)) });
 }
 
 export async function listAdminBlogPosts(session: SessionSnapshot, dependencies: ContentManagementDependencies) {
@@ -285,7 +313,7 @@ export async function deleteAdminBlogPost(
 export async function listAdminSitePages(session: SessionSnapshot, dependencies: ContentManagementDependencies) {
   requireAdminSession(session);
   return sitePageCollectionSchema.parse({
-    items: (await dependencies.listAdminSitePages()).map((item) => sitePageSchema.parse(item))
+    items: (await dependencies.listAdminSitePages()).map((item) => sitePageSchema.parse(normalizeSitePage(item)))
   });
 }
 
@@ -300,7 +328,7 @@ export async function getAdminSitePageDetail(
     "Admin site page not found."
   );
 
-  return sitePageDetailSchema.parse({ item: sitePageSchema.parse(item) });
+  return sitePageDetailSchema.parse({ item: sitePageSchema.parse(normalizeSitePage(item)) });
 }
 
 export async function createAdminSitePage(
@@ -311,7 +339,7 @@ export async function createAdminSitePage(
   const adminUserId = requireAdminSession(session);
   return sitePageDetailSchema.parse({
     item: sitePageSchema.parse(
-      await dependencies.createAdminSitePage(adminUserId, adminSitePageUpsertRequestSchema.parse(input))
+      normalizeSitePage(await dependencies.createAdminSitePage(adminUserId, adminSitePageUpsertRequestSchema.parse(input)))
     )
   });
 }
@@ -332,7 +360,7 @@ export async function updateAdminSitePage(
     "Admin site page not found."
   );
 
-  return sitePageDetailSchema.parse({ item: sitePageSchema.parse(item) });
+  return sitePageDetailSchema.parse({ item: sitePageSchema.parse(normalizeSitePage(item)) });
 }
 
 export async function deleteAdminSitePage(

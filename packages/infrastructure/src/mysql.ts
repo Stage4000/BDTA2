@@ -399,8 +399,34 @@ function toDurationMinutes(start: string, end: string): number {
   return Math.max(1, Math.round((Date.parse(end) - Date.parse(start)) / 60000));
 }
 
+function normalizeLegacyTimeOfDay(value: string): string {
+  const normalized = value.trim();
+  if (/^\d{1,2}:\d{2}$/.test(normalized)) {
+    return `${normalized}:00`;
+  }
+
+  if (/^\d{1,2}:\d{2}:\d{2}$/.test(normalized)) {
+    return normalized;
+  }
+
+  const meridiemMatch = /^(\d{1,2}):(\d{2})\s*([AaPp][Mm])$/.exec(normalized);
+  if (meridiemMatch != null) {
+    const hours = Number.parseInt(meridiemMatch[1] ?? "0", 10);
+    const minutes = Number.parseInt(meridiemMatch[2] ?? "0", 10);
+    const meridiem = (meridiemMatch[3] ?? "").toUpperCase();
+    const normalizedHours = meridiem === "PM"
+      ? hours % 12 + 12
+      : hours % 12;
+    return `${String(normalizedHours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:00`;
+  }
+
+  return "00:00:00";
+}
+
 function toTimestamp(date: string, time: string): string {
-  return `${date}T${time}.000Z`;
+  const normalizedDate = /^\d{4}-\d{2}-\d{2}$/.test(date.trim()) ? date.trim() : "1970-01-01";
+  const timestamp = `${normalizedDate}T${normalizeLegacyTimeOfDay(time)}.000Z`;
+  return Number.isNaN(Date.parse(timestamp)) ? "1970-01-01T00:00:00.000Z" : timestamp;
 }
 
 function toCalendarTimestamp(timestamp: string): string {
@@ -429,7 +455,10 @@ function fromLegacyBookingRow(row: {
   ical_token?: string | null;
 }): Booking {
   const startsAt = toTimestamp(row.appointment_date, row.appointment_time);
-  const endsAt = new Date(Date.parse(startsAt) + row.duration_minutes * 60_000).toISOString();
+  const durationMinutes = Number.isFinite(row.duration_minutes) && row.duration_minutes > 0
+    ? row.duration_minutes
+    : 60;
+  const endsAt = new Date(Date.parse(startsAt) + durationMinutes * 60_000).toISOString();
 
   return {
     id: String(row.id),

@@ -33,7 +33,7 @@ describe("deployment artifacts", () => {
     expect(packageJson).toContain("\"sync:legacy-assets\"");
     expect(packageJson).toContain("\"validate:env\"");
     expect(packageJson).toContain("\"start:platform\"");
-    expect(packageJson).toContain("npm run sync:legacy-assets");
+    expect(packageJson).toContain("node scripts/sync-legacy-assets.mjs");
     expect(packageJson).toContain("node ./node_modules/typescript/bin/tsc -p tsconfig.build.json");
     expect(packageJson).toContain("node ./node_modules/typescript/bin/tsc -p tsconfig.json --noEmit");
     expect(packageJson).toContain("node dist/apps/release/src/env-validator-cli.js");
