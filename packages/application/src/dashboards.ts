@@ -10,6 +10,16 @@ const sessionSnapshotSchema = authSessionSchema.extend({
   roleRefreshedAt: timestampSchema.optional()
 });
 
+function collectValidItems<T>(
+  items: readonly unknown[],
+  schema: z.ZodType<T>
+): T[] {
+  return items.flatMap((item) => {
+    const parsed = schema.safeParse(item);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
+
 export type PortalSummaryDependencies = {
   listBookingsForPortalActor(clientId: string): Promise<Booking[]>;
   listInvoicesForPortalActor(clientId: string): Promise<Invoice[]>;
