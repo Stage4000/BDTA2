@@ -46,6 +46,16 @@ import {
 } from "./form-portal-visibility.js";
 import { SessionActorError, type SessionSnapshot } from "./session-actors.js";
 
+function collectValidItems<T>(
+  items: readonly unknown[],
+  schema: z.ZodType<T>
+): T[] {
+  return items.flatMap((item) => {
+    const parsed = schema.safeParse(item);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
+
 export type PortalResourceReadDependencies = {
   listPortalBookings(clientId: string): Promise<Booking[]>;
   findPortalBookingById(clientId: string, bookingId: string): Promise<Booking | null>;
@@ -387,7 +397,7 @@ export async function deleteAdminPetFile(
 export async function listAdminBookings(session: SessionSnapshot, dependencies: AdminResourceReadDependencies) {
   requireAdminSession(session);
   return bookingCollectionSchema.parse({
-    items: (await dependencies.listAdminBookings()).map((item) => bookingSchema.parse(item))
+    items: collectValidItems(await dependencies.listAdminBookings(), bookingSchema)
   });
 }
 
@@ -400,7 +410,7 @@ export async function getAdminBookingDetail(session: SessionSnapshot, bookingId:
 export async function listAdminInvoices(session: SessionSnapshot, dependencies: AdminResourceReadDependencies) {
   requireAdminSession(session);
   return invoiceCollectionSchema.parse({
-    items: (await dependencies.listAdminInvoices()).map((item) => invoiceSchema.parse(item))
+    items: collectValidItems(await dependencies.listAdminInvoices(), invoiceSchema)
   });
 }
 
@@ -413,7 +423,7 @@ export async function getAdminInvoiceDetail(session: SessionSnapshot, invoiceId:
 export async function listAdminQuotes(session: SessionSnapshot, dependencies: AdminResourceReadDependencies) {
   requireAdminSession(session);
   return quoteCollectionSchema.parse({
-    items: (await dependencies.listAdminQuotes()).map((item) => quoteSchema.parse(item))
+    items: collectValidItems(await dependencies.listAdminQuotes(), quoteSchema)
   });
 }
 
