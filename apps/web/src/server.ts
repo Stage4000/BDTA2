@@ -7285,7 +7285,7 @@ type RouteErrorResult = {
   body: unknown;
 };
 
-function readRouteError(body: unknown): { code: string; message: string } | null {
+function readRouteError(body: unknown): { code: string; message: string; details?: unknown } | null {
   if (typeof body !== "object" || body == null || !("error" in body)) {
     return null;
   }
@@ -7301,11 +7301,121 @@ function readRouteError(body: unknown): { code: string; message: string } | null
     return null;
   }
 
-  return { code, message };
+  const details = "details" in error ? error.details : undefined;
+  return { code, message, details };
 }
 
 function isAuthRouteErrorCode(code: string): boolean {
   return code === "unauthorized" || code === "actor_not_found";
+}
+
+function readResponseRequestId(response: ServerResponse): string | null {
+  const value = response.getHeader("x-request-id");
+  if (typeof value === "string" && value.trim() !== "") {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    const first = value.find((item): item is string => typeof item === "string" && item.trim() !== "");
+    return first ?? null;
+  }
+
+  return null;
+}
+
+function readRequestPath(request: IncomingMessage): string {
+  return request.url == null || request.url.trim() === "" ? "/" : request.url;
+}
+
+function formatDiagnosticValue(value: unknown, maxLength = 4000): string | null {
+  if (value == null) {
+    return null;
+  }
+
+  const text = typeof value === "string"
+    ? value
+    : typeof value === "number" || typeof value === "boolean"
+    ? String(value)
+    : (() => {
+      try {
+        return JSON.stringify(value, null, 2);
+      } catch {
+        return String(value);
+      }
+    })();
+
+  const trimmed = text.trim();
+  if (trimmed === "") {
+    return null;
+  }
+
+  return trimmed.length <= maxLength ? trimmed : `${trimmed.slice(0, maxLength)}\n…truncated`;
+}
+
+function describeUnexpectedError(error: unknown): { headline: string; message: string; details: string | null } {
+  if (error instanceof Error) {
+    return {
+      headline: error.name.trim() === "" ? "Unexpected Server Failure" : error.name.trim(),
+      message: error.message.trim() === "" ? "Unexpected server failure." : error.message.trim(),
+      details: formatDiagnosticValue(error.stack ?? error.message)
+    };
+  }
+
+  if (typeof error === "string") {
+    const message = error.trim();
+    return {
+      headline: "Unexpected Server Failure",
+      message: message === "" ? "Unexpected server failure." : message,
+      details: message === "" ? null : message
+    };
+  }
+
+  return {
+    headline: "Unexpected Server Failure",
+    message: "Unexpected server failure.",
+    details: formatDiagnosticValue(error)
+  };
+}
+
+function renderDebugErrorArticle(input: {
+  title: string;
+  headline: string;
+  message: string;
+  statusCode?: number;
+  errorCode?: string | null;
+  requestId?: string | null;
+  requestPath?: string | null;
+  details?: string | null;
+}): string {
+  const metadata = [
+    input.statusCode == null ? null : { label: "HTTP Status", value: escapeHtml(String(input.statusCode)) },
+    input.errorCode == null || input.errorCode.trim() === "" ? null : { label: "Error Code", value: escapeHtml(input.errorCode) },
+    input.requestPath == null || input.requestPath.trim() === "" ? null : { label: "Route", value: escapeHtml(input.requestPath) },
+    input.requestId == null || input.requestId.trim() === "" ? null : { label: "Request ID", value: escapeHtml(input.requestId) }
+  ].filter((item): item is { label: string; value: string } => item != null);
+
+  return [
+    '<article class="content-stack">',
+    renderSectionIntro({
+      eyebrow: "Error",
+      title: input.headline,
+      description: input.message
+    }),
+    metadata.length === 0 ? "" : renderDetailGrid(metadata),
+    '<section class="surface-block">',
+    "<h2>Debugging Context</h2>",
+    `<p class="section-copy">${escapeHtml(input.title)} could not be rendered. Use the route, request ID, and details below to trace the failure in logs or upstream handlers.</p>`,
+    "</section>",
+    input.details == null || input.details.trim() === ""
+      ? ""
+      : [
+        '<details class="surface-block">',
+        "<summary><strong>Error Details</strong></summary>",
+        `<pre class="debug-error-pre">${escapeHtml(input.details)}</pre>`,
+        "</details>"
+      ].join(""),
+    "</article>"
+  ].join("");
 }
 
 async function handleProtectedRouteFailure(options: {
@@ -7327,9 +7437,21 @@ async function handleProtectedRouteFailure(options: {
   }
 
   const message = routeError?.message ?? "Unexpected server failure.";
+  const details = routeError?.details != null
+    ? formatDiagnosticValue(routeError.details)
+    : formatDiagnosticValue(options.result.body);
   writeHtml(options.response, options.result.status, renderLayout({
     title: options.title,
-    body: `<article><h1>${escapeHtml(options.title)}</h1><p>${escapeHtml(message)}</p></article>`
+    body: renderDebugErrorArticle({
+      title: options.title,
+      headline: `${options.title} failed to load`,
+      message,
+      statusCode: options.result.status,
+      errorCode: routeError?.code ?? null,
+      requestId: readResponseRequestId(options.response),
+      requestPath: readRequestPath(options.request),
+      details
+    })
   }));
 }
 
