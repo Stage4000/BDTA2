@@ -2544,7 +2544,7 @@ describe("api handlers", () => {
     expect(result.body.activeQuotes[0]?.id).toBe("quote-1");
   });
 
-  it("returns an admin dashboard for a valid admin session", async () => {
+it("returns an admin dashboard for a valid admin session", async () => {
     const handlers = createApiHandlers(createApiDependencies());
 
     const result = await handlers.handleAdminDashboard({
@@ -2559,12 +2559,43 @@ describe("api handlers", () => {
     if ("error" in result.body) {
       throw new Error("Expected successful admin dashboard response.");
     }
-    expect(result.body.metrics.pendingBookings).toBe(4);
-    expect(result.body.metrics.overdueInvoices).toBe(2);
-    expect(result.body.recentBookings).toHaveLength(1);
-  });
+expect(result.body.metrics.pendingBookings).toBe(4);
+expect(result.body.metrics.overdueInvoices).toBe(2);
+expect(result.body.recentBookings).toHaveLength(1);
+});
 
-  it("returns admin job logs and integration callback logs for a valid admin session", async () => {
+it("returns an admin dashboard when recent bookings contain Date timestamps", async () => {
+const handlers = createApiHandlers(createApiDependencies({
+adminDashboard: createAdminDashboardDependencies({
+listRecentBookings: async () => [{
+id: "booking-2",
+clientId: "client-2",
+petIds: ["pet-9"],
+serviceId: "svc-board-train",
+startsAt: new Date("2026-05-28T17:00:00.000Z") as unknown as string,
+endsAt: new Date("2026-05-28T18:00:00.000Z") as unknown as string,
+status: "pending",
+icalAccess: null
+}]
+})
+}));
+
+const result = await handlers.handleAdminDashboard({
+actorId: "admin-1",
+actorType: "admin_user" as const,
+role: "accountant" as const,
+issuedAt: "2026-05-27T18:00:00.000Z",
+expiresAt: "2026-05-27T18:00:00.000Z"
+});
+
+expect(result.status).toBe(200);
+if ("error" in result.body) {
+throw new Error("Expected successful admin dashboard response for Date-backed bookings.");
+}
+expect(result.body.recentBookings[0]?.startsAt).toBe("2026-05-28T17:00:00.000Z");
+});
+
+it("returns admin job logs and integration callback logs for a valid admin session", async () => {
     const handlers = createApiHandlers(createApiDependencies());
     const session = {
       actorId: "admin-1",
