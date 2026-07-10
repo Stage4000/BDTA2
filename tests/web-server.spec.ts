@@ -3067,6 +3067,9 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
       expect(bookingsHtml).toContain("booking-1");
       expect(bookingsHtml).toContain("<h2>Booking Ledger</h2>");
       expect(bookingsHtml).toContain('<div class="data-table">');
+      expect(bookingsHtml).toContain("data-enhanced-table");
+      expect(bookingsHtml).toContain("data-enhanced-table-search");
+      expect(bookingsHtml).toContain("data-enhanced-table-page-count");
       expect(invoicesHtml).toContain("invoice-1");
       expect(invoicesHtml).toContain("<h2>Invoice Ledger</h2>");
       expect(invoicesHtml).toContain('<div class="data-table">');
@@ -3299,6 +3302,8 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
       expect(portalPetsHtml).toContain("Buddy");
       expect(portalPetsHtml).toContain("<h2>Pet Directory</h2>");
       expect(portalPetsHtml).toContain('<div class="data-table">');
+      expect(portalPetsHtml).toContain("data-enhanced-table-prev");
+      expect(portalPetsHtml).toContain('data-label="Pet ID"');
       expect(portalPetsHtml).toContain("Use the side gate and towel paws before re-entry.");
       expect(portalPackagesHtml).toContain("Starter Package");
       expect(portalPackagesHtml).toContain("<h2>Package Summary</h2>");
