@@ -891,7 +891,12 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
       const response = await fetch(`http://127.0.0.1:${crashingAddress.port}/`);
       expect(response.status).toBe(500);
       expect(response.headers.get("x-request-id")).toBe("web-request-1");
-      expect(await response.text()).toContain("Unexpected server failure.");
+      const html = await response.text();
+      expect(html).toContain("database unavailable");
+      expect(html).toContain("Request ID");
+      expect(html).toContain("web-request-1");
+      expect(html).toContain("Route");
+      expect(html).toContain('<pre class="debug-error-pre">');
       expect(reportedErrors).toHaveLength(1);
       expect(reportedErrors[0]?.requestId).toBe("web-request-1");
       expect(reportedErrors[0]?.method).toBe("GET");

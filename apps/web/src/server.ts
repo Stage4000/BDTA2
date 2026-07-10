@@ -5950,6 +5950,8 @@ function renderLayout(input: {
     ".data-table__pagination button { box-shadow: none; padding: 0.7rem 1rem; }",
     ".data-table__pagination button[disabled] { opacity: 0.45; cursor: not-allowed; }",
     ".data-table__empty-state { margin: 0; padding: 0 1rem 1rem; }",
+    ".debug-error-pre { margin: 1rem 0 0; padding: 1rem; overflow-x: auto; border-radius: 1rem; background: #0f172a; color: #e2e8f0; font: 0.88rem/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-word; }",
+    ".surface-block details > summary, details.surface-block > summary { cursor: pointer; }",
     ".inline-link-list { display: flex; flex-wrap: wrap; gap: 0.7rem 1rem; margin: 0 0 1.25rem; color: #64748b; }",
     ".inline-link-list a { font-weight: 500; }",
     ".detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin: 0 0 1.5rem; }",
@@ -14819,19 +14821,28 @@ return;
         return;
       }
 
-      await options.onError?.(error, {
-        requestId,
-        method,
-        path: url.pathname
-      });
+    await options.onError?.(error, {
+      requestId,
+      method,
+      path: url.pathname
+    });
 
-      if (!response.headersSent) {
-        writeHtml(response, 500, renderLayout({
+    if (!response.headersSent) {
+      const unexpectedError = describeUnexpectedError(error);
+      writeHtml(response, 500, renderLayout({
+        title: "Unexpected Server Failure",
+        body: renderDebugErrorArticle({
           title: "Unexpected Server Failure",
-          body: `<article><h1>Unexpected server failure.</h1><p>Reference ID: ${escapeHtml(requestId)}</p></article>`
-        }));
-        return;
-      }
+          headline: unexpectedError.headline,
+          message: unexpectedError.message,
+          statusCode: 500,
+          requestId,
+          requestPath,
+          details: unexpectedError.details
+        })
+      }));
+      return;
+    }
 
       if (!response.writableEnded) {
         response.end();
