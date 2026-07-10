@@ -9958,12 +9958,20 @@ return;
           return;
         }
 
-        if (url.pathname === "/portal") {
-          const summary = await handlers.handlePortalSummary(session);
-          if ("error" in summary.body) {
-            redirect(response, buildPortalLoginRedirectPath(request));
-            return;
-          }
+if (url.pathname === "/portal") {
+const summary = await handlers.handlePortalSummary(session);
+if ("error" in summary.body) {
+if (summary.body.error.code === "unauthorized" || summary.body.error.code === "actor_not_found") {
+redirect(response, buildPortalLoginRedirectPath(request), await clearPersistedSession(resolved.sessionStore, request));
+return;
+}
+
+writeHtml(response, summary.status, renderLayout({
+title: "Portal",
+body: `<article><h1>Portal</h1><p>${escapeHtml(summary.body.error.message)}</p></article>`
+}));
+return;
+}
 
           writeHtml(response, 200, renderLayout({
             title: "Portal",
@@ -11427,12 +11435,20 @@ return;
           { href: "/admin/logout", label: "Logout" }
         ]);
 
-        if (url.pathname === "/admin" || url.pathname === "/admin/dashboard" || url.pathname === "/client/index.php") {
-          const dashboard = await handlers.handleAdminDashboard(session);
-          if ("error" in dashboard.body) {
-            redirect(response, buildAdminLoginRedirectPath(request));
-            return;
-          }
+if (url.pathname === "/admin" || url.pathname === "/admin/dashboard" || url.pathname === "/client/index.php") {
+const dashboard = await handlers.handleAdminDashboard(session);
+if ("error" in dashboard.body) {
+if (dashboard.body.error.code === "unauthorized" || dashboard.body.error.code === "actor_not_found") {
+redirect(response, buildAdminLoginRedirectPath(request), await clearPersistedSession(resolved.sessionStore, request));
+return;
+}
+
+writeHtml(response, dashboard.status, renderLayout({
+title: "Admin Dashboard",
+body: `<article><h1>Admin Dashboard</h1><p>${escapeHtml(dashboard.body.error.message)}</p></article>`
+}));
+return;
+}
 
           writeHtml(response, 200, renderLayout({
             title: "Admin Dashboard",

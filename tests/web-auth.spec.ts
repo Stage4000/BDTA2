@@ -42,6 +42,8 @@ function createServerContext() {
 
   return {
     state,
+    dependencies,
+    sessionStore,
     server: createUnifiedPlatformServer({ apiServer, webServer })
   };
 }
@@ -247,4 +249,5 @@ it("clears stale admin sessions instead of redirect loops", async () => {
     await closeServer(server);
   }
 });
+
 });
