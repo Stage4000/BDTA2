@@ -22,6 +22,8 @@ import {
   workflowTriggerSchema
 } from "./common.js";
 
+const blankStringToNull = (value: unknown) => value === "" ? null : value;
+
 export const adminUserSchema = z.object({
   id: idSchema,
   email: emailSchema,
@@ -294,9 +296,9 @@ export const quoteSchema = z.object({
   quoteNumber: z.string().min(1).optional(),
   title: z.string().min(1).optional(),
   description: z.string().optional(),
-  expiresAt: z.string().min(1).nullable().optional(),
-  acceptedAt: z.string().min(1).nullable().optional(),
-  declinedAt: z.string().min(1).nullable().optional(),
+  expiresAt: z.preprocess(blankStringToNull, timestampSchema.nullable().optional()),
+  acceptedAt: z.preprocess(blankStringToNull, timestampSchema.nullable().optional()),
+  declinedAt: z.preprocess(blankStringToNull, timestampSchema.nullable().optional()),
   items: z.array(quoteLineItemSchema).optional(),
   publicAccess: publicAccessTokenSchema.nullable()
 });
@@ -309,8 +311,8 @@ export const contractSchema = z.object({
   title: z.string().min(1).optional(),
   description: z.string().optional(),
   contractText: z.string().optional(),
-  effectiveDate: z.string().min(1).nullable().optional(),
-  signedAt: z.string().min(1).nullable().optional(),
+  effectiveDate: z.preprocess(blankStringToNull, dateSchema.nullable().optional()),
+  signedAt: z.preprocess(blankStringToNull, timestampSchema.nullable().optional()),
   signatureTypedName: z.string().nullable().optional(),
   signatureFont: z.string().nullable().optional(),
   publicAccess: publicAccessTokenSchema.nullable()
@@ -323,7 +325,7 @@ export const formTemplateSchema = z.object({
   description: z.string().optional(),
   fields: z.array(z.record(z.string(), z.unknown())).optional(),
   formType: z.string().min(1).optional(),
-  requiredFrequency: z.string().min(1).nullable().optional(),
+  requiredFrequency: z.preprocess(blankStringToNull, z.string().min(1).nullable().optional()),
   appointmentTypeId: idSchema.nullable().optional(),
   templateIsInternal: z.boolean().nullable().optional(),
   templateShowInClientPortal: z.boolean().nullable().optional()

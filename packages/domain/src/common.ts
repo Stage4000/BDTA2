@@ -1,10 +1,21 @@
 import { z } from "zod";
 
+function padDatePart(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+function formatDateOnly(value: Date): string {
+  return `${value.getFullYear()}-${padDatePart(value.getMonth() + 1)}-${padDatePart(value.getDate())}`;
+}
+
 export const timestampSchema = z.union([
   z.string().datetime(),
   z.date().transform((value) => value.toISOString())
 ]);
-export const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+export const dateSchema = z.union([
+  z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  z.date().transform((value) => formatDateOnly(value))
+]);
 export const idSchema = z.string().min(1);
 export const emailSchema = z.string().email();
 export const moneySchema = z.number().finite();

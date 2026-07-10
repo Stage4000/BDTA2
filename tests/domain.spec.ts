@@ -1,6 +1,8 @@
 import {
   bookingSchema,
   contractSchema,
+  dateSchema,
+  formTemplateSchema,
   invoiceSchema,
   quoteSchema,
   timestampSchema
@@ -11,6 +13,55 @@ describe("domain entities", () => {
     const value = new Date("2026-07-10T20:52:44.000Z");
 
     expect(timestampSchema.parse(value)).toBe("2026-07-10T20:52:44.000Z");
+  });
+
+  it("normalizes Date-only values to YYYY-MM-DD strings", () => {
+    const value = new Date(2026, 6, 10);
+
+    expect(dateSchema.parse(value)).toBe("2026-07-10");
+  });
+
+  it("treats blank optional legacy form-template frequency values as null", () => {
+    const result = formTemplateSchema.parse({
+      id: "form-template-1",
+      name: "Boarding Intake",
+      active: true,
+      description: "Collect intake details before boarding.",
+      fields: [],
+      formType: "client_form",
+      requiredFrequency: "",
+      appointmentTypeId: null,
+      templateIsInternal: false,
+      templateShowInClientPortal: true
+    });
+
+    expect(result.requiredFrequency).toBeNull();
+  });
+
+  it("normalizes legacy quote and contract date fields", () => {
+    const quote = quoteSchema.parse({
+      id: "quote-1",
+      clientId: "client-1",
+      status: "sent",
+      totalAmount: 500,
+      expiresAt: new Date("2026-07-10T20:52:44.000Z"),
+      acceptedAt: "",
+      declinedAt: null,
+      publicAccess: null
+    });
+    const contract = contractSchema.parse({
+      id: "contract-1",
+      clientId: "client-1",
+      status: "sent",
+      effectiveDate: new Date(2026, 6, 10),
+      signedAt: "",
+      publicAccess: null
+    });
+
+    expect(quote.expiresAt).toBe("2026-07-10T20:52:44.000Z");
+    expect(quote.acceptedAt).toBeNull();
+    expect(contract.effectiveDate).toBe("2026-07-10");
+    expect(contract.signedAt).toBeNull();
   });
 
   it("models a booking with tokenized iCal access", () => {

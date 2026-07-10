@@ -2595,6 +2595,104 @@ throw new Error("Expected successful admin dashboard response for Date-backed bo
 expect(result.body.recentBookings[0]?.startsAt).toBe("2026-05-28T17:00:00.000Z");
 });
 
+it("returns admin configuration resources with legacy blank and Date-backed values", async () => {
+const adminConfiguration = createAdminConfigurationDependencies();
+const handlers = createApiHandlers(createApiDependencies({
+adminConfiguration: {
+...adminConfiguration,
+listAdminAppointmentTypes: async () => [{
+id: "appointment-type-1",
+name: "Private Coaching",
+description: "One-on-one coaching session.",
+bulletPoints: ["Behavior assessment", "Homework plan"],
+adminUserId: "admin-1",
+durationMinutes: 90,
+bufferBeforeMinutes: 15,
+bufferAfterMinutes: 15,
+useTravelTimeBuffer: true,
+travelTimeMinutes: 20,
+advanceBookingMinDays: 2,
+advanceBookingMaxDays: 45,
+cancellationNoticeHours: 24,
+requiresForms: true,
+formTemplateIds: ["form-template-1"],
+requiresContract: true,
+contractTemplateId: "contract-template-1",
+autoInvoice: true,
+invoiceDueDays: 7,
+invoiceDueTiming: "after",
+defaultAmount: 225,
+consumesCredits: true,
+creditCount: 2,
+isGroupClass: false,
+maxParticipants: 1,
+publicAvailable: true,
+portalAvailable: true,
+scheduleType: "specific_date",
+specificDate: new Date(2026, 6, 10) as unknown as string,
+specificDates: [{ date: new Date(2026, 6, 11) as unknown as string, timeslots: [{ type: "range", start: "09:00", end: "10:00" }] }],
+availableDays: [1, 2, 3, 4, 5],
+availableStartTime: "09:00",
+availableEndTime: "17:00",
+timeSlotInterval: 30,
+perDaySchedule: {},
+isMiniSession: false,
+miniSessionLocation: "",
+miniSessionTopic: "",
+isFieldRental: false,
+fieldRentalLocation: "",
+groupClassLocation: "",
+locationTypes: ["client_address"],
+confirmationTemplateId: null,
+bookingRequestTemplateId: null,
+invoiceTemplateId: null,
+reminderTemplateId: null,
+cancellationTemplateId: null,
+requiresAdminConfirmation: false,
+usesResource: false,
+resourceName: "",
+resourceCapacity: 1,
+resourceAllocation: "per_appointment",
+uniqueLink: "private-coaching-link",
+active: true,
+createdAt: new Date("2026-05-27T17:00:00.000Z") as unknown as string,
+updatedAt: new Date("2026-05-27T18:00:00.000Z") as unknown as string
+}],
+listAdminFormTemplates: async () => [{
+id: "form-template-1",
+name: "Boarding Intake",
+active: true,
+description: "Collect intake details before boarding.",
+fields: [{ label: "Pet Name", type: "text", required: true }],
+formType: "client_form",
+requiredFrequency: "",
+appointmentTypeId: "appointment-type-1",
+templateIsInternal: false,
+templateShowInClientPortal: true
+}]
+} as any
+}));
+const session = {
+actorId: "admin-1",
+actorType: "admin_user" as const,
+role: "owner" as const,
+issuedAt: "2026-05-27T18:00:00.000Z",
+expiresAt: "2026-05-27T18:00:00.000Z"
+};
+
+const appointmentTypes = await handlers.handleAdminAppointmentTypes(session);
+const formTemplates = await handlers.handleAdminFormTemplates(session);
+
+expect(appointmentTypes.status).toBe(200);
+expect(formTemplates.status).toBe(200);
+if ("error" in appointmentTypes.body || "error" in formTemplates.body) {
+throw new Error("Expected successful admin configuration responses for legacy values.");
+}
+expect(appointmentTypes.body.items[0]?.specificDate).toBe("2026-07-10");
+expect(appointmentTypes.body.items[0]?.specificDates[0]?.date).toBe("2026-07-11");
+expect(formTemplates.body.items[0]?.requiredFrequency).toBeNull();
+});
+
 it("returns admin job logs and integration callback logs for a valid admin session", async () => {
     const handlers = createApiHandlers(createApiDependencies());
     const session = {
