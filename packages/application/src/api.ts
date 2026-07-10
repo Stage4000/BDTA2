@@ -297,7 +297,8 @@ import {
 const apiErrorSchema = z.object({
   error: z.object({
     code: z.string().min(1),
-    message: z.string().min(1)
+    message: z.string().min(1),
+    details: z.unknown().optional()
   })
 });
 
@@ -452,16 +453,37 @@ export type PublicContractDetailHandlerResult = ApiSuccess<z.infer<typeof contra
 export type PublicFormSubmissionDetailHandlerResult = ApiSuccess<z.infer<typeof formSubmissionDetailSchema>> | ApiFailure;
 export type PublicBookingIcalDetailHandlerResult = ApiSuccess<z.infer<typeof bookingIcalFeedSchema>> | ApiFailure;
 
-function createError(status: number, code: string, message: string): ApiFailure {
+function createError(status: number, code: string, message: string, details?: unknown): ApiFailure {
   return {
     status,
     body: apiErrorSchema.parse({
       error: {
         code,
-        message
+        message,
+        ...(details === undefined ? {} : { details })
       }
     })
   };
+}
+
+function createValidationError(error: z.ZodError): ApiFailure {
+  const issues = error.issues.map((issue) => ({
+    path: issue.path.length === 0 ? "(root)" : issue.path.map(String).join("."),
+    message: issue.message,
+    code: issue.code
+  }));
+
+  const summary = issues
+    .slice(0, 4)
+    .map((issue) => `${issue.path}: ${issue.message}`)
+    .join("; ");
+
+  return createError(
+    400,
+    "invalid_request",
+    summary === "" ? "Request validation failed." : `Request validation failed: ${summary}`,
+    { issues }
+  );
 }
 
 export function createApiHandlers(dependencies: ApiDependencies) {
@@ -484,7 +506,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
         }
 
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while creating public booking.");
@@ -503,7 +525,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
         }
 
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while creating public contact.");
@@ -518,7 +540,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
         };
       } catch (error) {
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while processing integration callback.");
@@ -533,7 +555,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
         };
       } catch (error) {
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while loading public blog posts.");
@@ -551,7 +573,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while loading public blog post.");
@@ -569,7 +591,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while loading public site page.");
@@ -585,7 +607,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
         };
       } catch (error) {
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         if (error instanceof Error && error.message === "Invalid email address or password.") {
@@ -605,7 +627,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
         };
       } catch (error) {
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         if (error instanceof Error && error.message === "Invalid username or password.") {
@@ -633,7 +655,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
         }
 
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while loading portal actor profile.");
@@ -658,7 +680,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "not_found" ? 404 : 400, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while loading portal profile.");
@@ -683,7 +705,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "not_found" ? 404 : 409, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while updating portal profile.");
@@ -707,7 +729,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
         }
 
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while loading admin actor profile.");
@@ -731,7 +753,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
         };
       } catch (error) {
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while authorizing admin route.");
@@ -754,7 +776,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
         }
 
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while loading portal summary.");
@@ -777,7 +799,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
         }
 
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while loading admin dashboard.");
@@ -799,7 +821,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while loading admin blog posts.");
@@ -824,7 +846,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while loading admin blog post.");
@@ -846,7 +868,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while creating admin blog post.");
@@ -875,7 +897,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while updating admin blog post.");
@@ -903,7 +925,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while deleting admin blog post.");
@@ -925,7 +947,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while loading admin site pages.");
@@ -950,7 +972,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while loading admin site page.");
@@ -972,7 +994,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while creating admin site page.");
@@ -1001,7 +1023,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while updating admin site page.");
@@ -1029,7 +1051,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "invalid_operation" ? 409 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while deleting admin site page.");
@@ -1051,7 +1073,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while loading admin workflows.");
@@ -1079,7 +1101,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "not_found" ? 404 : 400, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while loading admin workflow.");
@@ -1111,7 +1133,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "not_found" ? 404 : 400, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while loading workflow triggers.");
@@ -1136,7 +1158,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while creating admin workflow.");
@@ -1165,7 +1187,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "not_found" ? 404 : 400, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while updating admin workflow.");
@@ -1193,7 +1215,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "not_found" ? 404 : 400, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while deleting admin workflow.");
@@ -1227,7 +1249,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "not_found" ? 404 : 400, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while creating workflow trigger.");
@@ -1261,7 +1283,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "not_found" ? 404 : 400, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while deleting workflow trigger.");
@@ -1289,7 +1311,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "not_found" ? 404 : 400, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while loading workflow enrollments.");
@@ -1317,7 +1339,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "not_found" ? 404 : 400, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while loading enrollable workflow clients.");
@@ -1346,7 +1368,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "not_found" ? 404 : 400, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while enrolling workflow clients.");
@@ -1380,7 +1402,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "not_found" ? 404 : 400, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while cancelling workflow enrollment.");
@@ -1408,7 +1430,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "not_found" ? 404 : 400, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while loading workflow steps.");
@@ -1442,7 +1464,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "not_found" ? 404 : 400, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while loading workflow step editor.");
@@ -1476,7 +1498,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "not_found" ? 404 : 400, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while creating workflow step.");
@@ -1512,7 +1534,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "not_found" ? 404 : 400, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while updating workflow step.");
@@ -1546,7 +1568,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "not_found" ? 404 : 400, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while deleting workflow step.");
@@ -1568,7 +1590,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while loading admin settings.");
@@ -1593,7 +1615,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while loading admin setting.");
@@ -1622,7 +1644,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while updating admin setting.");
@@ -1644,7 +1666,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while loading admin appointment types.");
@@ -1676,7 +1698,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while loading admin appointment type.");
@@ -1705,7 +1727,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while creating admin appointment type.");
@@ -1739,7 +1761,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while updating admin appointment type.");
@@ -1771,7 +1793,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while deleting admin appointment type.");
@@ -1793,7 +1815,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while loading admin form templates.");
@@ -1825,7 +1847,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "in_use" ? 409 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while loading admin form template.");
@@ -1854,7 +1876,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while creating admin form template.");
@@ -1888,7 +1910,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "in_use" ? 409 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while updating admin form template.");
@@ -1920,7 +1942,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "in_use" ? 409 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while deleting admin form template.");
@@ -1942,7 +1964,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while loading admin email templates.");
@@ -1974,7 +1996,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while loading admin email template.");
@@ -2003,7 +2025,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while creating admin email template.");
@@ -2037,7 +2059,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while updating admin email template.");
@@ -2059,7 +2081,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while loading admin scheduled tasks.");
@@ -2091,7 +2113,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while loading admin scheduled task.");
@@ -2120,7 +2142,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while creating admin scheduled task.");
@@ -2154,7 +2176,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
 
         return createError(500, "internal_error", "Unexpected error while updating admin scheduled task.");
@@ -2176,7 +2198,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading admin job logs.");
       }
@@ -2200,7 +2222,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading admin job log.");
       }
@@ -2221,7 +2243,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading admin integration callback logs.");
       }
@@ -2252,7 +2274,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading admin integration callback log.");
       }
@@ -2298,7 +2320,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading portal achievement.");
       }
@@ -2331,7 +2353,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while rendering portal achievement certificate.");
       }
@@ -2349,7 +2371,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading portal bookings.");
       }
@@ -2367,7 +2389,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading portal pets.");
       }
@@ -2385,7 +2407,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading portal pet.");
       }
@@ -2403,7 +2425,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading portal pet files.");
       }
@@ -2436,7 +2458,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "not_found" ? 404 : 400, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while uploading portal pet file.");
       }
@@ -2461,7 +2483,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading portal pet file.");
       }
@@ -2493,7 +2515,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading portal pet file content.");
       }
@@ -2518,7 +2540,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while deleting portal pet file.");
       }
@@ -2536,7 +2558,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading portal booking.");
       }
@@ -2554,7 +2576,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading portal contacts.");
       }
@@ -2575,7 +2597,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading portal contact.");
       }
@@ -2593,7 +2615,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while creating portal contact.");
       }
@@ -2614,7 +2636,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while updating portal contact.");
       }
@@ -2635,7 +2657,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while deleting portal contact.");
       }
@@ -2653,7 +2675,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading portal invoices.");
       }
@@ -2671,7 +2693,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading portal invoice.");
       }
@@ -2689,7 +2711,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading portal quotes.");
       }
@@ -2707,7 +2729,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading portal quote.");
       }
@@ -2725,7 +2747,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading portal contracts.");
       }
@@ -2743,7 +2765,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading portal contract.");
       }
@@ -2761,7 +2783,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading portal forms.");
       }
@@ -2779,7 +2801,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading portal notifications.");
       }
@@ -2797,7 +2819,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading portal packages.");
       }
@@ -2815,7 +2837,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading portal package.");
       }
@@ -2833,7 +2855,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading portal credits.");
       }
@@ -2851,7 +2873,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading portal credit.");
       }
@@ -2869,7 +2891,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading portal form.");
       }
@@ -2887,7 +2909,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading admin clients.");
       }
@@ -2936,7 +2958,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading admin achievement type.");
       }
@@ -2964,7 +2986,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(401, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading admin client achievements.");
       }
@@ -2997,7 +3019,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading admin client achievement.");
       }
@@ -3032,7 +3054,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while rendering admin achievement certificate.");
       }
@@ -3050,7 +3072,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading admin pets.");
       }
@@ -3068,7 +3090,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading admin pet.");
       }
@@ -3086,7 +3108,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading admin pet files.");
       }
@@ -3119,7 +3141,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "not_found" ? 404 : 400, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while uploading admin pet file.");
       }
@@ -3144,7 +3166,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading admin pet file.");
       }
@@ -3176,7 +3198,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading admin pet file content.");
       }
@@ -3201,7 +3223,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while deleting admin pet file.");
       }
@@ -3219,7 +3241,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading admin client.");
       }
@@ -3247,7 +3269,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "not_found" ? 404 : 409, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading admin client profile.");
       }
@@ -3275,7 +3297,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "not_found" ? 404 : 409, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while creating admin client.");
       }
@@ -3308,7 +3330,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "not_found" ? 404 : 409, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while updating admin client.");
       }
@@ -3326,7 +3348,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading admin client contacts.");
       }
@@ -3359,7 +3381,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading admin client contact.");
       }
@@ -3389,7 +3411,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while creating admin client contact.");
       }
@@ -3424,7 +3446,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while updating admin client contact.");
       }
@@ -3457,7 +3479,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while deleting admin client contact.");
       }
@@ -3475,7 +3497,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading admin bookings.");
       }
@@ -3493,7 +3515,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading admin booking.");
       }
@@ -3526,7 +3548,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "not_found" ? 404 : 409, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while syncing admin booking calendar.");
       }
@@ -3557,7 +3579,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "not_found" ? 404 : 409, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading admin booking calendar sync.");
       }
@@ -3575,7 +3597,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading admin invoices.");
       }
@@ -3593,7 +3615,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading admin invoice.");
       }
@@ -3611,7 +3633,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading admin quotes.");
       }
@@ -3629,7 +3651,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading admin quote.");
       }
@@ -3647,7 +3669,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading admin contracts.");
       }
@@ -3665,7 +3687,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading admin contract.");
       }
@@ -3683,7 +3705,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading admin forms.");
       }
@@ -3701,7 +3723,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading admin packages.");
       }
@@ -3719,7 +3741,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading admin package.");
       }
@@ -3737,7 +3759,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading admin credits.");
       }
@@ -3755,7 +3777,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading admin credit.");
       }
@@ -3773,7 +3795,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading admin form.");
       }
@@ -3794,7 +3816,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "not_found" ? 404 : 409, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while accepting portal quote.");
       }
@@ -3815,7 +3837,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "not_found" ? 404 : 409, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while signing portal contract.");
       }
@@ -3836,7 +3858,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "not_found" ? 404 : 409, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while submitting portal form.");
       }
@@ -3869,7 +3891,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(error.code === "not_found" ? 404 : 409, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while creating invoice payment session.");
       }
@@ -3886,7 +3908,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading public quote.");
       }
@@ -3903,7 +3925,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading public contract.");
       }
@@ -3920,7 +3942,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading public form submission.");
       }
@@ -3937,7 +3959,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createError(404, error.code, error.message);
         }
         if (error instanceof z.ZodError) {
-          return createError(400, "invalid_request", "Request validation failed.");
+          return createValidationError(error);
         }
         return createError(500, "internal_error", "Unexpected error while loading public booking iCal.");
       }
