@@ -8,14 +8,59 @@ function formatDateOnly(value: Date): string {
   return `${value.getFullYear()}-${padDatePart(value.getMonth() + 1)}-${padDatePart(value.getDate())}`;
 }
 
-export const timestampSchema = z.union([
-  z.string().datetime(),
-  z.date().transform((value) => value.toISOString())
-]);
-export const dateSchema = z.union([
-  z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  z.date().transform((value) => formatDateOnly(value))
-]);
+const dateOnlyPattern = /^\d{4}-\d{2}-\d{2}$/;
+const sqlDateTimePattern = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2})?$/;
+
+function normalizeTimestampInput(value: unknown): unknown {
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  const trimmed = value.trim();
+  if (trimmed === "") {
+    return trimmed;
+  }
+
+  if (dateOnlyPattern.test(trimmed)) {
+    return `${trimmed}T00:00:00.000Z`;
+  }
+
+  if (sqlDateTimePattern.test(trimmed)) {
+    const normalized = trimmed.replace(" ", "T");
+    return `${normalized.length === 16 ? `${normalized}:00` : normalized}.000Z`;
+  }
+
+  return trimmed;
+}
+
+function normalizeDateInput(value: unknown): unknown {
+  if (value instanceof Date) {
+    return formatDateOnly(value);
+  }
+
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  const trimmed = value.trim();
+  if (trimmed === "") {
+    return trimmed;
+  }
+
+  if (dateOnlyPattern.test(trimmed)) {
+    return trimmed;
+  }
+
+  const match = /^(\d{4}-\d{2}-\d{2})[ T]/.exec(trimmed);
+  return match?.[1] ?? trimmed;
+}
+
+export const timestampSchema = z.preprocess(normalizeTimestampInput, z.string().datetime());
+export const dateSchema = z.preprocess(normalizeDateInput, z.string().regex(dateOnlyPattern));
 export const idSchema = z.string().min(1);
 export const emailSchema = z.string().email();
 export const moneySchema = z.number().finite();

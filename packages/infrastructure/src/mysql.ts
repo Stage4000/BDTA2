@@ -399,6 +399,107 @@ function toDurationMinutes(start: string, end: string): number {
   return Math.max(1, Math.round((Date.parse(end) - Date.parse(start)) / 60000));
 }
 
+function normalizeLegacyOptionalToken(value: string | null | undefined): string | null {
+  const normalized = value?.trim() ?? "";
+  return normalized.length >= 16 ? normalized : null;
+}
+
+function buildLegacyPublicAccessToken(
+  tokenValue: string | null | undefined,
+  issuedAt: string,
+  legacySourceId: string
+): PublicAccessToken | null {
+  const token = normalizeLegacyOptionalToken(tokenValue);
+  return token == null
+    ? null
+    : {
+        token,
+        issuedAt,
+        expiresAt: null,
+        legacySourceId
+      };
+}
+
+function normalizeLegacyInvoiceStatus(status: string | null | undefined): Invoice["status"] {
+  switch ((status ?? "").trim().toLowerCase()) {
+    case "sent":
+      return "sent";
+    case "partial":
+    case "partially_paid":
+      return "partially_paid";
+    case "paid":
+    case "settled":
+      return "paid";
+    case "overdue":
+      return "overdue";
+    case "cancelled":
+    case "canceled":
+    case "refunded":
+    case "void":
+      return "void";
+    default:
+      return "draft";
+  }
+}
+
+function normalizeLegacyQuoteStatus(status: string | null | undefined): Quote["status"] {
+  switch ((status ?? "").trim().toLowerCase()) {
+    case "sent":
+    case "viewed":
+      return "sent";
+    case "accepted":
+      return "accepted";
+    case "declined":
+      return "declined";
+    case "expired":
+      return "expired";
+    default:
+      return "draft";
+  }
+}
+
+function normalizeLegacyContractStatus(status: string | null | undefined): Contract["status"] {
+  switch ((status ?? "").trim().toLowerCase()) {
+    case "sent":
+      return "sent";
+    case "signed":
+      return "signed";
+    case "expired":
+    case "cancelled":
+    case "canceled":
+    case "void":
+      return "void";
+    default:
+      return "draft";
+  }
+}
+
+function normalizeLegacyTimestampValue(value: string | Date | null | undefined): string | null | undefined {
+  if (value == null) {
+    return value;
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  const trimmed = value.trim();
+  return trimmed === "" ? null : trimmed;
+}
+
+function normalizeLegacyDateValue(value: string | Date | null | undefined): string | null | undefined {
+  if (value == null) {
+    return value;
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString().slice(0, 10);
+  }
+
+  const trimmed = value.trim();
+  return trimmed === "" ? null : trimmed;
+}
+
 function normalizeLegacyTimeOfDay(value: string): string {
   const normalized = value.trim();
   if (/^\d{1,2}:\d{2}$/.test(normalized)) {
@@ -468,12 +569,85 @@ function fromLegacyBookingRow(row: {
     startsAt,
     endsAt,
     status: row.status,
-    icalAccess: row.ical_token == null ? null : {
-      token: row.ical_token,
-      issuedAt: startsAt,
-      expiresAt: null,
-      legacySourceId: String(row.id)
-    }
+    icalAccess: buildLegacyPublicAccessToken(row.ical_token, startsAt, String(row.id))
+  };
+}
+
+function toInvoiceRecord(row: {
+  id: number;
+  client_id: number;
+  status: string | null;
+  total_amount: number;
+  outstanding_amount: number;
+  due_at: string | Date | null;
+}): Invoice {
+  return {
+    id: String(row.id),
+    clientId: String(row.client_id),
+    status: normalizeLegacyInvoiceStatus(row.status),
+    totalAmount: Number(row.total_amount),
+    outstandingAmount: Number(row.outstanding_amount),
+    dueAt: normalizeLegacyTimestampValue(row.due_at) ?? null
+  };
+}
+
+function toQuoteRecord(row: {
+  id: number;
+  client_id: number;
+  status: string | null;
+  total_amount: number;
+  access_token: string | null;
+  quote_number?: string | null;
+  title?: string | null;
+  description?: string | null;
+  expiration_date?: string | Date | null;
+  accepted_at?: string | Date | null;
+  declined_at?: string | Date | null;
+  items?: Quote["items"];
+}): Quote {
+  return {
+    id: String(row.id),
+    clientId: String(row.client_id),
+    status: normalizeLegacyQuoteStatus(row.status),
+    totalAmount: Number(row.total_amount),
+    quoteNumber: row.quote_number ?? undefined,
+    title: row.title ?? undefined,
+    description: row.description ?? "",
+    expiresAt: normalizeLegacyTimestampValue(row.expiration_date),
+    acceptedAt: normalizeLegacyTimestampValue(row.accepted_at),
+    declinedAt: normalizeLegacyTimestampValue(row.declined_at),
+    items: row.items,
+    publicAccess: buildLegacyPublicAccessToken(row.access_token, defaultNow(), String(row.id))
+  };
+}
+
+function toContractRecord(row: {
+  id: number;
+  client_id: number;
+  status: string | null;
+  access_token: string | null;
+  contract_number?: string | null;
+  title?: string | null;
+  description?: string | null;
+  contract_text?: string | null;
+  effective_date?: string | Date | null;
+  signed_date?: string | Date | null;
+  signature_typed_name?: string | null;
+  signature_font?: string | null;
+}): Contract {
+  return {
+    id: String(row.id),
+    clientId: String(row.client_id),
+    status: normalizeLegacyContractStatus(row.status),
+    contractNumber: row.contract_number ?? undefined,
+    title: row.title ?? undefined,
+    description: row.description ?? "",
+    contractText: row.contract_text ?? "",
+    effectiveDate: normalizeLegacyDateValue(row.effective_date),
+    signedAt: normalizeLegacyTimestampValue(row.signed_date),
+    signatureTypedName: row.signature_typed_name,
+    signatureFont: row.signature_font,
+    publicAccess: buildLegacyPublicAccessToken(row.access_token, defaultNow(), String(row.id))
   };
 }
 
@@ -2645,14 +2819,7 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         [clientId]
       );
 
-      return rows.map((row) => ({
-        id: String(row.id),
-        clientId: String(row.client_id),
-        status: row.status,
-        totalAmount: Number(row.total_amount),
-        outstandingAmount: Number(row.outstanding_amount),
-        dueAt: row.due_at
-      }));
+    return rows.map((row) => toInvoiceRecord(row));
     },
     async listQuotesForPortalActor(clientId) {
       const [rows] = await executor.execute<Array<{
@@ -2666,25 +2833,14 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
           "SELECT id, client_id, status, total_amount, access_token",
           "FROM quotes",
           "WHERE client_id = ?",
-          "AND status IN ('draft', 'sent', 'expired')",
+        "AND status IN ('draft', 'sent', 'viewed', 'expired')",
           "ORDER BY id DESC",
           "LIMIT 20"
         ].join(" "),
         [clientId]
       );
 
-      return rows.map((row) => ({
-        id: String(row.id),
-        clientId: String(row.client_id),
-        status: row.status,
-        totalAmount: Number(row.total_amount),
-        publicAccess: row.access_token == null ? null : {
-          token: row.access_token,
-          issuedAt: now(),
-          expiresAt: null,
-          legacySourceId: String(row.id)
-        }
-      }));
+    return rows.map((row) => toQuoteRecord(row));
     }
   };
 
@@ -4792,15 +4948,8 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         [clientId, invoiceId]
       );
 
-      const row = rows[0];
-      return row == null ? null : {
-        id: String(row.id),
-        clientId: String(row.client_id),
-        status: row.status,
-        totalAmount: Number(row.total_amount),
-        outstandingAmount: Number(row.outstanding_amount),
-        dueAt: row.due_at
-      };
+    const row = rows[0];
+    return row == null ? null : toInvoiceRecord(row);
     },
     listPortalQuotes: portalSummary.listQuotesForPortalActor,
     async findPortalQuoteById(clientId, quoteId) {
@@ -4820,19 +4969,8 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         [clientId, quoteId]
       );
 
-      const row = rows[0];
-      return row == null ? null : {
-        id: String(row.id),
-        clientId: String(row.client_id),
-        status: row.status,
-        totalAmount: Number(row.total_amount),
-        publicAccess: row.access_token == null ? null : {
-          token: row.access_token,
-          issuedAt: now(),
-          expiresAt: null,
-          legacySourceId: String(row.id)
-        }
-      };
+    const row = rows[0];
+    return row == null ? null : toQuoteRecord(row);
     },
     async listPortalContracts(clientId) {
       const [rows] = await executor.execute<Array<{
@@ -4851,17 +4989,7 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         [clientId]
       );
 
-      return rows.map((row) => ({
-        id: String(row.id),
-        clientId: String(row.client_id),
-        status: row.status,
-        publicAccess: row.access_token == null ? null : {
-          token: row.access_token,
-          issuedAt: now(),
-          expiresAt: null,
-          legacySourceId: String(row.id)
-        }
-      }));
+    return rows.map((row) => toContractRecord(row));
     },
     async findPortalContractById(clientId, contractId) {
       const [rows] = await executor.execute<Array<{
@@ -4879,18 +5007,8 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         [clientId, contractId]
       );
 
-      const row = rows[0];
-      return row == null ? null : {
-        id: String(row.id),
-        clientId: String(row.client_id),
-        status: row.status,
-        publicAccess: row.access_token == null ? null : {
-          token: row.access_token,
-          issuedAt: now(),
-          expiresAt: null,
-          legacySourceId: String(row.id)
-        }
-      };
+    const row = rows[0];
+    return row == null ? null : toContractRecord(row);
     },
     async listPortalForms(clientId) {
       const [rows] = await executor.execute<FormSubmissionRow[]>(
@@ -5305,14 +5423,7 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         ].join(" ")
       );
 
-      return rows.map((row) => ({
-        id: String(row.id),
-        clientId: String(row.client_id),
-        status: row.status,
-        totalAmount: Number(row.total_amount),
-        outstandingAmount: Number(row.outstanding_amount),
-        dueAt: row.due_at
-      }));
+    return rows.map((row) => toInvoiceRecord(row));
     },
     async findAdminInvoiceById(invoiceId) {
       const [rows] = await executor.execute<Array<{
@@ -5332,15 +5443,8 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         [invoiceId]
       );
 
-      const row = rows[0];
-      return row == null ? null : {
-        id: String(row.id),
-        clientId: String(row.client_id),
-        status: row.status,
-        totalAmount: Number(row.total_amount),
-        outstandingAmount: Number(row.outstanding_amount),
-        dueAt: row.due_at
-      };
+    const row = rows[0];
+    return row == null ? null : toInvoiceRecord(row);
     },
     async listAdminQuotes() {
       const [rows] = await executor.execute<Array<{
@@ -5358,18 +5462,7 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         ].join(" ")
       );
 
-      return rows.map((row) => ({
-        id: String(row.id),
-        clientId: String(row.client_id),
-        status: row.status,
-        totalAmount: Number(row.total_amount),
-        publicAccess: row.access_token == null ? null : {
-          token: row.access_token,
-          issuedAt: now(),
-          expiresAt: null,
-          legacySourceId: String(row.id)
-        }
-      }));
+    return rows.map((row) => toQuoteRecord(row));
     },
     async findAdminQuoteById(quoteId) {
       const [rows] = await executor.execute<Array<{
@@ -5388,19 +5481,8 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         [quoteId]
       );
 
-      const row = rows[0];
-      return row == null ? null : {
-        id: String(row.id),
-        clientId: String(row.client_id),
-        status: row.status,
-        totalAmount: Number(row.total_amount),
-        publicAccess: row.access_token == null ? null : {
-          token: row.access_token,
-          issuedAt: now(),
-          expiresAt: null,
-          legacySourceId: String(row.id)
-        }
-      };
+    const row = rows[0];
+    return row == null ? null : toQuoteRecord(row);
     },
     async listAdminContracts() {
       const [rows] = await executor.execute<Array<{
@@ -5417,17 +5499,7 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         ].join(" ")
       );
 
-      return rows.map((row) => ({
-        id: String(row.id),
-        clientId: String(row.client_id),
-        status: row.status,
-        publicAccess: row.access_token == null ? null : {
-          token: row.access_token,
-          issuedAt: now(),
-          expiresAt: null,
-          legacySourceId: String(row.id)
-        }
-      }));
+    return rows.map((row) => toContractRecord(row));
     },
     async findAdminContractById(contractId) {
       const [rows] = await executor.execute<Array<{
@@ -5445,18 +5517,8 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         [contractId]
       );
 
-      const row = rows[0];
-      return row == null ? null : {
-        id: String(row.id),
-        clientId: String(row.client_id),
-        status: row.status,
-        publicAccess: row.access_token == null ? null : {
-          token: row.access_token,
-          issuedAt: now(),
-          expiresAt: null,
-          legacySourceId: String(row.id)
-        }
-      };
+    const row = rows[0];
+    return row == null ? null : toContractRecord(row);
     },
     async listAdminFormsByTemplate(templateId) {
       const [rows] = await executor.execute<FormSubmissionRow[]>(
@@ -7074,25 +7136,10 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
       return null;
     }
 
-    return {
-      id: String(row.id),
-      clientId: String(row.client_id),
-      status: row.status,
-      totalAmount: Number(row.total_amount),
-      quoteNumber: row.quote_number ?? undefined,
-      title: row.title ?? undefined,
-      description: row.description ?? "",
-      expiresAt: row.expiration_date,
-      acceptedAt: row.accepted_at,
-      declinedAt: row.declined_at,
-      items: await loadPublicQuoteItems(String(row.id)),
-      publicAccess: row.access_token == null ? null : {
-        token: row.access_token,
-        issuedAt: now(),
-        expiresAt: null,
-        legacySourceId: String(row.id)
-      }
-    };
+  return toQuoteRecord({
+    ...row,
+    items: await loadPublicQuoteItems(String(row.id))
+  });
   }
 
   async function loadPublicContractByWhere(whereClause: string, params: unknown[]): Promise<Contract | null> {
@@ -7119,26 +7166,8 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
       params
     );
 
-    const row = rows[0];
-    return row == null ? null : {
-      id: String(row.id),
-      clientId: String(row.client_id),
-      status: row.status,
-      contractNumber: row.contract_number ?? undefined,
-      title: row.title ?? undefined,
-      description: row.description ?? "",
-      contractText: row.contract_text ?? "",
-      effectiveDate: row.effective_date,
-      signedAt: row.signed_date,
-      signatureTypedName: row.signature_typed_name,
-      signatureFont: row.signature_font,
-      publicAccess: row.access_token == null ? null : {
-        token: row.access_token,
-        issuedAt: now(),
-        expiresAt: null,
-        legacySourceId: String(row.id)
-      }
-    };
+  const row = rows[0];
+  return row == null ? null : toContractRecord(row);
   }
 
   async function loadPublicFormSubmissionByWhere(whereClause: string, params: unknown[]): Promise<FormSubmission | null> {

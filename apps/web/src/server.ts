@@ -1798,8 +1798,20 @@ function renderSettingsCard(setting: Setting): string {
   ].join("");
 }
 
+const settingsDefaultCategory = "overview";
+
+function normalizeSettingsCategory(category: string | null | undefined): string {
+  const normalized = category?.trim().toLowerCase() ?? "";
+  return normalized === "" ? settingsDefaultCategory : normalized;
+}
+
 function buildSettingsCategoryHref(basePath: string, category: string): string {
-  return `${basePath}?category=${encodeURIComponent(category)}`;
+  const normalizedCategory = normalizeSettingsCategory(category);
+  if (normalizedCategory === settingsDefaultCategory) {
+    return basePath;
+  }
+
+  return `${basePath}?category=${encodeURIComponent(normalizedCategory)}`;
 }
 
 function renderSettingsNotice(notice?: SettingsConsoleViewModel["notice"]): string {
@@ -1969,12 +1981,17 @@ function renderRuntimeEnvironmentSettingsPanel(input: {
 
 function renderAdminSettingsSidebar(model: SettingsConsoleViewModel): string {
   const categoryLinks = [
-    { key: "overview", label: "Overview", description: "All visible settings and launch readiness." },
-    ...model.categories.map((category) => ({
-      key: category,
-      label: formatSettingCategoryLabel(category),
-      description: getSettingCategoryDescription(category)
-    })),
+    { key: settingsDefaultCategory, label: "Overview", description: "All visible settings and launch readiness." },
+    ...model.categories
+      .filter((category) => {
+        const normalizedCategory = normalizeSettingsCategory(category);
+        return normalizedCategory !== settingsDefaultCategory && normalizedCategory !== "admins";
+      })
+      .map((category) => ({
+        key: normalizeSettingsCategory(category),
+        label: formatSettingCategoryLabel(category),
+        description: getSettingCategoryDescription(category)
+      })),
     { key: "admins", label: "Admins", description: "Admin users and permission controls." }
   ];
 
@@ -1984,7 +2001,7 @@ function renderAdminSettingsSidebar(model: SettingsConsoleViewModel): string {
     '<h3>Configuration Areas</h3>',
     '<div class="settings-sidebar__nav">',
     categoryLinks.map((item) => [
-      `<a class="settings-sidebar__link${model.currentCategory === item.key ? " is-active" : ""}" href="${escapeHtml(buildSettingsCategoryHref(model.basePath, item.key))}">`,
+      `<a class="settings-sidebar__link${model.currentCategory === item.key ? " is-active" : ""}" href="${escapeHtml(buildSettingsCategoryHref(model.basePath, item.key))}"${model.currentCategory === item.key ? ' aria-current="page"' : ""}>`,
       `<span class="settings-sidebar__link-label">${escapeHtml(item.label)}</span>`,
       `<span class="settings-sidebar__link-meta">${escapeHtml(item.description)}</span>`,
       "</a>"
@@ -2337,34 +2354,39 @@ function renderSettingsOverview(model: Pick<SettingsConsoleViewModel, "settings"
 }
 
 function renderSettingsConsole(model: SettingsConsoleViewModel): string {
-  const validCategories = new Set(["overview", "admins", ...model.categories]);
-  const selectedCategory = validCategories.has(model.currentCategory) ? model.currentCategory : "overview";
-  const selectedSettings = selectedCategory === "overview"
+  const validCategories = new Set([
+    settingsDefaultCategory,
+    "admins",
+    ...model.categories.map((category) => normalizeSettingsCategory(category))
+  ]);
+  const selectedCategory = normalizeSettingsCategory(model.currentCategory);
+  const resolvedCategory = validCategories.has(selectedCategory) ? selectedCategory : settingsDefaultCategory;
+  const selectedSettings = resolvedCategory === settingsDefaultCategory
     ? model.settings
-    : model.settings.filter((setting) => setting.category === selectedCategory);
+    : model.settings.filter((setting) => normalizeSettingsCategory(setting.category) === resolvedCategory);
 
   return [
     '<div class="settings-shell">',
     renderAdminSettingsSidebar({
       ...model,
-      currentCategory: selectedCategory
+      currentCategory: resolvedCategory
     }),
     '<div class="settings-shell__content">',
     renderSettingsNotice(model.notice),
-    selectedCategory === "admins"
-        ? renderAdminSettingsUsersSection(model)
-      : selectedCategory === "database"
+    resolvedCategory === "admins"
+      ? renderAdminSettingsUsersSection(model)
+      : resolvedCategory === "database"
         ? renderRuntimeEnvironmentSettingsPanel({
-          currentAdmin: model.currentAdmin,
-          fields: model.runtimeEnvironmentFields ?? []
-        })
-      : selectedCategory === "overview"
-        ? renderSettingsOverview(model)
-        : [
-          '<section class="surface-block">',
-          `<p class="eyebrow">${escapeHtml(formatSettingCategoryLabel(selectedCategory))}</p>`,
-          `<h2>${escapeHtml(formatSettingCategoryLabel(selectedCategory))} Settings</h2>`,
-          `<p class="section-copy">${escapeHtml(getSettingCategoryDescription(selectedCategory))}</p>`,
+            currentAdmin: model.currentAdmin,
+            fields: model.runtimeEnvironmentFields ?? []
+          })
+        : resolvedCategory === settingsDefaultCategory
+          ? renderSettingsOverview(model)
+          : [
+              '<section class="surface-block">',
+              `<p class="eyebrow">${escapeHtml(formatSettingCategoryLabel(resolvedCategory))}</p>`,
+              `<h2>${escapeHtml(formatSettingCategoryLabel(resolvedCategory))} Settings</h2>`,
+              `<p class="section-copy">${escapeHtml(getSettingCategoryDescription(resolvedCategory))}</p>`,
           "</section>",
           selectedSettings.length === 0
             ? '<section class="surface-block"><p>No visible settings are available in this category.</p></section>'
@@ -5894,7 +5916,7 @@ function renderLayout(input: {
     '<div class="app-main-toolbar">',
     '<button class="app-shell-toolbar-toggle" type="button" data-app-desktop-shell-toggle aria-controls="app-sidebar" aria-expanded="true">Hide Menu</button>',
     "</div>",
-    `<main class="app-main-content"><div class="app-surface">${input.body}</div></main>`,
+    `<main class="app-main-content" data-layout-main><div class="app-surface">${input.body}</div></main>`,
     "</div>",
     "</div>"
   ].join("");
@@ -6167,15 +6189,15 @@ function renderLayout(input: {
     ".app-main-content { padding: 2rem; min-width: 0; }",
     ".app-surface { background: #fff; border: 1px solid var(--theme-border); border-radius: 1.25rem; padding: 1.75rem; box-shadow: var(--theme-shadow-sm); }",
     ".app-surface > article:first-child { background: transparent; border: 0; border-radius: 0; padding: 0; box-shadow: none; }",
-    ".settings-shell { display: grid; grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); gap: 1.5rem; align-items: start; }",
-    ".settings-shell__content { display: grid; gap: 1.25rem; min-width: 0; }",
-    ".settings-sidebar { position: sticky; top: 1.5rem; display: grid; gap: 1rem; }",
-    ".settings-sidebar__nav { display: grid; gap: 0.7rem; }",
+  ".settings-shell { display: grid; grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); gap: 1.5rem; align-items: start; min-height: 0; }",
+  ".settings-shell__content { display: grid; gap: 1.25rem; min-width: 0; }",
+  ".settings-sidebar { position: sticky; top: 1.5rem; display: grid; gap: 1rem; align-self: start; max-height: calc(100vh - 3rem); min-height: 0; overflow: hidden; }",
+  ".settings-sidebar__nav { display: grid; gap: 0.7rem; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-right: 0.2rem; }",
     ".settings-sidebar__link { display: grid; gap: 0.2rem; padding: 0.95rem 1rem; border-radius: 1rem; border: 1px solid rgba(148, 163, 184, 0.2); background: #f8fafc; color: #1f2937; }",
     ".settings-sidebar__link:hover { border-color: rgba(154, 0, 115, 0.22); background: rgba(154, 0, 115, 0.05); }",
     ".settings-sidebar__link.is-active { border-color: rgba(154, 0, 115, 0.35); background: linear-gradient(135deg, rgba(154, 0, 115, 0.08) 0%, rgba(10, 154, 156, 0.06) 100%); }",
-    ".settings-sidebar__link-label { font-weight: 700; }",
-    ".settings-sidebar__link-meta { color: #64748b; font-size: 0.88rem; }",
+  ".settings-sidebar__link-label { font-weight: 700; overflow-wrap: anywhere; }",
+  ".settings-sidebar__link-meta { color: #64748b; font-size: 0.88rem; overflow-wrap: anywhere; }",
     ".settings-sidebar__meta { display: grid; gap: 0.6rem; padding-top: 0.5rem; border-top: 1px solid rgba(148, 163, 184, 0.18); }",
     ".settings-notice { border-left: 4px solid transparent; }",
     ".settings-notice--success { border-left-color: #16a34a; background: linear-gradient(135deg, rgba(22, 163, 74, 0.07) 0%, #fff 55%); }",
@@ -6228,7 +6250,7 @@ function renderLayout(input: {
     ".settings-usage-list { display: grid; gap: 0.75rem; padding-left: 1.1rem; margin: 0; color: #475569; }",
     ".settings-current-value-panel { padding: 1rem 1.05rem; border-radius: 1rem; border: 1px solid rgba(148, 163, 184, 0.2); background: #f8fafc; margin-bottom: 0.8rem; }",
     ".settings-editor-shell .quick-link-card { box-shadow: none; }",
-    "@media (max-width: 960px) { .app-layout, .app-layout.is-sidebar-collapsed, .auth-shell { grid-template-columns: 1fr; } .app-mobile-navbar { display: flex; } .app-sidebar { display: none; padding-top: 1rem; } .app-layout.is-sidebar-open .app-sidebar { display: block; } .app-main-shell { display: block; } .app-main-toolbar { display: none; } .app-main-content, .auth-main, .auth-shell__hero, .auth-shell__panel { padding: 1rem; } .navbar { flex-direction: column; align-items: flex-start; } .form-grid--two, .settings-shell, .settings-console__hero, .settings-detail-grid, .settings-card__meta-grid { grid-template-columns: 1fr; } .settings-sidebar { position: static; } .marketing-hero__grid, .about-panel__grid, .contact-panel__grid, .booking-shell__grid, .article-shell, .program-grid, .resource-grid, .process-grid, .story-grid, .testimonial-grid, .service-overview-grid, .featured-story__layout { grid-template-columns: 1fr; } .settings-console-toolbar, .settings-card__footer, .settings-detail-hero { align-items: stretch; } .public-cta-banner { flex-direction: column; align-items: flex-start; } .hero-media-frame { min-height: 280px; } .public-site-footer__inner { align-items: flex-start; } .public-social-slot--footer { justify-items: start; } }",
+  "@media (max-width: 960px) { .app-layout, .app-layout.is-sidebar-collapsed, .auth-shell { grid-template-columns: 1fr; } .app-mobile-navbar { display: flex; } .app-sidebar { display: none; padding-top: 1rem; } .app-layout.is-sidebar-open .app-sidebar { display: block; } .app-main-shell { display: block; } .app-main-toolbar { display: none; } .app-main-content, .auth-main, .auth-shell__hero, .auth-shell__panel { padding: 1rem; } .navbar { flex-direction: column; align-items: flex-start; } .form-grid--two, .settings-shell, .settings-console__hero, .settings-detail-grid, .settings-card__meta-grid { grid-template-columns: 1fr; } .settings-sidebar { position: static; max-height: none; overflow: visible; } .settings-sidebar__nav { overflow: visible; padding-right: 0; } .marketing-hero__grid, .about-panel__grid, .contact-panel__grid, .booking-shell__grid, .article-shell, .program-grid, .resource-grid, .process-grid, .story-grid, .testimonial-grid, .service-overview-grid, .featured-story__layout { grid-template-columns: 1fr; } .settings-console-toolbar, .settings-card__footer, .settings-detail-hero { align-items: stretch; } .public-cta-banner { flex-direction: column; align-items: flex-start; } .hero-media-frame { min-height: 280px; } .public-site-footer__inner { align-items: flex-start; } .public-social-slot--footer { justify-items: start; } }",
     "@media (max-width: 767.98px) { .data-table__toolbar, .data-table__pagination { padding-left: 0.85rem; padding-right: 0.85rem; } .data-table__status, .enhanced-collection__status { justify-content: flex-start; } .enhanced-collection__toolbar { align-items: stretch; } .data-table thead { display: none; } .data-table table, .data-table tbody, .data-table tr, .data-table td { display: block; width: 100%; } .data-table tbody { display: grid; gap: 0.75rem; padding: 0.85rem; } .data-table tbody tr { overflow: hidden; border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 0.95rem; background: #fff; box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05); } .data-table tbody tr td { display: grid; grid-template-columns: minmax(0, 8rem) minmax(0, 1fr); gap: 0.75rem; align-items: start; } .data-table td::before { content: attr(data-label); font-size: 0.74rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #64748b; } .data-table td:last-child { border-bottom: 0; } }",
     "@media (max-width: 767.98px) { .btn.public-theme-toggle { right: 1rem; left: auto; bottom: calc(5rem + env(safe-area-inset-bottom, 0px)); } }",
     `${input.css ?? ""}`,
@@ -6311,8 +6333,9 @@ function renderLayout(input: {
     "  } else if (typeof media.addListener === 'function') {",
     "    media.addListener(syncLayout);",
     "  }",
+    "  const enhanceDynamicContent = (root = document) => {",
     "  const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');",
-    "  const revealElements = Array.from(document.querySelectorAll('.surface-block, .summary-card, .quick-link-card, .detail-card, .data-table, .portal-card, .blog-card')).filter((element) => element instanceof HTMLElement);",
+    "  const revealElements = Array.from(root.querySelectorAll('.surface-block, .summary-card, .quick-link-card, .detail-card, .data-table, .portal-card, .blog-card')).filter((element) => element instanceof HTMLElement);",
     "  if (prefersReducedMotion.matches || !('IntersectionObserver' in window)) {",
     "    for (const [index, element] of revealElements.entries()) {",
     "      element.classList.add('is-visible');",
@@ -6333,7 +6356,7 @@ function renderLayout(input: {
     "      observer.observe(element);",
     "    }",
     "  }",
-    "  for (const container of document.querySelectorAll('[data-enhanced-table]')) {",
+    "  for (const container of root.querySelectorAll('[data-enhanced-table]')) {",
     "    if (!(container instanceof HTMLElement)) {",
     "      continue;",
     "    }",
@@ -6430,7 +6453,7 @@ function renderLayout(input: {
     "    }",
     "    render();",
     "  }",
-    "  for (const container of document.querySelectorAll('[data-enhanced-collection]')) {",
+    "  for (const container of root.querySelectorAll('[data-enhanced-collection]')) {",
     "    if (!(container instanceof HTMLElement)) {",
     "      continue;",
     "    }",
@@ -6522,6 +6545,86 @@ function renderLayout(input: {
     "    }",
     "    render();",
     "  }",
+    "  };",
+    "  window.__bdtaEnhanceDynamicContent = enhanceDynamicContent;",
+    "  enhanceDynamicContent(document);",
+    "  const resolveRefreshRoot = (scope) => scope.querySelector('[data-layout-main]') || scope.querySelector('main');",
+    "  const replaceMainContent = (nextDocument, nextUrl) => {",
+    "    const currentMain = resolveRefreshRoot(document);",
+    "    const nextMain = resolveRefreshRoot(nextDocument);",
+    "    if (!(currentMain instanceof HTMLElement) || !(nextMain instanceof HTMLElement)) {",
+    "      window.location.assign(nextUrl);",
+    "      return;",
+    "    }",
+    "    currentMain.innerHTML = nextMain.innerHTML;",
+    "    if (typeof nextDocument.title === 'string' && nextDocument.title.trim() !== '') {",
+    "      document.title = nextDocument.title;",
+    "    }",
+    "    if (nextUrl !== window.location.href) {",
+    "      window.history.pushState({}, '', nextUrl);",
+    "    }",
+    "    window.scrollTo({ top: 0, behavior: 'auto' });",
+    "    if (typeof window.__bdtaEnhanceDynamicContent === 'function') {",
+    "      window.__bdtaEnhanceDynamicContent(currentMain);",
+    "    }",
+    "  };",
+    "  const shouldEnhanceForm = (form) => {",
+    "    if (!(form instanceof HTMLFormElement)) return false;",
+    "    if (!(document.querySelector('[data-layout-main]') instanceof HTMLElement)) return false;",
+    "    if ((form.method || 'get').toLowerCase() !== 'post') return false;",
+    "    if (form.target && form.target !== '_self') return false;",
+    "    if ((form.enctype || '').toLowerCase() === 'multipart/form-data') return false;",
+    "    if (form.querySelector('input[type=\"file\"]')) return false;",
+    "    const action = new URL(form.getAttribute('action') || window.location.href, window.location.origin);",
+    "    if (action.origin !== window.location.origin) return false;",
+    "    if (!action.pathname.startsWith('/admin') && !action.pathname.startsWith('/portal')) return false;",
+    "    if (action.pathname.endsWith('/pay')) return false;",
+    "    return !form.hasAttribute('data-no-async-refresh');",
+    "  };",
+    "  document.addEventListener('submit', (event) => {",
+    "    if (event.defaultPrevented) return;",
+    "    const form = event.target;",
+    "    if (!shouldEnhanceForm(form)) return;",
+    "    event.preventDefault();",
+    "    const submitter = event.submitter instanceof HTMLButtonElement || event.submitter instanceof HTMLInputElement ? event.submitter : null;",
+    "    const action = new URL(form.getAttribute('action') || window.location.href, window.location.origin);",
+    "    const formData = new FormData(form);",
+    "    if (submitter != null && submitter.name) {",
+    "      formData.append(submitter.name, submitter.value);",
+    "    }",
+    "    const previousDisabled = submitter ? submitter.disabled : false;",
+    "    if (submitter) {",
+    "      submitter.disabled = true;",
+    "    }",
+    "    const body = new URLSearchParams();",
+    "    for (const [key, value] of formData.entries()) {",
+    "      body.append(key, String(value));",
+    "    }",
+    "    fetch(action.toString(), { method: 'POST', body, redirect: 'follow' })",
+    "      .then(async (response) => {",
+    "        const nextUrl = response.url || action.toString();",
+    "        const nextPath = new URL(nextUrl, window.location.origin).pathname;",
+    "        if (nextPath === '/admin/login' || nextPath === '/portal/login') {",
+    "          window.location.assign(nextUrl);",
+    "          return;",
+    "        }",
+    "        if (!response.ok) {",
+    "          window.location.assign(nextUrl);",
+    "          return;",
+    "        }",
+    "        const html = await response.text();",
+    "        const nextDocument = new DOMParser().parseFromString(html, 'text/html');",
+    "        replaceMainContent(nextDocument, nextUrl);",
+    "      })",
+    "      .catch(() => {",
+    "        window.location.assign(action.toString());",
+    "      })",
+    "      .finally(() => {",
+    "        if (submitter) {",
+    "          submitter.disabled = previousDisabled;",
+    "        }",
+    "      });",
+    "  });",
     "})();",
     "</script>",
     "</body>",
@@ -13870,7 +13973,7 @@ document.addEventListener("DOMContentLoaded", () => {
               adminNav,
               renderSettingsConsole({
                 basePath: legacySettingsPath ? "/client/settings.php" : "/admin/settings",
-                currentCategory: url.searchParams.get("category")?.trim() || "overview",
+                currentCategory: normalizeSettingsCategory(url.searchParams.get("category")),
                 settings: settings.items,
                 categories,
                 currentAdmin: settings.currentAdmin,

@@ -21,7 +21,13 @@ describe("domain entities", () => {
     expect(dateSchema.parse(value)).toBe("2026-07-10");
   });
 
-  it("treats blank optional legacy form-template frequency values as null", () => {
+  it("normalizes legacy SQL date and timestamp strings", () => {
+    expect(timestampSchema.parse("2026-07-10")).toBe("2026-07-10T00:00:00.000Z");
+    expect(timestampSchema.parse("2026-07-10 20:52:44")).toBe("2026-07-10T20:52:44.000Z");
+    expect(dateSchema.parse("2026-07-10 20:52:44")).toBe("2026-07-10");
+  });
+
+  it("treats blank legacy form-template frequency values as null", () => {
     const result = formTemplateSchema.parse({
       id: "form-template-1",
       name: "Boarding Intake",
@@ -64,7 +70,7 @@ describe("domain entities", () => {
     expect(contract.signedAt).toBeNull();
   });
 
-  it("models a booking with tokenized iCal access", () => {
+  it("models booking tokenized iCal access", () => {
     const result = bookingSchema.parse({
       id: "booking-1",
       clientId: "client-1",
@@ -84,7 +90,7 @@ describe("domain entities", () => {
     expect(result.status).toBe("confirmed");
   });
 
-  it("models document and payment entities needed for parity", () => {
+  it("models document payment entities needed for parity", () => {
     const quote = quoteSchema.parse({
       id: "quote-1",
       clientId: "client-1",
