@@ -421,6 +421,10 @@ function normalizeLegacyOptionalText(value: string | null | undefined): string |
   return normalized === "" ? undefined : normalized;
 }
 
+function isLegacyZeroDateValue(value: string): boolean {
+  return /^0{4}-0{2}-0{2}(?:[ T]0{2}:0{2}(?::0{2})?)?$/.test(value.trim());
+}
+
 function buildLegacyPublicAccessToken(
   tokenValue: string | null | undefined,
   issuedAt: string,
@@ -456,6 +460,27 @@ function normalizeLegacyInvoiceStatus(status: string | null | undefined): Invoic
       return "void";
     default:
       return "draft";
+  }
+}
+
+function normalizeLegacyBookingStatus(status: string | null | undefined): Booking["status"] {
+  switch ((status ?? "").trim().toLowerCase()) {
+    case "confirmed":
+    case "scheduled":
+    case "rescheduled":
+    case "in_progress":
+      return "confirmed";
+    case "completed":
+    case "complete":
+    case "done":
+      return "completed";
+    case "cancelled":
+    case "canceled":
+    case "no_show":
+    case "noshow":
+      return "cancelled";
+    default:
+      return "pending";
   }
 }
 
@@ -501,7 +526,7 @@ function normalizeLegacyTimestampValue(value: string | Date | null | undefined):
   }
 
   const trimmed = value.trim();
-  return trimmed === "" ? null : trimmed;
+  return trimmed === "" || isLegacyZeroDateValue(trimmed) ? null : trimmed;
 }
 
 function normalizeLegacyDateValue(value: string | Date | null | undefined): string | null | undefined {
@@ -514,7 +539,7 @@ function normalizeLegacyDateValue(value: string | Date | null | undefined): stri
   }
 
   const trimmed = value.trim();
-  return trimmed === "" ? null : trimmed;
+  return trimmed === "" || isLegacyZeroDateValue(trimmed) ? null : trimmed;
 }
 
 function normalizeLegacyTimeOfDay(value: string): string {
@@ -569,7 +594,7 @@ function fromLegacyBookingRow(row: {
   appointment_date: string;
   appointment_time: string;
   duration_minutes: number;
-  status: "pending" | "confirmed" | "completed" | "cancelled";
+  status: string | null;
   ical_token?: string | null;
 }): Booking {
   const startsAt = toTimestamp(row.appointment_date, row.appointment_time);
@@ -585,7 +610,7 @@ function fromLegacyBookingRow(row: {
     serviceId: normalizeLegacyReferenceId(row.service_type, `legacy-service-${row.id}`),
     startsAt,
     endsAt,
-    status: row.status,
+    status: normalizeLegacyBookingStatus(row.status),
     icalAccess: buildLegacyPublicAccessToken(row.ical_token, startsAt, String(row.id))
   };
 }
