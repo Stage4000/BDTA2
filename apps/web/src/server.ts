@@ -7104,6 +7104,59 @@ async function clearPersistedSession(
   };
 }
 
+type RouteErrorResult = {
+  status: number;
+  body: unknown;
+};
+
+function readRouteError(body: unknown): { code: string; message: string } | null {
+  if (typeof body !== "object" || body == null || !("error" in body)) {
+    return null;
+  }
+
+  const error = body.error;
+  if (typeof error !== "object" || error == null) {
+    return null;
+  }
+
+  const code = "code" in error && typeof error.code === "string" ? error.code : null;
+  const message = "message" in error && typeof error.message === "string" ? error.message : null;
+  if (code == null || message == null) {
+    return null;
+  }
+
+  return { code, message };
+}
+
+function isAuthRouteErrorCode(code: string): boolean {
+  return code === "unauthorized" || code === "actor_not_found";
+}
+
+async function handleProtectedRouteFailure(options: {
+  response: ServerResponse;
+  request: IncomingMessage;
+  sessionStore: SessionStore;
+  loginPath: string;
+  title: string;
+  result: RouteErrorResult;
+}): Promise<void> {
+  const routeError = readRouteError(options.result.body);
+  if (routeError != null && isAuthRouteErrorCode(routeError.code)) {
+    redirect(
+      options.response,
+      options.loginPath,
+      await clearPersistedSession(options.sessionStore, options.request)
+    );
+    return;
+  }
+
+  const message = routeError?.message ?? "Unexpected server failure.";
+  writeHtml(options.response, options.result.status, renderLayout({
+    title: options.title,
+    body: `<article><h1>${escapeHtml(options.title)}</h1><p>${escapeHtml(message)}</p></article>`
+  }));
+}
+
 function toLocalLocation(value: string): string {
   if (value.startsWith("/")) {
     return value;
@@ -10078,7 +10131,14 @@ return;
         if (url.pathname === "/portal/profile") {
           const profile = await handlers.handlePortalProfile(session);
           if ("error" in profile.body) {
-            redirect(response, buildPortalLoginRedirectPath(request));
+            await handleProtectedRouteFailure({
+              response,
+              request,
+              sessionStore: resolved.sessionStore,
+              loginPath: buildPortalLoginRedirectPath(request),
+              title: "Profile",
+              result: profile
+            });
             return;
           }
 
@@ -10123,7 +10183,14 @@ return;
         if (url.pathname === "/portal/appointments") {
           const bookings = await handlers.handlePortalBookings(session);
           if ("error" in bookings.body) {
-            redirect(response, buildPortalLoginRedirectPath(request));
+            await handleProtectedRouteFailure({
+              response,
+              request,
+              sessionStore: resolved.sessionStore,
+              loginPath: buildPortalLoginRedirectPath(request),
+              title: "Appointments",
+              result: bookings
+            });
             return;
           }
 
@@ -10201,7 +10268,14 @@ return;
         if (url.pathname === "/portal/contacts") {
           const contacts = await handlers.handlePortalContacts(session);
           if ("error" in contacts.body) {
-            redirect(response, buildPortalLoginRedirectPath(request));
+            await handleProtectedRouteFailure({
+              response,
+              request,
+              sessionStore: resolved.sessionStore,
+              loginPath: buildPortalLoginRedirectPath(request),
+              title: "Contacts",
+              result: contacts
+            });
             return;
           }
 
@@ -10445,7 +10519,14 @@ return;
         if (url.pathname === "/portal/packages") {
           const packages = await handlers.handlePortalPackages(session);
           if ("error" in packages.body) {
-            redirect(response, buildPortalLoginRedirectPath(request));
+            await handleProtectedRouteFailure({
+              response,
+              request,
+              sessionStore: resolved.sessionStore,
+              loginPath: buildPortalLoginRedirectPath(request),
+              title: "Packages",
+              result: packages
+            });
             return;
           }
 
@@ -10518,7 +10599,14 @@ return;
         if (url.pathname === "/portal/credits") {
           const credits = await handlers.handlePortalCredits(session);
           if ("error" in credits.body) {
-            redirect(response, buildPortalLoginRedirectPath(request));
+            await handleProtectedRouteFailure({
+              response,
+              request,
+              sessionStore: resolved.sessionStore,
+              loginPath: buildPortalLoginRedirectPath(request),
+              title: "Credits",
+              result: credits
+            });
             return;
           }
 
@@ -11793,7 +11881,14 @@ return;
         if (url.pathname === "/admin/bookings") {
           const bookings = await handlers.handleAdminBookings(session);
           if ("error" in bookings.body) {
-            redirect(response, buildAdminLoginRedirectPath(request));
+            await handleProtectedRouteFailure({
+              response,
+              request,
+              sessionStore: resolved.sessionStore,
+              loginPath: buildAdminLoginRedirectPath(request),
+              title: "Admin Bookings",
+              result: bookings
+            });
             return;
           }
 
@@ -11875,7 +11970,14 @@ return;
         if (url.pathname === "/admin/invoices" || url.pathname === "/client/invoices_list.php") {
           const invoices = await handlers.handleAdminInvoices(session);
           if ("error" in invoices.body) {
-            redirect(response, buildAdminLoginRedirectPath(request));
+            await handleProtectedRouteFailure({
+              response,
+              request,
+              sessionStore: resolved.sessionStore,
+              loginPath: buildAdminLoginRedirectPath(request),
+              title: "Admin Invoices",
+              result: invoices
+            });
             return;
           }
 
@@ -11955,7 +12057,14 @@ return;
         if (url.pathname === "/admin/quotes") {
           const quotes = await handlers.handleAdminQuotes(session);
           if ("error" in quotes.body) {
-            redirect(response, buildAdminLoginRedirectPath(request));
+            await handleProtectedRouteFailure({
+              response,
+              request,
+              sessionStore: resolved.sessionStore,
+              loginPath: buildAdminLoginRedirectPath(request),
+              title: "Admin Quotes",
+              result: quotes
+            });
             return;
           }
 
@@ -12031,7 +12140,14 @@ return;
         if (url.pathname === "/admin/contracts") {
           const contracts = await handlers.handleAdminContracts(session);
           if ("error" in contracts.body) {
-            redirect(response, buildAdminLoginRedirectPath(request));
+            await handleProtectedRouteFailure({
+              response,
+              request,
+              sessionStore: resolved.sessionStore,
+              loginPath: buildAdminLoginRedirectPath(request),
+              title: "Admin Contracts",
+              result: contracts
+            });
             return;
           }
 
@@ -12256,7 +12372,14 @@ return;
         if (url.pathname === "/admin/packages") {
           const packages = await handlers.handleAdminPackages(session);
           if ("error" in packages.body) {
-            redirect(response, buildAdminLoginRedirectPath(request));
+            await handleProtectedRouteFailure({
+              response,
+              request,
+              sessionStore: resolved.sessionStore,
+              loginPath: buildAdminLoginRedirectPath(request),
+              title: "Admin Packages",
+              result: packages
+            });
             return;
           }
 
@@ -12329,7 +12452,14 @@ return;
         if (url.pathname === "/admin/credits") {
           const credits = await handlers.handleAdminCredits(session);
           if ("error" in credits.body) {
-            redirect(response, buildAdminLoginRedirectPath(request));
+            await handleProtectedRouteFailure({
+              response,
+              request,
+              sessionStore: resolved.sessionStore,
+              loginPath: buildAdminLoginRedirectPath(request),
+              title: "Admin Credits",
+              result: credits
+            });
             return;
           }
 
