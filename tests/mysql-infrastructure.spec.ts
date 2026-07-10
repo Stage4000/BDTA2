@@ -385,6 +385,79 @@ it("normalizes legacy booking statuses and zero-date transactional timestamps", 
   ]);
 });
 
+it("normalizes legacy string and invalid numeric values before listing admin transactions", async () => {
+  const executor = new FakeSqlExecutor([
+    rows([{
+      id: 42,
+      client_id: 7,
+      service_type: "svc-group-class",
+      appointment_date: "2026-06-02",
+      appointment_time: "4:15 PM",
+      duration_minutes: "bad-duration",
+      status: "confirmed",
+      ical_token: null
+    }]),
+    rows([{
+      id: 401,
+      client_id: 12,
+      status: "sent",
+      total_amount: "225.50",
+      outstanding_amount: "not-a-number",
+      due_at: "2026-05-29 00:00:00"
+    }]),
+    rows([{
+      id: 501,
+      client_id: 12,
+      status: "sent",
+      total_amount: "bad-total",
+      access_token: null
+    }])
+  ]);
+
+  const dependencies = createMySqlApiDependencies(executor, {
+    now: () => "2026-06-01T12:00:00.000Z"
+  }).adminResources;
+
+  await expect(dependencies.listAdminBookings()).resolves.toEqual([
+    {
+      id: "42",
+      clientId: "7",
+      petIds: [],
+      serviceId: "svc-group-class",
+      startsAt: "2026-06-02T16:15:00.000Z",
+      endsAt: "2026-06-02T17:15:00.000Z",
+      status: "confirmed",
+      icalAccess: null
+    }
+  ]);
+  await expect(dependencies.listAdminInvoices()).resolves.toEqual([
+    {
+      id: "401",
+      clientId: "12",
+      status: "sent",
+      totalAmount: 225.5,
+      outstandingAmount: 0,
+      dueAt: "2026-05-29 00:00:00"
+    }
+  ]);
+  await expect(dependencies.listAdminQuotes()).resolves.toEqual([
+    {
+      id: "501",
+      clientId: "12",
+      status: "sent",
+      totalAmount: 0,
+      quoteNumber: undefined,
+      title: undefined,
+      description: "",
+      expiresAt: undefined,
+      acceptedAt: undefined,
+      declinedAt: undefined,
+      items: undefined,
+      publicAccess: null
+    }
+  ]);
+});
+
 it("auto-enrolls MySQL workflow clients from appointment booking triggers", async () => {
   const executor = new FakeSqlExecutor([
     rows([{ overlapCount: 0 }]),

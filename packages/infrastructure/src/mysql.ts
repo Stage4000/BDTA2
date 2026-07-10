@@ -425,6 +425,24 @@ function isLegacyZeroDateValue(value: string): boolean {
   return /^0{4}-0{2}-0{2}(?:[ T]0{2}:0{2}(?::0{2})?)?$/.test(value.trim());
 }
 
+function normalizeLegacyFiniteNumber(value: unknown, fallback = 0): number {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : fallback;
+  }
+  if (typeof value === "bigint") {
+    return Number(value);
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim();
+    if (normalized === "") {
+      return fallback;
+    }
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
+  return fallback;
+}
+
 function buildLegacyPublicAccessToken(
   tokenValue: string | null | undefined,
   issuedAt: string,
@@ -598,8 +616,8 @@ function fromLegacyBookingRow(row: {
   ical_token?: string | null;
 }): Booking {
   const startsAt = toTimestamp(row.appointment_date, row.appointment_time);
-  const durationMinutes = Number.isFinite(row.duration_minutes) && row.duration_minutes > 0
-    ? row.duration_minutes
+  const durationMinutes = normalizeLegacyFiniteNumber(row.duration_minutes, 60) > 0
+    ? normalizeLegacyFiniteNumber(row.duration_minutes, 60)
     : 60;
   const endsAt = new Date(Date.parse(startsAt) + durationMinutes * 60_000).toISOString();
 
@@ -627,8 +645,8 @@ function toInvoiceRecord(row: {
     id: String(row.id),
     clientId: normalizeLegacyReferenceId(row.client_id, `legacy-client-${row.id}`),
     status: normalizeLegacyInvoiceStatus(row.status),
-    totalAmount: Number(row.total_amount),
-    outstandingAmount: Number(row.outstanding_amount),
+    totalAmount: normalizeLegacyFiniteNumber(row.total_amount),
+    outstandingAmount: normalizeLegacyFiniteNumber(row.outstanding_amount),
     dueAt: normalizeLegacyTimestampValue(row.due_at) ?? null
   };
 }
@@ -651,7 +669,7 @@ function toQuoteRecord(row: {
     id: String(row.id),
     clientId: normalizeLegacyReferenceId(row.client_id, `legacy-client-${row.id}`),
     status: normalizeLegacyQuoteStatus(row.status),
-    totalAmount: Number(row.total_amount),
+    totalAmount: normalizeLegacyFiniteNumber(row.total_amount),
     quoteNumber: normalizeLegacyOptionalText(row.quote_number),
     title: normalizeLegacyOptionalText(row.title),
     description: row.description ?? "",
