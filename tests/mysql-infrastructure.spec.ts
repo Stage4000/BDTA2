@@ -367,11 +367,11 @@ it("normalizes legacy booking statuses and zero-date transactional timestamps", 
       dueAt: null
     }
   ]);
-  await expect(dependencies.listAdminQuotes()).resolves.toEqual([
-    {
-      id: "501",
-      clientId: "12",
-      status: "sent",
+ await expect(dependencies.listAdminQuotes()).resolves.toEqual([
+ {
+ id: "501",
+ clientId: "12",
+ status: "sent",
       totalAmount: 450,
       quoteNumber: undefined,
       title: undefined,
@@ -380,12 +380,204 @@ it("normalizes legacy booking statuses and zero-date transactional timestamps", 
       acceptedAt: null,
       declinedAt: null,
       items: undefined,
-      publicAccess: null
-    }
-  ]);
-});
+ publicAccess: null
+ }
+ ]);
+ });
 
-it("normalizes legacy string and invalid numeric values before listing admin transactions", async () => {
+ it("normalizes legacy expense records before listing admin expenses and loading details", async () => {
+ const executor = new FakeSqlExecutor([
+ rows([{
+ id: 61,
+ client_id: null,
+ client_name: null,
+ category: "",
+ description: "",
+ amount: "48.75",
+ expense_date: "2026-05-26",
+ receipt_file: "expense-1-receipt.pdf",
+ billable: 1,
+ invoiced: 0,
+ notes: null,
+ created_at: "2026-05-26T10:00:00.000Z"
+ }]),
+ rows([{
+ id: 61,
+ client_id: 12,
+ client_name: "Client One",
+ category: "Supplies",
+ description: "Training treats",
+ amount: 48.75,
+ expense_date: "2026-05-26",
+ receipt_file: "expense-1-receipt.pdf",
+ billable: 1,
+ invoiced: 1,
+ notes: "Purchased before private lesson.",
+ created_at: "2026-05-26T10:00:00.000Z"
+ }])
+ ]);
+
+ const dependencies = createMySqlApiDependencies(executor, {
+ now: () => "2026-06-01T12:00:00.000Z"
+ }).adminResources;
+
+ await expect(dependencies.listAdminExpenses()).resolves.toEqual([
+ {
+ id: "61",
+ clientId: null,
+ clientName: undefined,
+ category: "Uncategorized",
+ description: "Expense",
+ amount: 48.75,
+ expenseDate: "2026-05-26",
+ receiptFile: "expense-1-receipt.pdf",
+ billable: true,
+ invoiced: false,
+ notes: "",
+ createdAt: "2026-05-26T10:00:00.000Z"
+ }
+ ]);
+ await expect(dependencies.findAdminExpenseById("61")).resolves.toEqual({
+ id: "61",
+ clientId: "12",
+ clientName: "Client One",
+ category: "Supplies",
+ description: "Training treats",
+ amount: 48.75,
+ expenseDate: "2026-05-26",
+ receiptFile: "expense-1-receipt.pdf",
+ billable: true,
+ invoiced: true,
+ notes: "Purchased before private lesson.",
+ createdAt: "2026-05-26T10:00:00.000Z"
+ });
+ expect(executor.calls[0]?.sql).toContain("FROM expenses e");
+ expect(executor.calls[1]?.sql).toContain("WHERE e.id = ?");
+ });
+
+ it("uses legacy-compatible admin booking, invoice, quote queries when newer columns are unavailable", async () => {
+ const missingSchemaError = (message: string, code: string) => Object.assign(new Error(message), { code });
+ const calls: Array<{ sql: string; params: unknown[] }> = [];
+    const queue: Array<
+      | Error
+      | Array<{
+          id: number;
+          client_id: number | null;
+          service_type?: string;
+          appointment_date?: string;
+          appointment_time?: string;
+          duration_minutes?: number;
+          status: string;
+          ical_token?: string | null;
+          total_amount?: number;
+          outstanding_amount?: number;
+          due_at?: string | null;
+          access_token?: string | null;
+        }>
+    > = [
+      missingSchemaError("Unknown column 'created_at' in 'order clause'", "ER_BAD_FIELD_ERROR"),
+      [{
+        id: 42,
+        client_id: null,
+        service_type: "Private Lesson",
+        appointment_date: "2026-06-02",
+        appointment_time: "4:15 PM",
+        duration_minutes: 45,
+        status: "confirmed",
+        ical_token: null
+      }],
+      missingSchemaError("Unknown column 'outstanding_amount' in 'field list'", "ER_BAD_FIELD_ERROR"),
+      missingSchemaError("Table 'dev.invoice_payments' doesn't exist", "ER_NO_SUCH_TABLE"),
+      [{
+        id: 401,
+        client_id: 12,
+        status: "sent",
+        total_amount: 225,
+        outstanding_amount: 225,
+        due_at: "2026-05-29T00:00:00.000Z"
+      }],
+      missingSchemaError("Unknown column 'total_amount' in 'field list'", "ER_BAD_FIELD_ERROR"),
+      missingSchemaError("Unknown column 'access_token' in 'field list'", "ER_BAD_FIELD_ERROR"),
+      [{
+        id: 501,
+        client_id: 12,
+        status: "sent",
+        total_amount: 450,
+        access_token: null
+      }]
+    ];
+    const executor: SqlExecutor & { calls: Array<{ sql: string; params: unknown[] }> } = {
+      calls,
+      async execute<T>(sql: string, params: unknown[] = []): Promise<[T, SqlResultHeader]> {
+        calls.push({ sql, params });
+        const next = queue.shift();
+        if (next == null) {
+          throw new Error(`No fake SQL result queued for: ${sql}`);
+        }
+        if (next instanceof Error) {
+          throw next;
+        }
+
+        return [next as T, {}];
+      }
+    };
+
+    const dependencies = createMySqlApiDependencies(executor, {
+      now: () => "2026-06-01T12:00:00.000Z"
+    }).adminResources;
+
+    await expect(dependencies.listAdminBookings()).resolves.toEqual([
+      {
+        id: "42",
+        clientId: "legacy-client-42",
+        petIds: [],
+        serviceId: "Private Lesson",
+        startsAt: "2026-06-02T16:15:00.000Z",
+        endsAt: "2026-06-02T17:00:00.000Z",
+        status: "confirmed",
+        icalAccess: null
+      }
+    ]);
+    await expect(dependencies.listAdminInvoices()).resolves.toEqual([
+      {
+        id: "401",
+        clientId: "12",
+        status: "sent",
+        totalAmount: 225,
+        outstandingAmount: 225,
+        dueAt: "2026-05-29T00:00:00.000Z"
+      }
+    ]);
+    await expect(dependencies.listAdminQuotes()).resolves.toEqual([
+      {
+        id: "501",
+        clientId: "12",
+        status: "sent",
+        totalAmount: 450,
+        quoteNumber: undefined,
+        title: undefined,
+        description: "",
+        expiresAt: undefined,
+        acceptedAt: undefined,
+        declinedAt: undefined,
+        items: undefined,
+        publicAccess: null
+      }
+    ]);
+
+    expect(executor.calls[0]?.sql).toContain("ORDER BY created_at DESC, id DESC");
+    expect(executor.calls[1]?.sql).toContain("NULL AS client_id");
+    expect(executor.calls[1]?.sql).toContain("ORDER BY appointment_date DESC, appointment_time DESC, id DESC");
+    expect(executor.calls[2]?.sql).toContain("i.outstanding_amount AS outstanding_amount");
+    expect(executor.calls[3]?.sql).toContain("i.due_date AS due_at");
+    expect(executor.calls[3]?.sql).toContain("FROM invoice_payments");
+    expect(executor.calls[4]?.sql).toContain("COALESCE(i.total_amount, 0) AS outstanding_amount");
+    expect(executor.calls[5]?.sql).toContain("q.total_amount AS total_amount");
+    expect(executor.calls[6]?.sql).toContain("q.amount AS total_amount");
+    expect(executor.calls[7]?.sql).toContain("NULL AS access_token");
+  });
+
+  it("normalizes legacy string and invalid numeric values before listing admin transactions", async () => {
   const executor = new FakeSqlExecutor([
     rows([{
       id: 42,

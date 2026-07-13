@@ -271,6 +271,21 @@ export const bookingSchema = z.object({
   icalAccess: publicAccessTokenSchema.nullable()
 });
 
+export const expenseSchema = z.object({
+  id: idSchema,
+  clientId: idSchema.nullable(),
+  clientName: z.string().min(1).nullable().optional(),
+  category: z.string().min(1),
+  description: z.string().min(1),
+  amount: moneySchema,
+  expenseDate: dateSchema.nullable(),
+  receiptFile: z.string().min(1).nullable().optional(),
+  billable: z.boolean(),
+  invoiced: z.boolean(),
+  notes: z.string(),
+  createdAt: timestampSchema.nullable().optional()
+});
+
 export const invoiceSchema = z.object({
   id: idSchema,
   clientId: idSchema,
@@ -548,6 +563,7 @@ export type PetFile = z.infer<typeof petFileSchema>;
 export type AchievementType = z.infer<typeof achievementTypeSchema>;
 export type ClientAchievement = z.infer<typeof clientAchievementSchema>;
 export type Booking = z.infer<typeof bookingSchema>;
+export type Expense = z.infer<typeof expenseSchema>;
 export type Invoice = z.infer<typeof invoiceSchema>;
 export type Quote = z.infer<typeof quoteSchema>;
 export type Contract = z.infer<typeof contractSchema>;

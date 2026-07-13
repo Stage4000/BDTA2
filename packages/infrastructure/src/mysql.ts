@@ -42,6 +42,7 @@ import type {
   ClientProfile,
   Contract,
   Credit,
+  Expense,
   FormSubmission,
   FormTemplate,
   Invoice,
@@ -647,7 +648,37 @@ function toInvoiceRecord(row: {
     status: normalizeLegacyInvoiceStatus(row.status),
     totalAmount: normalizeLegacyFiniteNumber(row.total_amount),
     outstandingAmount: normalizeLegacyFiniteNumber(row.outstanding_amount),
-    dueAt: normalizeLegacyTimestampValue(row.due_at) ?? null
+  dueAt: normalizeLegacyTimestampValue(row.due_at) ?? null
+  };
+}
+
+function toExpenseRecord(row: {
+  id: number;
+  client_id: number | null;
+  client_name?: string | null;
+  category: string | null;
+  description: string | null;
+  amount: number;
+  expense_date: string | Date | null;
+  receipt_file?: string | null;
+  billable?: number | string | boolean | null;
+  invoiced?: number | string | boolean | null;
+  notes?: string | null;
+  created_at?: string | Date | null;
+}): Expense {
+  return {
+    id: String(row.id),
+    clientId: row.client_id == null ? null : normalizeLegacyReferenceId(row.client_id, `legacy-client-${row.id}`),
+    clientName: normalizeLegacyOptionalText(row.client_name),
+    category: normalizeLegacyOptionalText(row.category) ?? "Uncategorized",
+    description: normalizeLegacyOptionalText(row.description) ?? "Expense",
+    amount: normalizeLegacyFiniteNumber(row.amount),
+    expenseDate: normalizeLegacyDateValue(row.expense_date) ?? null,
+    receiptFile: normalizeLegacyOptionalText(row.receipt_file),
+    billable: Number(row.billable ?? 0) === 1,
+    invoiced: Number(row.invoiced ?? 0) === 1,
+    notes: row.notes?.trim() ?? "",
+    createdAt: normalizeLegacyTimestampValue(row.created_at)
   };
 }
 
@@ -1509,6 +1540,63 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
   const petFileContentWriter = options.petFileContentWriter ?? createPetFileContentWriter(petUploadsBaseDir);
   const petFileContentDeleter = options.petFileContentDeleter ?? createPetFileContentDeleter(petUploadsBaseDir);
   const stripeClient = options.stripeClient ?? createHttpStripeClient(resolveStripeSecretKey);
+  function isMissingColumnError(error: unknown): boolean {
+    if (typeof error !== "object" || error == null) {
+      return false;
+    }
+
+    const maybeMessage = "message" in error ? error.message : undefined;
+    const maybeCode = "code" in error ? error.code : undefined;
+    return maybeCode === "ER_BAD_FIELD_ERROR"
+      || maybeCode === "ER_NO_SUCH_TABLE"
+      || (typeof maybeMessage === "string" && (/unknown column/i.test(maybeMessage) || /doesn't exist/i.test(maybeMessage)));
+  }
+
+  function buildBookingsSelectSql(input: { limit?: number; whereClause?: string; legacy?: boolean; }): string {
+    const limitClause = typeof input.limit === "number" ? `LIMIT ${Math.max(1, Math.trunc(input.limit))}` : "";
+    return [
+      `SELECT id, ${input.legacy ? "NULL AS client_id" : "client_id"}, service_type, appointment_date, appointment_time, duration_minutes, status, ical_token`,
+      "FROM bookings",
+      input.whereClause ?? "",
+      input.legacy ? "ORDER BY appointment_date DESC, appointment_time DESC, id DESC" : "ORDER BY created_at DESC, id DESC",
+      limitClause
+    ].filter((part) => part.trim() !== "").join(" ");
+  }
+
+  function buildInvoicesSelectSql(input: { limit?: number; whereClause?: string; legacy?: boolean; tolerateMissingPayments?: boolean; }): string {
+    const limitClause = typeof input.limit === "number" ? `LIMIT ${Math.max(1, Math.trunc(input.limit))}` : "";
+    const outstandingSelect = input.legacy
+      ? (
+          input.tolerateMissingPayments
+            ? "COALESCE(i.total_amount, 0) AS outstanding_amount"
+            : [
+                "GREATEST(",
+                "COALESCE(i.total_amount, 0) - COALESCE((SELECT SUM(p.amount) FROM invoice_payments p WHERE p.invoice_id = i.id), 0)",
+                "+ COALESCE((SELECT SUM(r.amount) FROM invoice_refunds r WHERE r.invoice_id = i.id), 0)",
+                ", 0) AS outstanding_amount"
+              ].join(" ")
+        )
+      : "i.outstanding_amount AS outstanding_amount";
+    const dueDateSelect = input.legacy ? "i.due_date AS due_at" : "i.due_at AS due_at";
+    return [
+      `SELECT i.id, i.client_id, i.status, i.total_amount, ${outstandingSelect}, ${dueDateSelect}`,
+      "FROM invoices i",
+      input.whereClause ?? "",
+      "ORDER BY i.id DESC",
+      limitClause
+    ].filter((part) => part.trim() !== "").join(" ");
+  }
+
+  function buildQuotesSelectSql(input: { limit?: number; whereClause?: string; legacy?: boolean; tokenlessLegacy?: boolean; }): string {
+    const limitClause = typeof input.limit === "number" ? `LIMIT ${Math.max(1, Math.trunc(input.limit))}` : "";
+    return [
+      `SELECT q.id, q.client_id, q.status, ${input.legacy ? "q.amount" : "q.total_amount"} AS total_amount, ${input.tokenlessLegacy ? "NULL" : "q.access_token"} AS access_token`,
+      "FROM quotes q",
+      input.whereClause ?? "",
+      "ORDER BY q.id DESC",
+      limitClause
+    ].filter((part) => part.trim() !== "").join(" ");
+  }
 
   async function loadSettingsByKey(keys: string[]): Promise<Record<string, string>> {
     if (keys.length === 0) {
@@ -2931,7 +3019,7 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
       return Number(rows[0]?.count ?? 0);
     },
     async listRecentBookings() {
-      const [rows] = await executor.execute<Array<{
+      let rows: Array<{
         id: number;
         client_id: number | null;
         service_type: string;
@@ -2940,14 +3028,33 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         duration_minutes: number;
         status: "pending" | "confirmed" | "completed" | "cancelled";
         ical_token: string | null;
-      }>>(
-        [
-          "SELECT id, client_id, service_type, appointment_date, appointment_time, duration_minutes, status, ical_token",
-          "FROM bookings",
-          "ORDER BY created_at DESC",
-          "LIMIT 5"
-        ].join(" ")
-      );
+      }>;
+      try {
+        [rows] = await executor.execute<Array<{
+          id: number;
+          client_id: number | null;
+          service_type: string;
+          appointment_date: string;
+          appointment_time: string;
+          duration_minutes: number;
+          status: "pending" | "confirmed" | "completed" | "cancelled";
+          ical_token: string | null;
+        }>>(buildBookingsSelectSql({ limit: 5 }));
+      } catch (error) {
+        if (!isMissingColumnError(error)) {
+          throw error;
+        }
+        [rows] = await executor.execute<Array<{
+          id: number;
+          client_id: number | null;
+          service_type: string;
+          appointment_date: string;
+          appointment_time: string;
+          duration_minutes: number;
+          status: "pending" | "confirmed" | "completed" | "cancelled";
+          ical_token: string | null;
+        }>>(buildBookingsSelectSql({ limit: 5, legacy: true }));
+      }
 
       return rows.map((row) => fromLegacyBookingRow(row));
     }
@@ -5442,9 +5549,8 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
 
       return deleted;
     },
-    listAdminBookings: adminDashboard.listRecentBookings,
-    async findAdminBookingById(bookingId) {
-      const [rows] = await executor.execute<Array<{
+    async listAdminBookings() {
+      let rows: Array<{
         id: number;
         client_id: number | null;
         service_type: string;
@@ -5453,93 +5559,312 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         duration_minutes: number;
         status: "pending" | "confirmed" | "completed" | "cancelled";
         ical_token: string | null;
-      }>>(
-        [
-          "SELECT id, client_id, service_type, appointment_date, appointment_time, duration_minutes, status, ical_token",
-          "FROM bookings",
-          "WHERE id = ?",
-          "LIMIT 1"
-        ].join(" "),
-        [bookingId]
-      );
+      }>;
+      try {
+        [rows] = await executor.execute<Array<{
+          id: number;
+          client_id: number | null;
+          service_type: string;
+          appointment_date: string;
+          appointment_time: string;
+          duration_minutes: number;
+          status: "pending" | "confirmed" | "completed" | "cancelled";
+          ical_token: string | null;
+        }>>(buildBookingsSelectSql({ limit: 50 }));
+      } catch (error) {
+        if (!isMissingColumnError(error)) {
+          throw error;
+        }
+        [rows] = await executor.execute<Array<{
+          id: number;
+          client_id: number | null;
+          service_type: string;
+          appointment_date: string;
+          appointment_time: string;
+          duration_minutes: number;
+          status: "pending" | "confirmed" | "completed" | "cancelled";
+          ical_token: string | null;
+        }>>(buildBookingsSelectSql({ limit: 50, legacy: true }));
+      }
+      return rows.map((row) => fromLegacyBookingRow(row));
+    },
+    async findAdminBookingById(bookingId) {
+      let rows: Array<{
+        id: number;
+        client_id: number | null;
+        service_type: string;
+        appointment_date: string;
+        appointment_time: string;
+        duration_minutes: number;
+        status: "pending" | "confirmed" | "completed" | "cancelled";
+        ical_token: string | null;
+      }>;
+      try {
+        [rows] = await executor.execute<Array<{
+          id: number;
+          client_id: number | null;
+          service_type: string;
+          appointment_date: string;
+          appointment_time: string;
+          duration_minutes: number;
+          status: "pending" | "confirmed" | "completed" | "cancelled";
+          ical_token: string | null;
+        }>>(buildBookingsSelectSql({ whereClause: "WHERE id = ?", limit: 1 }), [bookingId]);
+      } catch (error) {
+        if (!isMissingColumnError(error)) {
+          throw error;
+        }
+        [rows] = await executor.execute<Array<{
+          id: number;
+          client_id: number | null;
+          service_type: string;
+          appointment_date: string;
+          appointment_time: string;
+          duration_minutes: number;
+          status: "pending" | "confirmed" | "completed" | "cancelled";
+          ical_token: string | null;
+        }>>(buildBookingsSelectSql({ whereClause: "WHERE id = ?", limit: 1, legacy: true }), [bookingId]);
+      }
 
       const row = rows[0];
       return row == null ? null : fromLegacyBookingRow(row);
     },
-    async listAdminInvoices() {
+    async listAdminExpenses() {
       const [rows] = await executor.execute<Array<{
         id: number;
-        client_id: number;
-        status: Invoice["status"];
-        total_amount: number;
-        outstanding_amount: number;
-        due_at: string | null;
+        client_id: number | null;
+        client_name: string | null;
+        category: string | null;
+        description: string | null;
+        amount: number;
+        expense_date: string | Date | null;
+        receipt_file: string | null;
+        billable: number | string | boolean | null;
+        invoiced: number | string | boolean | null;
+        notes: string | null;
+        created_at: string | Date | null;
       }>>(
         [
-          "SELECT id, client_id, status, total_amount, outstanding_amount, due_at",
-          "FROM invoices",
-          "ORDER BY id DESC",
+          "SELECT e.id, e.client_id, c.name AS client_name, e.category, e.description, e.amount, e.expense_date, e.receipt_file, e.billable, e.invoiced, e.notes, e.created_at",
+          "FROM expenses e",
+          "LEFT JOIN clients c ON c.id = e.client_id",
+          "ORDER BY e.expense_date DESC, e.id DESC",
           "LIMIT 50"
         ].join(" ")
       );
 
-    return rows.map((row) => toInvoiceRecord(row));
+      return rows.map((row) => toExpenseRecord(row));
     },
-    async findAdminInvoiceById(invoiceId) {
+    async findAdminExpenseById(expenseId) {
       const [rows] = await executor.execute<Array<{
         id: number;
-        client_id: number;
-        status: Invoice["status"];
+        client_id: number | null;
+        client_name: string | null;
+        category: string | null;
+        description: string | null;
+        amount: number;
+        expense_date: string | Date | null;
+        receipt_file: string | null;
+        billable: number | string | boolean | null;
+        invoiced: number | string | boolean | null;
+        notes: string | null;
+        created_at: string | Date | null;
+      }>>(
+        [
+          "SELECT e.id, e.client_id, c.name AS client_name, e.category, e.description, e.amount, e.expense_date, e.receipt_file, e.billable, e.invoiced, e.notes, e.created_at",
+          "FROM expenses e",
+          "LEFT JOIN clients c ON c.id = e.client_id",
+          "WHERE e.id = ?",
+          "LIMIT 1"
+        ].join(" "),
+        [expenseId]
+      );
+
+      const row = rows[0];
+      return row == null ? null : toExpenseRecord(row);
+    },
+    async listAdminInvoices() {
+      let rows: Array<{
+        id: number;
+        client_id: number | null;
+        status: string | null;
         total_amount: number;
         outstanding_amount: number;
         due_at: string | null;
-      }>>(
-        [
-          "SELECT id, client_id, status, total_amount, outstanding_amount, due_at",
-          "FROM invoices",
-          "WHERE id = ?",
-          "LIMIT 1"
-        ].join(" "),
-        [invoiceId]
-      );
+      }>;
+      try {
+        [rows] = await executor.execute<Array<{
+          id: number;
+          client_id: number | null;
+          status: string | null;
+          total_amount: number;
+          outstanding_amount: number;
+          due_at: string | null;
+        }>>(buildInvoicesSelectSql({ limit: 50 }));
+      } catch (error) {
+        if (!isMissingColumnError(error)) {
+          throw error;
+        }
+        try {
+          [rows] = await executor.execute<Array<{
+            id: number;
+            client_id: number | null;
+            status: string | null;
+            total_amount: number;
+            outstanding_amount: number;
+            due_at: string | null;
+          }>>(buildInvoicesSelectSql({ limit: 50, legacy: true }));
+        } catch (legacyError) {
+          if (!isMissingColumnError(legacyError)) {
+            throw legacyError;
+          }
+          [rows] = await executor.execute<Array<{
+            id: number;
+            client_id: number | null;
+            status: string | null;
+            total_amount: number;
+            outstanding_amount: number;
+            due_at: string | null;
+          }>>(buildInvoicesSelectSql({ limit: 50, legacy: true, tolerateMissingPayments: true }));
+        }
+      }
+
+      return rows.map((row) => toInvoiceRecord(row));
+    },
+    async findAdminInvoiceById(invoiceId) {
+      let rows: Array<{
+        id: number;
+        client_id: number | null;
+        status: string | null;
+        total_amount: number;
+        outstanding_amount: number;
+        due_at: string | null;
+      }>;
+      try {
+        [rows] = await executor.execute<Array<{
+          id: number;
+          client_id: number | null;
+          status: string | null;
+          total_amount: number;
+          outstanding_amount: number;
+          due_at: string | null;
+        }>>(buildInvoicesSelectSql({ whereClause: "WHERE i.id = ?", limit: 1 }), [invoiceId]);
+      } catch (error) {
+        if (!isMissingColumnError(error)) {
+          throw error;
+        }
+        try {
+          [rows] = await executor.execute<Array<{
+            id: number;
+            client_id: number | null;
+            status: string | null;
+            total_amount: number;
+            outstanding_amount: number;
+            due_at: string | null;
+          }>>(buildInvoicesSelectSql({ whereClause: "WHERE i.id = ?", limit: 1, legacy: true }), [invoiceId]);
+        } catch (legacyError) {
+          if (!isMissingColumnError(legacyError)) {
+            throw legacyError;
+          }
+          [rows] = await executor.execute<Array<{
+            id: number;
+            client_id: number | null;
+            status: string | null;
+            total_amount: number;
+            outstanding_amount: number;
+            due_at: string | null;
+          }>>(buildInvoicesSelectSql({ whereClause: "WHERE i.id = ?", limit: 1, legacy: true, tolerateMissingPayments: true }), [invoiceId]);
+        }
+      }
 
     const row = rows[0];
     return row == null ? null : toInvoiceRecord(row);
     },
     async listAdminQuotes() {
-      const [rows] = await executor.execute<Array<{
+      let rows: Array<{
         id: number;
-        client_id: number;
-        status: Quote["status"];
+        client_id: number | null;
+        status: string | null;
         total_amount: number;
         access_token: string | null;
-      }>>(
-        [
-          "SELECT id, client_id, status, total_amount, access_token",
-          "FROM quotes",
-          "ORDER BY id DESC",
-          "LIMIT 50"
-        ].join(" ")
-      );
+      }>;
+      try {
+        [rows] = await executor.execute<Array<{
+          id: number;
+          client_id: number | null;
+          status: string | null;
+          total_amount: number;
+          access_token: string | null;
+        }>>(buildQuotesSelectSql({ limit: 50 }));
+      } catch (error) {
+        if (!isMissingColumnError(error)) {
+          throw error;
+        }
+        try {
+          [rows] = await executor.execute<Array<{
+            id: number;
+            client_id: number | null;
+            status: string | null;
+            total_amount: number;
+            access_token: string | null;
+          }>>(buildQuotesSelectSql({ limit: 50, legacy: true }));
+        } catch (legacyError) {
+          if (!isMissingColumnError(legacyError)) {
+            throw legacyError;
+          }
+          [rows] = await executor.execute<Array<{
+            id: number;
+            client_id: number | null;
+            status: string | null;
+            total_amount: number;
+            access_token: string | null;
+          }>>(buildQuotesSelectSql({ limit: 50, legacy: true, tokenlessLegacy: true }));
+        }
+      }
 
-    return rows.map((row) => toQuoteRecord(row));
+      return rows.map((row) => toQuoteRecord(row));
     },
     async findAdminQuoteById(quoteId) {
-      const [rows] = await executor.execute<Array<{
+      let rows: Array<{
         id: number;
-        client_id: number;
-        status: Quote["status"];
+        client_id: number | null;
+        status: string | null;
         total_amount: number;
         access_token: string | null;
-      }>>(
-        [
-          "SELECT id, client_id, status, total_amount, access_token",
-          "FROM quotes",
-          "WHERE id = ?",
-          "LIMIT 1"
-        ].join(" "),
-        [quoteId]
-      );
+      }>;
+      try {
+        [rows] = await executor.execute<Array<{
+          id: number;
+          client_id: number | null;
+          status: string | null;
+          total_amount: number;
+          access_token: string | null;
+        }>>(buildQuotesSelectSql({ whereClause: "WHERE q.id = ?", limit: 1 }), [quoteId]);
+      } catch (error) {
+        if (!isMissingColumnError(error)) {
+          throw error;
+        }
+        try {
+          [rows] = await executor.execute<Array<{
+            id: number;
+            client_id: number | null;
+            status: string | null;
+            total_amount: number;
+            access_token: string | null;
+          }>>(buildQuotesSelectSql({ whereClause: "WHERE q.id = ?", limit: 1, legacy: true }), [quoteId]);
+        } catch (legacyError) {
+          if (!isMissingColumnError(legacyError)) {
+            throw legacyError;
+          }
+          [rows] = await executor.execute<Array<{
+            id: number;
+            client_id: number | null;
+            status: string | null;
+            total_amount: number;
+            access_token: string | null;
+          }>>(buildQuotesSelectSql({ whereClause: "WHERE q.id = ?", limit: 1, legacy: true, tokenlessLegacy: true }), [quoteId]);
+        }
+      }
 
     const row = rows[0];
     return row == null ? null : toQuoteRecord(row);

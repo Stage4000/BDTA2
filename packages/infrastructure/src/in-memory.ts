@@ -41,6 +41,7 @@ import type {
   ClientProfile,
   Contract,
   Credit,
+  Expense,
   FormTemplate,
   FormSubmission,
   InboundEmail,
@@ -151,6 +152,7 @@ export type InMemoryPlatformState = {
   petFileContents: Record<string, string | Uint8Array>;
   achievementTypes: AchievementType[];
   clientAchievements: ClientAchievement[];
+  expenses: Expense[];
   invoices: Invoice[];
   quotes: Quote[];
   contracts: Contract[];
@@ -208,7 +210,7 @@ export type InMemoryPlatformState = {
   passwordVerifier: (password: string, hash: string) => Promise<boolean>;
 };
 
-type InMemoryPlatformStateInput = Partial<Pick<InMemoryPlatformState, "portalUsers" | "adminUsers" | "blogPosts" | "sitePages" | "settings" | "invoices" | "quotes" | "bookings" | "contacts" | "pets" | "petFiles" | "petFileContents" | "achievementTypes" | "clientAchievements" | "contracts" | "packages" | "credits" | "publicPackagePurchases" | "pendingPublicPackagePurchases" | "publicPackagePaymentSessions" | "formTemplates" | "formSubmissions" | "notifications" | "workflows" | "workflowTriggers" | "workflowEnrollments" | "workflowSteps" | "workflowStepExecutions" | "contractTemplates" | "appointmentTypes" | "emailTemplates" | "scheduledTasks" | "queuedEmails" | "queuedJobs">> & {
+type InMemoryPlatformStateInput = Partial<Pick<InMemoryPlatformState, "portalUsers" | "adminUsers" | "blogPosts" | "sitePages" | "settings" | "expenses" | "invoices" | "quotes" | "bookings" | "contacts" | "pets" | "petFiles" | "petFileContents" | "achievementTypes" | "clientAchievements" | "contracts" | "packages" | "credits" | "publicPackagePurchases" | "pendingPublicPackagePurchases" | "publicPackagePaymentSessions" | "formTemplates" | "formSubmissions" | "notifications" | "workflows" | "workflowTriggers" | "workflowEnrollments" | "workflowSteps" | "workflowStepExecutions" | "contractTemplates" | "appointmentTypes" | "emailTemplates" | "scheduledTasks" | "queuedEmails" | "queuedJobs">> & {
   now?: () => string;
   captchaVerifier?: (token: string) => Promise<boolean>;
   availabilityChecker?: PublicBookingDependencies["isTimeSlotAvailable"];
@@ -224,13 +226,14 @@ export function createInMemoryPlatformState(input: InMemoryPlatformStateInput = 
     bookings: input.bookings ?? [],
     contacts: input.contacts ?? [],
     pets: input.pets ?? [],
-    petFiles: input.petFiles ?? [],
-    petFileContents: input.petFileContents ?? {},
-    achievementTypes: input.achievementTypes ?? [],
-    clientAchievements: input.clientAchievements ?? [],
-    invoices: input.invoices ?? [],
-    quotes: input.quotes ?? [],
-    contracts: input.contracts ?? [],
+  petFiles: input.petFiles ?? [],
+  petFileContents: input.petFileContents ?? {},
+  achievementTypes: input.achievementTypes ?? [],
+  clientAchievements: input.clientAchievements ?? [],
+  expenses: input.expenses ?? [],
+  invoices: input.invoices ?? [],
+  quotes: input.quotes ?? [],
+  contracts: input.contracts ?? [],
     packages: input.packages ?? [],
     credits: input.credits ?? [],
     publicPackagePurchases: input.publicPackagePurchases ?? [],
@@ -2284,20 +2287,22 @@ function createAdminResourceReadDependencies(state: InMemoryPlatformState): Admi
         contentBase64: toBase64Content(content)
       };
     },
-    deleteAdminPetFile: async (petId, fileId) => {
-      const next = state.petFiles.filter((file) => !(file.petId === petId && file.id === fileId));
-      if (next.length === state.petFiles.length) {
-        return false;
-      }
+  deleteAdminPetFile: async (petId, fileId) => {
+    const next = state.petFiles.filter((file) => !(file.petId === petId && file.id === fileId));
+    if (next.length === state.petFiles.length) {
+      return false;
+    }
 
-      state.petFiles = next;
-      delete state.petFileContents[fileId];
-      return true;
-    },
-    listAdminBookings: async () => state.bookings,
-    findAdminBookingById: async (bookingId) => state.bookings.find((booking) => booking.id === bookingId) ?? null,
-    listAdminInvoices: async () => state.invoices,
-    findAdminInvoiceById: async (invoiceId) => state.invoices.find((invoice) => invoice.id === invoiceId) ?? null,
+    state.petFiles = next;
+    delete state.petFileContents[fileId];
+    return true;
+  },
+  listAdminBookings: async () => state.bookings,
+  findAdminBookingById: async (bookingId) => state.bookings.find((booking) => booking.id === bookingId) ?? null,
+  listAdminExpenses: async () => state.expenses,
+  findAdminExpenseById: async (expenseId) => state.expenses.find((expense) => expense.id === expenseId) ?? null,
+  listAdminInvoices: async () => state.invoices,
+  findAdminInvoiceById: async (invoiceId) => state.invoices.find((invoice) => invoice.id === invoiceId) ?? null,
     listAdminQuotes: async () => state.quotes,
     findAdminQuoteById: async (quoteId) => state.quotes.find((quote) => quote.id === quoteId) ?? null,
     listAdminContracts: async () => state.contracts,

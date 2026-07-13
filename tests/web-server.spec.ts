@@ -15,7 +15,7 @@ describe("web server", () => {
           id: "blog-1",
           title: "Loose Leash Training Tips",
           slug: "loose-leash-training-tips",
-          content: "<p>Walks start before the leash clips on.</p>",
+          content: '<p>Walks start before the leash clips on.</p><p><img src="backend/uploads/blog/inline-tip.jpg" alt="Inline tip image"></p>',
           excerpt: "Walks start before the leash clips on.",
           coverPhoto: "/backend/uploads/blog/loose-leash.jpg",
           author: "Brook",
@@ -101,10 +101,14 @@ describe("web server", () => {
       expect(blogIndexHtml).toContain("data-enhanced-collection-search");
       expect(blogIndexHtml).toContain("data-enhanced-collection-page-count");
       expect(blogPostHtml).toContain("Walks start before the leash clips on.");
+      expect(blogPostHtml).toContain('src="/backend/uploads/blog/inline-tip.jpg"');
       expect(homeHtml).toContain("hero-section");
       expect(homeHtml).toContain("navbar");
       expect(homeHtml).toContain("Poppins");
       expect(homeHtml).toContain("Montserrat");
+      expect(homeHtml).toContain('<a class="nav-link active" href="/" aria-current="page">Home</a>');
+      expect(homeHtml).toContain('<a class="nav-link nav-cta" href="/book">Book</a>');
+      expect(servicesHtml).toContain('<a class="nav-link active" href="/services" aria-current="page">Services</a>');
       expect(homeHtml).not.toContain("BDTA Client Portal");
       expect(homeHtml).not.toContain("BDTA Client CRM");
       expect(homeHtml).toContain("marketing-hero");
@@ -122,6 +126,50 @@ describe("web server", () => {
       expect(blogIndexHtml).toContain('/backend/uploads/blog/loose-leash.jpg');
       expect(blogPostHtml).toContain("article-shell");
       expect(blogPostHtml).toContain('/backend/uploads/blog/loose-leash.jpg');
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error?: Error) => error ? reject(error) : resolve());
+      });
+    }
+  });
+
+  it("renders built-in services page when the CMS services page is missing", async () => {
+    const state = createInMemoryPlatformState({
+      sitePages: [
+        {
+          id: "page-home",
+          slug: "home",
+          title: "Brook's Dog Training Academy",
+          htmlContent: "<section><h1>Train your dog in front of you.</h1><p>Real-life training support.</p></section>",
+          cssContent: "",
+          metaDescription: "Real-life training support.",
+          metaKeywords: "dog training",
+          ogTitle: null,
+          ogDescription: null,
+          ogImage: null,
+          isHomepage: true,
+          published: true,
+          sortOrder: 1,
+          updatedByAdminUserId: "admin-1",
+          createdAt: "2026-05-01T10:00:00.000Z",
+          updatedAt: "2026-05-28T12:00:00.000Z"
+        }
+      ]
+    });
+    const server = createHttpWebServer({ state });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (address == null || typeof address === "string") {
+      throw new Error("Expected TCP server address.");
+    }
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${address.port}/services`);
+      expect(response.status).toBe(200);
+      const html = await response.text();
+      expect(html).toContain("Training programs built around your dog and your home.");
+      expect(html).toContain('<a class="nav-link active" href="/services" aria-current="page">Services</a>');
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((error?: Error) => error ? reject(error) : resolve());
@@ -421,6 +469,93 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
     }
   });
 
+  it("inlines Mailjet newsletter embeds without vendor branding", async () => {
+    const originalFetch = globalThis.fetch;
+    const mailjetFrameUrl = "https://1lyuz.mjt.lu/wgt/1lyuz/0kx4/form?c=c5cb2494";
+    const mailjetDocument = [
+      "<!doctype html>",
+      "<html><head><style>.pas-form{background:#ffffff;}</style></head>",
+      '<body class="pas-body" style="background-color: transparent;">',
+      '<form class="pas-form">',
+      '<div class="pas-text"><div class="pas-text-container"><h1>Fetch The Latest News from Brook&apos;s Dog Training Academy</h1></div></div>',
+      '<div class="pas-input"><label class="pas-input-text" for="email"><span>Email</span></label><input class="pas-input-input" id="email" name="email" type="email"></div>',
+      '<label class="pas-optin" for="consent"><input id="consent" name="consent" required type="checkbox"><div class="pas-optin-text-container"><p class="pas-optin-text"><span>I agree to receive emails.</span></p></div></label>',
+      '<div class="pas-submit"><button type="submit"><span class="submit-text">Sign up</span></button></div>',
+      '<section class="pas-section"><a class="pas-image" href="https://www.mailjet.com/?utm_source=footer"><img src="https://assets.mailjet.com/logo.png" alt="Mailjet Logo"></a></section>',
+      "</form>",
+      "<script>window.__mailjetLoaded = true;</script>",
+      "</body></html>"
+    ].join("");
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (requestUrl === mailjetFrameUrl) {
+        return new Response(mailjetDocument, {
+          status: 200,
+          headers: { "content-type": "text/html; charset=utf-8" }
+        });
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+
+    const state = createInMemoryPlatformState({
+      settings: createManagedSettingsCatalog("2026-05-28T12:00:00.000Z").map((setting) => {
+        if (setting.key === "newsletter_embed_html") {
+          return {
+            ...setting,
+            value: `<iframe data-w-type="embedded" src="${mailjetFrameUrl}"></iframe><script type="text/javascript" src="https://app.mailjet.com/pas-nc-embedded-v2.js"></script>`
+          };
+        }
+        return setting;
+      }),
+      sitePages: [
+        {
+          id: "page-home",
+          slug: "home",
+          title: "Brook's Dog Training Academy",
+          htmlContent: "<section><h1>Train your dog in front of you.</h1><p>Real-life training support.</p></section>",
+          cssContent: "",
+          metaDescription: "Real-life training support.",
+          metaKeywords: "dog training",
+          ogTitle: null,
+          ogDescription: null,
+          ogImage: null,
+          isHomepage: true,
+          published: true,
+          sortOrder: 1,
+          updatedByAdminUserId: "admin-1",
+          createdAt: "2026-05-01T10:00:00.000Z",
+          updatedAt: "2026-05-28T12:00:00.000Z"
+        }
+      ]
+    });
+
+    const server = createHttpWebServer({ state });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (address == null || typeof address === "string") {
+      throw new Error("Expected TCP server address.");
+    }
+
+    try {
+      const response = await originalFetch(`http://127.0.0.1:${address.port}/`);
+      expect(response.status).toBe(200);
+      const html = await response.text();
+      expect(html).toContain("bdta-newsletter-embed-body--mailjet");
+      expect(html).toContain("Fetch The Latest News from Brook");
+      expect(html).toContain("pas-form");
+      expect(html).not.toContain("mailjet.com");
+      expect(html).not.toContain("Mailjet Logo");
+      expect(html).not.toContain('data-w-type="embedded"');
+    } finally {
+      globalThis.fetch = originalFetch;
+      await new Promise<void>((resolve, reject) => {
+        server.close((error?: Error) => error ? reject(error) : resolve());
+      });
+    }
+  });
+
   it("renders public notice, social links, imported-page runtime, and legacy public aliases", async () => {
     const state = createInMemoryPlatformState({
       blogPosts: [
@@ -529,7 +664,7 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
             "<!-- BDTA_SOCIAL_LINKS:contact -->",
             "old contact markup",
             "<!-- /BDTA_SOCIAL_LINKS:contact -->",
-            '<div class="wb-layout-element"><h1>Imported Manual Page</h1><p>Legacy imported content.</p></div>',
+            '<div class="wb-layout-element"><h1>Imported Manual Page</h1><p>Legacy imported content.</p><img src="images/legacy-dog.jpg" alt="Legacy dog"></div>',
             "</div>"
           ].join(""),
           cssContent: "",
@@ -586,9 +721,11 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
       expect(manualHtml).toContain("public-theme-toggle");
       expect(manualHtml).toContain("/assets/js/theme-init.js");
       expect(manualHtml).toContain("/assets/js/theme-toggle.js");
-      expect(manualHtml).toContain('href="/#contact"');
-      expect(manualHtml).toContain('href="/directory">Directory</a>');
+      expect(manualHtml).not.toContain("navbar-nav ms-auto");
+      expect(manualHtml).not.toContain('<button class="navbar-toggler"');
+      expect(manualHtml).not.toContain('class="collapse navbar-collapse"');
       expect(manualHtml).not.toContain("old contact markup");
+      expect(manualHtml).toContain('src="/images/legacy-dog.jpg"');
       expect(manualHtml).toContain("Follow Us");
       expect(manualHtml).toContain("https://facebook.example/bdta");
       expect(manualHtml).toContain("https://example.com/podcast");
@@ -966,21 +1103,37 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
   it("supports portal login and renders session-backed portal pages", async () => {
     const state = createInMemoryPlatformState({
       bookings: [
-        {
-          id: "booking-1",
-          clientId: "client-portal-1",
-          petIds: ["pet-1"],
-          serviceId: "svc-private-lesson",
+ {
+ id: "booking-1",
+ clientId: "client-portal-1",
+ petIds: ["pet-1"],
+ serviceId: "svc-private-lesson",
           startsAt: "2026-06-01T16:00:00.000Z",
           endsAt: "2026-06-01T17:00:00.000Z",
           status: "confirmed",
           icalAccess: null
-        }
-      ],
-      invoices: [
-        {
-          id: "invoice-1",
-          clientId: "client-portal-1",
+  }
+  ],
+  expenses: [
+  {
+  id: "expense-1",
+  clientId: "client-portal-1",
+  clientName: "Portal Client",
+  category: "Supplies",
+  description: "Training treats",
+  amount: 48.75,
+  expenseDate: "2026-05-26",
+  receiptFile: "expense-1-receipt.pdf",
+  billable: true,
+  invoiced: false,
+  notes: "Purchased before private lesson.",
+  createdAt: "2026-05-26T10:00:00.000Z"
+  }
+  ],
+  invoices: [
+  {
+  id: "invoice-1",
+  clientId: "client-portal-1",
           status: "sent",
           totalAmount: 225,
           outstandingAmount: 125,
@@ -1500,6 +1653,8 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
 
       expect(petsHtml).toContain('href="/portal/pets/pet-1"');
       expect(petDetailHtml).toContain("Pet Details");
+      expect(petDetailHtml).toContain("Care Notes");
+      expect(petDetailHtml).toContain("Shared Files");
       expect(petDetailHtml).toContain("Roux");
       expect(petDetailHtml).toContain("Needs medication with dinner.");
       expect(petDetailHtml).toContain('/portal/pets/pet-1/files');
@@ -3020,16 +3175,21 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
           cookie: cookie ?? ""
         }
       });
-      const bookings = await fetch(`${baseUrl}/admin/bookings`, {
-        headers: {
-          cookie: cookie ?? ""
-        }
-      });
-      const invoices = await fetch(`${baseUrl}/admin/invoices`, {
-        headers: {
-          cookie: cookie ?? ""
-        }
-      });
+  const bookings = await fetch(`${baseUrl}/admin/bookings`, {
+  headers: {
+  cookie: cookie ?? ""
+  }
+  });
+  const expenses = await fetch(`${baseUrl}/admin/expenses`, {
+  headers: {
+  cookie: cookie ?? ""
+  }
+  });
+  const invoices = await fetch(`${baseUrl}/admin/invoices`, {
+  headers: {
+  cookie: cookie ?? ""
+  }
+  });
       const quotes = await fetch(`${baseUrl}/admin/quotes`, {
         headers: {
           cookie: cookie ?? ""
@@ -3046,12 +3206,13 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
         }
       });
 
-      expect(dashboard.status).toBe(200);
-      expect(clients.status).toBe(200);
-      expect(bookings.status).toBe(200);
-      expect(invoices.status).toBe(200);
-      expect(quotes.status).toBe(200);
-      expect(contracts.status).toBe(200);
+  expect(dashboard.status).toBe(200);
+  expect(clients.status).toBe(200);
+  expect(bookings.status).toBe(200);
+  expect(expenses.status).toBe(200);
+  expect(invoices.status).toBe(200);
+  expect(quotes.status).toBe(200);
+  expect(contracts.status).toBe(200);
       expect(forms.status).toBe(200);
 
       const dashboardHtml = await dashboard.text();
@@ -3300,7 +3461,11 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
       const portalAchievementDetailHtml = await portalAchievementDetail.text();
 
       expect(portalProfileHtml).toContain("123 Harbor Way");
-      expect(portalProfileHtml).toContain("Manage the primary contact information");
+      expect(portalProfileHtml).toContain("Account Snapshot");
+      expect(portalProfileHtml).toContain("Household Contacts");
+      expect(portalProfileHtml).toContain("Pet Profiles");
+      expect(portalProfileHtml).toContain("Canine Good Citizen");
+      expect(portalProfileHtml).toContain("Manage primary contact information, pets, forms, and billing details");
       expect(portalProfileHtml).toContain('<form class="form-grid" method="post" action="/portal/profile">');
       expect(portalProfileHtml).not.toContain('class="inline-link-list"');
       expect(portalAppointmentsHtml).toContain("<h2>Appointment Schedule</h2>");
@@ -3418,6 +3583,11 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
       const adminAchievementTypeDetailHtml = await adminAchievementTypeDetail.text();
 
       expect(adminClientProfileHtml).toContain("Reactive at the door.");
+      expect(adminClientProfileHtml).toContain("Client Details");
+      expect(adminClientProfileHtml).toContain("Operational Notes");
+      expect(adminClientProfileHtml).toContain("Household Contacts");
+      expect(adminClientProfileHtml).toContain("Pet Roster");
+      expect(adminClientProfileHtml).toContain("Canine Good Citizen");
       expect(adminClientProfileHtml).toContain("<h2>Edit Client</h2>");
       expect(adminClientProfileHtml).toContain('<form class="form-grid" method="post" action="/admin/clients/client-portal-1/profile">');
       expect(adminClientProfileHtml).toContain('/client/form_requests_create.php?form_type=client_form&client_id=client-portal-1');
@@ -3473,10 +3643,26 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
             issuedAt: "2026-05-27T18:00:00.000Z",
             expiresAt: null,
             legacySourceId: "booking-1"
-          }
-        }
-      ],
-      invoices: [
+ }
+ }
+ ],
+  expenses: [
+  {
+  id: "expense-1",
+  clientId: "client-portal-1",
+  clientName: "Portal Client",
+  category: "Supplies",
+  description: "Training treats",
+  amount: 48.75,
+  expenseDate: "2026-05-26",
+  receiptFile: "expense-1-receipt.pdf",
+  billable: true,
+  invoiced: false,
+  notes: "Purchased before private lesson.",
+  createdAt: "2026-05-26T10:00:00.000Z"
+  }
+  ],
+ invoices: [
         {
           id: "invoice-1",
           clientId: "client-portal-1",
@@ -3573,10 +3759,12 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
       const cookie = login.headers.get("set-cookie");
       expect(cookie).toContain("bdta_session=");
 
-      const bookings = await fetch(`${baseUrl}/admin/bookings`, { headers: { cookie: cookie ?? "" } });
-      const bookingDetail = await fetch(`${baseUrl}/admin/bookings/booking-1`, { headers: { cookie: cookie ?? "" } });
-      const invoices = await fetch(`${baseUrl}/admin/invoices`, { headers: { cookie: cookie ?? "" } });
-      const invoiceDetail = await fetch(`${baseUrl}/admin/invoices/invoice-1`, { headers: { cookie: cookie ?? "" } });
+  const bookings = await fetch(`${baseUrl}/admin/bookings`, { headers: { cookie: cookie ?? "" } });
+  const bookingDetail = await fetch(`${baseUrl}/admin/bookings/booking-1`, { headers: { cookie: cookie ?? "" } });
+  const expenses = await fetch(`${baseUrl}/admin/expenses`, { headers: { cookie: cookie ?? "" } });
+  const expenseDetail = await fetch(`${baseUrl}/admin/expenses/expense-1`, { headers: { cookie: cookie ?? "" } });
+  const invoices = await fetch(`${baseUrl}/admin/invoices`, { headers: { cookie: cookie ?? "" } });
+  const invoiceDetail = await fetch(`${baseUrl}/admin/invoices/invoice-1`, { headers: { cookie: cookie ?? "" } });
       const quotes = await fetch(`${baseUrl}/admin/quotes`, { headers: { cookie: cookie ?? "" } });
       const quoteDetail = await fetch(`${baseUrl}/admin/quotes/quote-1`, { headers: { cookie: cookie ?? "" } });
       const contracts = await fetch(`${baseUrl}/admin/contracts`, { headers: { cookie: cookie ?? "" } });
@@ -3607,10 +3795,12 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
       expect(forms.status).toBe(200);
       expect(formDetail.status).toBe(200);
 
-      const bookingsHtml = await bookings.text();
-      const bookingDetailHtml = await bookingDetail.text();
-      const invoicesHtml = await invoices.text();
-      const invoiceDetailHtml = await invoiceDetail.text();
+  const bookingsHtml = await bookings.text();
+  const bookingDetailHtml = await bookingDetail.text();
+  const expensesHtml = await expenses.text();
+  const expenseDetailHtml = await expenseDetail.text();
+  const invoicesHtml = await invoices.text();
+  const invoiceDetailHtml = await invoiceDetail.text();
       const quotesHtml = await quotes.text();
       const quoteDetailHtml = await quoteDetail.text();
       const contractsHtml = await contracts.text();
@@ -3624,12 +3814,17 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
       const formsHtml = await forms.text();
       const formDetailHtml = await formDetail.text();
 
-      expect(bookingsHtml).toContain('href="/admin/bookings/booking-1"');
-      expect(bookingDetailHtml).toContain("Booking Details");
-      expect(bookingDetailHtml).toContain("svc-private-lesson");
-      expect(bookingDetailHtml).toContain('/client/form_requests_create.php?form_type=follow_up_note&booking_id=booking-1');
-      expect(invoicesHtml).toContain('href="/admin/invoices/invoice-1"');
-      expect(invoiceDetailHtml).toContain("Invoice Details");
+  expect(bookingsHtml).toContain('href="/admin/bookings/booking-1"');
+  expect(bookingDetailHtml).toContain("Booking Details");
+  expect(bookingDetailHtml).toContain("svc-private-lesson");
+  expect(bookingDetailHtml).toContain('/client/form_requests_create.php?form_type=follow_up_note&booking_id=booking-1');
+  expect(expensesHtml).toContain('href="/admin/expenses/expense-1"');
+  expect(expensesHtml).toContain("Training treats");
+  expect(expenseDetailHtml).toContain("Expense Details");
+  expect(expenseDetailHtml).toContain("expense-1-receipt.pdf");
+  expect(expenseDetailHtml).toContain("$48.75");
+  expect(invoicesHtml).toContain('href="/admin/invoices/invoice-1"');
+  expect(invoiceDetailHtml).toContain("Invoice Details");
       expect(invoiceDetailHtml).toContain("$125.00");
       expect(quotesHtml).toContain('href="/admin/quotes/quote-1"');
       expect(quoteDetailHtml).toContain("Quote Details");
@@ -3639,6 +3834,9 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
       expect(contractDetailHtml).toContain("contract-1");
       expect(petsHtml).toContain('href="/admin/pets/pet-1"');
       expect(petDetailHtml).toContain("Pet Details");
+      expect(petDetailHtml).toContain("Care Notes");
+      expect(petDetailHtml).toContain("Stored Files");
+      expect(petDetailHtml).toContain("Owner Profile");
       expect(petDetailHtml).toContain("Buddy");
       expect(petDetailHtml).toContain('/client/form_requests_create.php?form_type=pet_form&pet_id=pet-1');
       expect(packagesHtml).toContain('href="/admin/packages/package-1"');

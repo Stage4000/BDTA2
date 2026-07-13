@@ -39,6 +39,8 @@ import {
   deleteResponseSchema,
   emailTemplateCollectionSchema,
   emailTemplateDetailSchema,
+  expenseCollectionSchema,
+  expenseDetailSchema,
   formSubmissionCollectionSchema,
   formSubmissionDetailSchema,
   integrationCallbackReceiptSchema,
@@ -243,6 +245,7 @@ import {
   getAdminClientDetail,
   getAdminContractDetail,
   getAdminCreditDetail,
+  getAdminExpenseDetail,
   getAdminFormDetail,
   getAdminInvoiceDetail,
   getAdminPackageDetail,
@@ -264,6 +267,7 @@ import {
   listAdminClients,
   listAdminContracts,
   listAdminCredits,
+  listAdminExpenses,
   listAdminForms,
   listAdminInvoices,
   listAdminPackages,
@@ -402,6 +406,8 @@ export type AdminBookingListHandlerResult = ApiSuccess<z.infer<typeof bookingCol
 export type AdminBookingDetailHandlerResult = ApiSuccess<z.infer<typeof bookingDetailSchema>> | ApiFailure;
 export type AdminBookingCalendarSyncHandlerResult = ApiSuccess<z.infer<typeof bookingCalendarSyncResponseSchema>> | ApiFailure;
 export type AdminBookingCalendarSyncDetailHandlerResult = ApiSuccess<z.infer<typeof bookingCalendarSyncResponseSchema>> | ApiFailure;
+export type AdminExpenseListHandlerResult = ApiSuccess<z.infer<typeof expenseCollectionSchema>> | ApiFailure;
+export type AdminExpenseDetailHandlerResult = ApiSuccess<z.infer<typeof expenseDetailSchema>> | ApiFailure;
 export type AdminInvoiceListHandlerResult = ApiSuccess<z.infer<typeof invoiceCollectionSchema>> | ApiFailure;
 export type AdminInvoiceDetailHandlerResult = ApiSuccess<z.infer<typeof invoiceDetailSchema>> | ApiFailure;
 export type AdminQuoteListHandlerResult = ApiSuccess<z.infer<typeof quoteCollectionSchema>> | ApiFailure;
@@ -484,6 +490,18 @@ function createValidationError(error: z.ZodError): ApiFailure {
     summary === "" ? "Request validation failed." : `Request validation failed: ${summary}`,
     { issues }
   );
+}
+
+function describeUnexpectedFailure(error: unknown): unknown {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      stack: error.stack?.split("\n").slice(0, 8).join("\n")
+    };
+  }
+
+  return error == null ? undefined : { value: error };
 }
 
 export function createApiHandlers(dependencies: ApiDependencies) {
@@ -802,7 +820,12 @@ export function createApiHandlers(dependencies: ApiDependencies) {
           return createValidationError(error);
         }
 
-        return createError(500, "internal_error", "Unexpected error while loading admin dashboard.");
+        return createError(
+          500,
+          "internal_error",
+          "Unexpected error while loading admin dashboard.",
+          describeUnexpectedFailure(error)
+        );
       }
     },
 
@@ -3485,7 +3508,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
       }
     },
 
-    async handleAdminBookings(session: unknown): Promise<AdminBookingListHandlerResult> {
+  async handleAdminBookings(session: unknown): Promise<AdminBookingListHandlerResult> {
       try {
         if (session == null) {
           return createError(401, "unauthorized", "Admin session required.");
@@ -3499,7 +3522,12 @@ export function createApiHandlers(dependencies: ApiDependencies) {
         if (error instanceof z.ZodError) {
           return createValidationError(error);
         }
-        return createError(500, "internal_error", "Unexpected error while loading admin bookings.");
+        return createError(
+          500,
+          "internal_error",
+          "Unexpected error while loading admin bookings.",
+          describeUnexpectedFailure(error)
+        );
       }
     },
 
@@ -3583,9 +3611,53 @@ export function createApiHandlers(dependencies: ApiDependencies) {
         }
         return createError(500, "internal_error", "Unexpected error while loading admin booking calendar sync.");
       }
-    },
+  },
 
-    async handleAdminInvoices(session: unknown): Promise<AdminInvoiceListHandlerResult> {
+  async handleAdminExpenses(session: unknown): Promise<AdminExpenseListHandlerResult> {
+    try {
+      if (session == null) {
+        return createError(401, "unauthorized", "Admin session required.");
+      }
+
+      return { status: 200, body: await listAdminExpenses(session as z.infer<typeof authSessionSchema>, dependencies.adminResources) };
+    } catch (error) {
+      if (error instanceof SessionActorError) {
+        return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+      }
+      if (error instanceof z.ZodError) {
+        return createValidationError(error);
+      }
+      return createError(
+        500,
+        "internal_error",
+        "Unexpected error while loading admin expenses.",
+        describeUnexpectedFailure(error)
+      );
+    }
+  },
+
+  async handleAdminExpenseDetail(session: unknown, expenseId: string): Promise<AdminExpenseDetailHandlerResult> {
+    try {
+      if (session == null) {
+        return createError(401, "unauthorized", "Admin session required.");
+      }
+
+      return {
+        status: 200,
+        body: await getAdminExpenseDetail(session as z.infer<typeof authSessionSchema>, expenseId, dependencies.adminResources)
+      };
+    } catch (error) {
+      if (error instanceof SessionActorError) {
+        return createError(error.code === "unauthorized" ? 401 : 404, error.code, error.message);
+      }
+      if (error instanceof z.ZodError) {
+        return createValidationError(error);
+      }
+      return createError(500, "internal_error", "Unexpected error while loading admin expense.");
+    }
+  },
+
+  async handleAdminInvoices(session: unknown): Promise<AdminInvoiceListHandlerResult> {
       try {
         if (session == null) {
           return createError(401, "unauthorized", "Admin session required.");
@@ -3599,7 +3671,12 @@ export function createApiHandlers(dependencies: ApiDependencies) {
         if (error instanceof z.ZodError) {
           return createValidationError(error);
         }
-        return createError(500, "internal_error", "Unexpected error while loading admin invoices.");
+        return createError(
+          500,
+          "internal_error",
+          "Unexpected error while loading admin invoices.",
+          describeUnexpectedFailure(error)
+        );
       }
     },
 
@@ -3635,7 +3712,12 @@ export function createApiHandlers(dependencies: ApiDependencies) {
         if (error instanceof z.ZodError) {
           return createValidationError(error);
         }
-        return createError(500, "internal_error", "Unexpected error while loading admin quotes.");
+        return createError(
+          500,
+          "internal_error",
+          "Unexpected error while loading admin quotes.",
+          describeUnexpectedFailure(error)
+        );
       }
     },
 

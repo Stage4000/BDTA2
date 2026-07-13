@@ -900,20 +900,48 @@ function createAdminResourceReadDependencies(
       status: "pending",
       icalAccess: null
     }],
-    findAdminBookingById: async (bookingId) => bookingId === "booking-2" ? {
-      id: "booking-2",
-      clientId: "client-2",
-      petIds: ["pet-9"],
-      serviceId: "svc-board-train",
-      startsAt: "2026-05-28T17:00:00.000Z",
-      endsAt: "2026-05-28T18:00:00.000Z",
-      status: "pending",
-      icalAccess: null
-    } : null,
-    listAdminInvoices: async () => [{
-      id: "invoice-1",
-      clientId: "client-1",
-      status: "sent",
+ findAdminBookingById: async (bookingId) => bookingId === "booking-2" ? {
+ id: "booking-2",
+ clientId: "client-2",
+ petIds: ["pet-9"],
+ serviceId: "svc-board-train",
+ startsAt: "2026-05-28T17:00:00.000Z",
+ endsAt: "2026-05-28T18:00:00.000Z",
+ status: "pending",
+ icalAccess: null
+ } : null,
+ listAdminExpenses: async () => [{
+ id: "expense-1",
+ clientId: "client-1",
+ clientName: "Client One",
+ category: "Supplies",
+ description: "Training treats",
+ amount: 48.75,
+ expenseDate: "2026-05-26",
+ receiptFile: "expense-1-receipt.pdf",
+ billable: true,
+ invoiced: false,
+ notes: "Purchased before private lesson.",
+ createdAt: "2026-05-26T10:00:00.000Z"
+ }],
+ findAdminExpenseById: async (expenseId) => expenseId === "expense-1" ? {
+ id: "expense-1",
+ clientId: "client-1",
+ clientName: "Client One",
+ category: "Supplies",
+ description: "Training treats",
+ amount: 48.75,
+ expenseDate: "2026-05-26",
+ receiptFile: "expense-1-receipt.pdf",
+ billable: true,
+ invoiced: false,
+ notes: "Purchased before private lesson.",
+ createdAt: "2026-05-26T10:00:00.000Z"
+ } : null,
+ listAdminInvoices: async () => [{
+ id: "invoice-1",
+ clientId: "client-1",
+ status: "sent",
       totalAmount: 225,
       outstandingAmount: 125,
       dueAt: "2026-06-05T00:00:00.000Z"
@@ -3105,6 +3133,92 @@ it("returns admin job logs and integration callback logs for a valid admin sessi
     expect(form.body.item.id).toBe("form-1");
     expect(form.body.item.clientReviewSubmission).toBe(true);
   });
+
+it("filters malformed admin transactional rows instead of failing admin collections", async () => {
+  const handlers = createApiHandlers(createApiDependencies({
+    adminResources: createAdminResourceReadDependencies({
+      listAdminBookings: async () => [
+        {
+          id: "booking-2",
+          clientId: "client-2",
+          petIds: ["pet-9"],
+          serviceId: "svc-board-train",
+          startsAt: "2026-05-28T17:00:00.000Z",
+          endsAt: "2026-05-28T18:00:00.000Z",
+          status: "pending",
+          icalAccess: null
+        },
+        {
+          id: "",
+          clientId: "",
+          petIds: [],
+          serviceId: "",
+          startsAt: "bad",
+          endsAt: "bad",
+          status: "scheduled"
+        } as never
+      ],
+      listAdminInvoices: async () => [
+        {
+          id: "invoice-1",
+          clientId: "client-1",
+          status: "sent",
+          totalAmount: 225,
+          outstandingAmount: 125,
+          dueAt: "2026-06-05T00:00:00.000Z"
+        },
+        {
+          id: "invoice-bad",
+          clientId: "client-1",
+          status: "sent",
+          totalAmount: Number.NaN,
+          outstandingAmount: Number.NaN,
+          dueAt: "bad"
+        } as never
+      ],
+      listAdminQuotes: async () => [
+        {
+          id: "quote-1",
+          clientId: "client-1",
+          status: "sent",
+          totalAmount: 450,
+          publicAccess: null
+        },
+        {
+          id: "",
+          clientId: "",
+          status: "sent",
+          totalAmount: Number.NaN,
+          publicAccess: null
+        } as never
+      ]
+    })
+  }));
+ const session = {
+ actorId: "admin-1",
+ actorType: "admin_user" as const,
+ role: "accountant" as const,
+ issuedAt: "2026-05-27T18:00:00.000Z",
+ expiresAt: "2026-05-27T18:00:00.000Z"
+ };
+
+ const bookings = await handlers.handleAdminBookings(session);
+ const expenses = await handlers.handleAdminExpenses(session);
+ const invoices = await handlers.handleAdminInvoices(session);
+ const quotes = await handlers.handleAdminQuotes(session);
+
+ expect(bookings.status).toBe(200);
+ expect(expenses.status).toBe(200);
+ expect(invoices.status).toBe(200);
+ expect(quotes.status).toBe(200);
+ if ("error" in bookings.body || "error" in expenses.body || "error" in invoices.body || "error" in quotes.body) {
+ throw new Error("Expected successful admin transactional collection responses.");
+ }
+ expect(bookings.body.items).toHaveLength(1);
+ expect(expenses.body.items).toHaveLength(1);
+ expect(invoices.body.items).toHaveLength(1);
+ expect(quotes.body.items).toHaveLength(1);
+});
 
   it("returns, creates, and updates admin client profiles for a valid admin session", async () => {
     const handlers = createApiHandlers(createApiDependencies());

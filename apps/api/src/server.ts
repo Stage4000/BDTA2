@@ -1280,13 +1280,26 @@ export function createHttpApiServer(options: HttpApiServerOptions): Server {
       }
 
       const adminBookingMatch = method === "GET" ? /^\/api\/admin\/bookings\/([^/]+)$/.exec(url.pathname) : null;
-      if (adminBookingMatch != null) {
-        const result = await runtime.handlers.handleAdminBookingDetail(await loadPersistedSession(options.sessionStore, request), decodeURIComponent(adminBookingMatch[1] ?? ""));
-        writeJson(response, result.status, result.body);
-        return;
-      }
+ if (adminBookingMatch != null) {
+ const result = await runtime.handlers.handleAdminBookingDetail(await loadPersistedSession(options.sessionStore, request), decodeURIComponent(adminBookingMatch[1] ?? ""));
+ writeJson(response, result.status, result.body);
+ return;
+ }
 
-      const adminBookingCalendarSyncDetailMatch = method === "GET" ? /^\/api\/admin\/bookings\/([^/]+)\/calendar-sync$/.exec(url.pathname) : null;
+ if (method === "GET" && url.pathname === "/api/admin/expenses") {
+ const result = await runtime.handlers.handleAdminExpenses(await loadPersistedSession(options.sessionStore, request));
+ writeJson(response, result.status, result.body);
+ return;
+ }
+
+ const adminExpenseMatch = method === "GET" ? /^\/api\/admin\/expenses\/([^/]+)$/.exec(url.pathname) : null;
+ if (adminExpenseMatch != null) {
+ const result = await runtime.handlers.handleAdminExpenseDetail(await loadPersistedSession(options.sessionStore, request), decodeURIComponent(adminExpenseMatch[1] ?? ""));
+ writeJson(response, result.status, result.body);
+ return;
+ }
+
+ const adminBookingCalendarSyncDetailMatch = method === "GET" ? /^\/api\/admin\/bookings\/([^/]+)\/calendar-sync$/.exec(url.pathname) : null;
       if (adminBookingCalendarSyncDetailMatch != null) {
         const result = await runtime.handlers.handleAdminBookingCalendarSyncDetail(
           await loadPersistedSession(options.sessionStore, request),

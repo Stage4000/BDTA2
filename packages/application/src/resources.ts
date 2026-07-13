@@ -10,6 +10,8 @@ import {
   creditCollectionSchema,
   creditDetailSchema,
   deleteResponseSchema,
+  expenseCollectionSchema,
+  expenseDetailSchema,
   formSubmissionCollectionSchema,
   formSubmissionDetailSchema,
   invoiceCollectionSchema,
@@ -25,12 +27,13 @@ import {
   quoteCollectionSchema,
   quoteDetailSchema
 } from "@bdta/contracts";
-import type { Booking, Client, Contract, Credit, FormSubmission, Invoice, Notification, Package, Pet, PetFile, Quote } from "@bdta/domain";
+import type { Booking, Client, Contract, Credit, Expense, FormSubmission, Invoice, Notification, Package, Pet, PetFile, Quote } from "@bdta/domain";
 import {
   bookingSchema,
   clientSchema,
   contractSchema,
   creditSchema,
+  expenseSchema,
   formSubmissionSchema,
   idSchema,
   invoiceSchema,
@@ -100,6 +103,8 @@ export type AdminResourceReadDependencies = {
   deleteAdminPetFile(petId: string, fileId: string): Promise<boolean>;
   listAdminBookings(): Promise<Booking[]>;
   findAdminBookingById(bookingId: string): Promise<Booking | null>;
+  listAdminExpenses(): Promise<Expense[]>;
+  findAdminExpenseById(expenseId: string): Promise<Expense | null>;
   listAdminInvoices(): Promise<Invoice[]>;
   findAdminInvoiceById(invoiceId: string): Promise<Invoice | null>;
   listAdminQuotes(): Promise<Quote[]>;
@@ -405,6 +410,19 @@ export async function getAdminBookingDetail(session: SessionSnapshot, bookingId:
   requireAdminSession(session);
   const item = requireFound(await dependencies.findAdminBookingById(idSchema.parse(bookingId)), "Admin booking not found.");
   return bookingDetailSchema.parse({ item: bookingSchema.parse(item) });
+}
+
+export async function listAdminExpenses(session: SessionSnapshot, dependencies: AdminResourceReadDependencies) {
+  requireAdminSession(session);
+  return expenseCollectionSchema.parse({
+    items: collectValidItems(await dependencies.listAdminExpenses(), expenseSchema)
+  });
+}
+
+export async function getAdminExpenseDetail(session: SessionSnapshot, expenseId: string, dependencies: AdminResourceReadDependencies) {
+  requireAdminSession(session);
+  const item = requireFound(await dependencies.findAdminExpenseById(idSchema.parse(expenseId)), "Admin expense not found.");
+  return expenseDetailSchema.parse({ item: expenseSchema.parse(item) });
 }
 
 export async function listAdminInvoices(session: SessionSnapshot, dependencies: AdminResourceReadDependencies) {

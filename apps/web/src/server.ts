@@ -36,7 +36,22 @@ import {
   type LaunchReadinessAssessment,
   updateEnvFileValues
 } from "@bdta/platform";
-import type { AppointmentType, Contract, FormSubmission, Package, Quote, Setting, SitePage } from "@bdta/domain";
+import type {
+  AppointmentType,
+  Booking,
+  ClientAchievement,
+  ClientContact,
+  ClientProfile,
+  Contract,
+  FormSubmission,
+  Invoice,
+  Package,
+  Pet,
+  PetFile,
+  Quote,
+  Setting,
+  SitePage
+} from "@bdta/domain";
 import { createInMemoryApiDependencies, createInMemorySessionStore, type InMemoryPlatformState } from "@bdta/infrastructure";
 
 type SessionStore = {
@@ -349,6 +364,8 @@ const PUBLIC_SOCIAL_LINK_SETTINGS = [
 
 const PUBLIC_ASSET_ROOT = resolve(process.cwd(), "public", "assets");
 const PUBLIC_ASSET_PREFIX = "/assets/";
+const BUILT_IN_PUBLIC_PAGE_SLUGS = new Set(["services", "directory"]);
+const NEWSLETTER_EMBED_MARKUP_CACHE = new Map<string, Promise<string>>();
 
 const SETTINGS_CATEGORY_LABELS = new Map<string, string>([
   ["site", "Site"],
@@ -1075,10 +1092,18 @@ function parsePublicRequestUrl(requestPath: string | undefined): URL | null {
   }
 }
 
-function resolveCurrentPublicNavContext(requestPath: string | undefined): "home" | "blog" | "directory" | "" {
+function resolveCurrentPublicNavContext(requestPath: string | undefined): "home" | "blog" | "directory" | "services" | "" {
   const requestUrl = parsePublicRequestUrl(requestPath);
   if (requestUrl == null) {
     return "";
+  }
+
+  if (requestUrl.pathname === "/services") {
+    return "services";
+  }
+
+  if (requestUrl.pathname === "/page.php" && requestUrl.searchParams.get("slug")?.trim() === "services") {
+    return "services";
   }
 
   if (requestUrl.pathname === "/directory") {
@@ -1158,7 +1183,7 @@ function syncPublicNavigationLinks(html: string, requestPath: string | undefined
 
   const currentContext = resolveCurrentPublicNavContext(requestPath);
   return updatedHtml.replace(
-    /<a class="([^"]*\bnav-link\b[^"]*)" href="([^"]+)">(Home|Blog|Directory)<\/a>/gi,
+    /<a class="([^"]*\bnav-link\b[^"]*)" href="([^"]+)">(Home|Services|Blog|Directory|Book)<\/a>/gi,
     (match, classValue: string, href: string, label: string) => {
       const classes = classValue
         .split(/\s+/)
@@ -1166,6 +1191,7 @@ function syncPublicNavigationLinks(html: string, requestPath: string | undefined
 
       const isActive = (
         (label === "Home" && currentContext === "home") ||
+        (label === "Services" && currentContext === "services") ||
         (label === "Blog" && currentContext === "blog") ||
         (label === "Directory" && currentContext === "directory")
       );
@@ -1174,7 +1200,7 @@ function syncPublicNavigationLinks(html: string, requestPath: string | undefined
         classes.push("active");
       }
 
-      return `<a class="${classes.join(" ")}" href="${href}">${label}</a>`;
+      return `<a class="${classes.join(" ")}" href="${href}"${isActive ? ' aria-current="page"' : ""}>${label}</a>`;
     }
   );
 }
@@ -1211,6 +1237,10 @@ function getImportedPageRuntimeCss(): string {
     ".bdta-imported-page .bdta-import-layout,",
     ".bdta-imported-page .bdta-import-block {",
     "    box-sizing: border-box;",
+    "}",
+    ":is(.bdta-imported-page, body > #wb_root) > :is(header, nav, .navbar, .collapse.navbar-collapse, .navbar-nav),",
+    ":is(.bdta-imported-page, body > #wb_root) :is([id^=\"wb_header_\"], .navbar-toggler, .collapse.navbar-collapse, .navbar-nav.ms-auto) {",
+    "    display: none !important;",
     "}",
     "@media (max-width: 767.98px) {",
     "    :is(.bdta-imported-page, body > #wb_root) .bdta-import-stack-phone,",
@@ -1337,16 +1367,138 @@ function wrapImportedPageHtml(html: string): string {
   return `<div class="bdta-imported-page">${html}</div>`;
 }
 
-function buildNewsletterEmbedWrappedMarkup(embedMarkup: string): string {
-  if (embedMarkup.trim() === "") {
+function stripLegacyPublicPageNavigation(html: string): string {
+  return html
+    .replace(/<header\b[\s\S]*?<\/header>/gi, (segment) =>
+      /(?:navbar-nav|navbar-toggler|navbar-collapse|wb_header_|nav-link)/i.test(segment) ? "" : segment
+    )
+    .replace(/<nav\b[\s\S]*?<\/nav>/gi, (segment) =>
+      /(?:navbar-nav|navbar-toggler|navbar-collapse|wb_header_|nav-link)/i.test(segment) ? "" : segment
+    )
+    .replace(/<ul\b[^>]*class=(["'])[^"']*\bnavbar-nav\b[^"']*\1[\s\S]*?<\/ul>/gi, "");
+}
+
+function normalizePublicContentAssetUrl(urlValue: string): string | null {
+  const trimmed = urlValue.trim();
+  if (
+    trimmed === "" ||
+    trimmed.startsWith("/") ||
+    trimmed.startsWith("#") ||
+    /^[a-z][a-z0-9+.-]*:/i.test(trimmed) ||
+    trimmed.startsWith("//")
+  ) {
+    return trimmed === "" ? null : trimmed;
+  }
+
+  const normalized = trimmed
+    .replaceAll("\\", "/")
+    .replace(/^(?:\.\.?\/)+/g, "");
+
+  if (/^(?:assets|backend\/uploads|images|uploads)\/[\w./%-]+$/i.test(normalized)) {
+    return `/${normalized}`;
+  }
+
+  return null;
+}
+
+function normalizePublicContentAssetMarkup(html: string): string {
+  return html.replace(/\b(src|href|poster)=(["'])([^"']+)\2/gi, (match, attributeName: string, quote: string, value: string) => {
+    const normalizedUrl = normalizePublicContentAssetUrl(value);
+    if (normalizedUrl == null || normalizedUrl === value.trim()) {
+      return match;
+    }
+    return `${attributeName}=${quote}${escapeAttribute(normalizedUrl)}${quote}`;
+  });
+}
+
+function normalizeSavedPublicPageHtml(html: string): string {
+  return normalizePublicContentAssetMarkup(stripLegacyPublicPageNavigation(html));
+}
+
+function extractMailjetEmbedFrameUrl(embedMarkup: string): string | null {
+  const match = /<iframe[^>]+src=(["'])(https?:\/\/[^"']+\.mjt\.lu\/wgt\/[^"']+\/form\?[^"']+)\1/i.exec(embedMarkup);
+  return match?.[2]?.trim() === "" ? null : match?.[2] ?? null;
+}
+
+function sanitizeInlineMailjetNewsletterMarkup(markup: string): string {
+  return markup
+    .replace(/<section\b[\s\S]*?mailjet\.com[\s\S]*?<\/section>/gi, "")
+    .replace(/<a\b[^>]*href=(["'])https?:\/\/(?:www\.)?mailjet\.com[^"']*\1[\s\S]*?<\/a>/gi, "")
+    .replace(/<img\b[^>]*(?:src|alt|title)=(["'])[^"']*mailjet[^"']*\1[^>]*>/gi, "")
+    .trim();
+}
+
+async function loadInlineMailjetNewsletterMarkup(frameUrl: string): Promise<string> {
+  const cachedMarkup = NEWSLETTER_EMBED_MARKUP_CACHE.get(frameUrl);
+  if (cachedMarkup != null) {
+    return cachedMarkup;
+  }
+
+  const renderPromise = (async () => {
+    const response = await fetch(frameUrl);
+    if (!response.ok) {
+      throw new Error(`Mailjet newsletter form request failed with status ${response.status}.`);
+    }
+
+    const documentHtml = await response.text();
+    const bodyMatch = /<body\b([^>]*)>([\s\S]*?)<\/body>/i.exec(documentHtml);
+    if (bodyMatch == null) {
+      return "";
+    }
+
+    const styles = Array.from(documentHtml.matchAll(/<style\b[^>]*>[\s\S]*?<\/style>/gi))
+      .map((match) => match[0])
+      .join("");
+    const bodyAttributes = bodyMatch[1] ?? "";
+    const bodyClasses = /class=(["'])([^"']*)\1/i.exec(bodyAttributes)?.[2]?.trim() ?? "";
+    const bodyStyle = /style=(["'])([^"']*)\1/i.exec(bodyAttributes)?.[2]?.trim() ?? "";
+    const sanitizedBodyMarkup = sanitizeInlineMailjetNewsletterMarkup(bodyMatch[2] ?? "");
+    if (sanitizedBodyMarkup === "") {
+      return "";
+    }
+
+    const wrapperClasses = bodyClasses === "" ? "bdta-newsletter-mailjet" : `bdta-newsletter-mailjet ${bodyClasses}`;
+    return [
+      '<div class="bdta-newsletter-embed-body bdta-newsletter-embed-body--mailjet">',
+      styles,
+      `<div class="${escapeAttribute(wrapperClasses)}"${bodyStyle === "" ? "" : ` style="${escapeAttribute(bodyStyle)}"`}>`,
+      sanitizedBodyMarkup,
+      "</div>",
+      "</div>"
+    ].join("");
+  })().catch(() => "");
+
+  NEWSLETTER_EMBED_MARKUP_CACHE.set(frameUrl, renderPromise);
+  return renderPromise;
+}
+
+async function resolveNewsletterEmbedMarkup(embedMarkup: string): Promise<string> {
+  const trimmedEmbedMarkup = embedMarkup.trim();
+  if (trimmedEmbedMarkup === "") {
+    return "";
+  }
+
+  const mailjetFrameUrl = extractMailjetEmbedFrameUrl(trimmedEmbedMarkup);
+  if (mailjetFrameUrl == null) {
+    return trimmedEmbedMarkup;
+  }
+
+  const inlineMarkup = await loadInlineMailjetNewsletterMarkup(mailjetFrameUrl);
+  return inlineMarkup === "" ? trimmedEmbedMarkup : inlineMarkup;
+}
+
+async function buildNewsletterEmbedWrappedMarkup(embedMarkup: string): Promise<string> {
+  const resolvedEmbedMarkup = await resolveNewsletterEmbedMarkup(embedMarkup);
+  if (resolvedEmbedMarkup.trim() === "") {
     return "";
   }
 
   return [
     '<section class="bdta-newsletter-embed-section" aria-label="Newsletter signup">',
     '<div class="public-shell">',
+    '<div class="bdta-newsletter-embed-copy"><p class="eyebrow">Newsletter</p><h2>Get training updates from Brook&apos;s Dog Training Academy</h2><p class="section-copy">Join the list for training notes, academy news, and upcoming opportunities.</p></div>',
     '<div class="bdta-newsletter-embed-card">',
-    embedMarkup,
+    resolvedEmbedMarkup,
     "</div>",
     "</div>",
     "</section>"
@@ -1600,6 +1752,246 @@ function renderStatusPill(
   tone: "default" | "success" | "warning" | "danger" | "info" = "default"
 ): string {
   return `<span class="status-pill is-${tone}">${escapeHtml(label)}</span>`;
+}
+
+function renderBookingStatusPill(status: Booking["status"]): string {
+  switch (status) {
+    case "confirmed":
+      return renderStatusPill("Confirmed", "success");
+    case "pending":
+      return renderStatusPill("Pending", "warning");
+    case "completed":
+      return renderStatusPill("Completed", "info");
+    case "cancelled":
+      return renderStatusPill("Cancelled", "default");
+    default:
+      return renderStatusPill(toTitleCase(status), "default");
+  }
+}
+
+function renderInvoiceStatusPill(status: Invoice["status"]): string {
+  switch (status) {
+    case "paid":
+      return renderStatusPill("Paid", "success");
+    case "overdue":
+      return renderStatusPill("Overdue", "danger");
+    case "sent":
+      return renderStatusPill("Sent", "warning");
+    case "partially_paid":
+      return renderStatusPill("Partially Paid", "info");
+    case "void":
+      return renderStatusPill("Void", "default");
+    case "draft":
+    default:
+      return renderStatusPill(toTitleCase(status.replaceAll("_", " ")), "default");
+  }
+}
+
+function renderQuoteStatusPill(status: Quote["status"]): string {
+  switch (status) {
+    case "accepted":
+      return renderStatusPill("Accepted", "success");
+    case "declined":
+      return renderStatusPill("Declined", "danger");
+    case "expired":
+      return renderStatusPill("Expired", "warning");
+    case "sent":
+      return renderStatusPill("Sent", "info");
+    case "draft":
+    default:
+      return renderStatusPill(toTitleCase(status), "default");
+  }
+}
+
+function renderContractStatusPill(status: Contract["status"]): string {
+  switch (status) {
+    case "signed":
+      return renderStatusPill("Signed", "success");
+    case "sent":
+      return renderStatusPill("Sent", "warning");
+    case "void":
+      return renderStatusPill("Void", "danger");
+    case "draft":
+    default:
+      return renderStatusPill(toTitleCase(status), "default");
+  }
+}
+
+function renderAchievementStatusPill(status: ClientAchievement["status"]): string {
+  switch (status) {
+    case "awarded":
+      return renderStatusPill("Awarded", "success");
+    case "revoked":
+      return renderStatusPill("Revoked", "danger");
+    default:
+      return renderStatusPill(toTitleCase(status), "default");
+  }
+}
+
+function toSortableTime(value: string | null | undefined): number {
+  const normalized = value?.trim() ?? "";
+  if (normalized === "") {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const parsed = Date.parse(normalized);
+  return Number.isNaN(parsed) ? Number.POSITIVE_INFINITY : parsed;
+}
+
+function sortByTimeAsc<T>(items: T[], getValue: (item: T) => string | null | undefined): T[] {
+  return [...items].sort((left, right) => toSortableTime(getValue(left)) - toSortableTime(getValue(right)));
+}
+
+function sortByTimeDesc<T>(items: T[], getValue: (item: T) => string | null | undefined): T[] {
+  return [...items].sort((left, right) => toSortableTime(getValue(right)) - toSortableTime(getValue(left)));
+}
+
+function truncateText(value: string | null | undefined, maxLength = 88): string {
+  const normalized = value?.trim() ?? "";
+  if (normalized === "") {
+    return "Not provided";
+  }
+
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
+function renderLongTextBlock(value: string | null | undefined, emptyMessage: string): string {
+  const normalized = value?.trim() ?? "";
+  if (normalized === "") {
+    return `<p class="section-copy">${escapeHtml(emptyMessage)}</p>`;
+  }
+
+  return `<div class="settings-current-value-panel"><div class="meta">${escapeHtml(normalized).replace(/\n/g, "<br>")}</div></div>`;
+}
+
+function formatCountLabel(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function renderContactsPreviewTable(
+  contacts: ClientContact[],
+  detailPath: (contact: ClientContact) => string
+): string {
+  return renderDataTable({
+    headers: ["Contact", "Email", "Phone", "Role", "Actions"],
+    rows: contacts.map((contact) => [
+      `<a href="${detailPath(contact)}">${escapeHtml(contact.name)}</a>`,
+      escapeHtml(contact.email),
+      escapeHtml(contact.phone),
+      renderStatusPill(contact.isPrimary ? "Primary" : "Secondary", contact.isPrimary ? "success" : "default"),
+      `<div class="table-actions"><a href="${detailPath(contact)}">Open</a></div>`
+    ]),
+    emptyMessage: "No contacts have been added yet."
+  });
+}
+
+function renderPetsPreviewTable(
+  pets: Pet[],
+  options: {
+    detailPath: (pet: Pet) => string;
+    filePath: (pet: Pet) => string;
+  }
+): string {
+  return renderDataTable({
+    headers: ["Pet", "Species", "Status", "Care Notes", "Actions"],
+    rows: pets.map((pet) => [
+      `<a href="${options.detailPath(pet)}">${escapeHtml(pet.name)}</a>`,
+      escapeHtml(pet.species),
+      renderStatusPill(pet.archived ? "Archived" : "Active", pet.archived ? "warning" : "success"),
+      escapeHtml(truncateText(pet.petSittingNotes, 72)),
+      `<div class="table-actions"><a href="${options.filePath(pet)}">Files</a><a href="${options.detailPath(pet)}">Profile</a></div>`
+    ]),
+    emptyMessage: "No pets are linked yet."
+  });
+}
+
+function renderBookingsPreviewTable(
+  bookings: Booking[],
+  detailPath: (booking: Booking) => string
+): string {
+  return renderDataTable({
+    headers: ["Appointment", "Status", "Starts", "Pets", "Actions"],
+    rows: bookings.map((booking) => [
+      `<a href="${detailPath(booking)}">${escapeHtml(booking.id)}</a>`,
+      renderBookingStatusPill(booking.status),
+      escapeHtml(formatAdminDateTime(booking.startsAt)),
+      escapeHtml(formatCountLabel(booking.petIds.length, "pet")),
+      `<div class="table-actions"><a href="${detailPath(booking)}">Open</a></div>`
+    ]),
+    emptyMessage: "No appointments match this profile yet."
+  });
+}
+
+function renderFormsPreviewTable(
+  forms: FormSubmission[],
+  detailPath: (form: FormSubmission) => string
+): string {
+  return renderDataTable({
+    headers: ["Form", "Status", "Submitted", "Pet", "Actions"],
+    rows: forms.map((form) => [
+      `<a href="${detailPath(form)}">${escapeHtml(getAdminFormSubmissionTitle(form))}</a>`,
+      renderAdminFormSubmissionStatusPill(form),
+      escapeHtml(formatAdminDateTime(form.submittedAt)),
+      escapeHtml(form.petName ?? "Not linked"),
+      `<div class="table-actions"><a href="${detailPath(form)}">Open</a></div>`
+    ]),
+    emptyMessage: "No linked forms yet."
+  });
+}
+
+function renderAchievementsPreviewTable(
+  achievements: ClientAchievement[],
+  detailPath: (achievement: ClientAchievement) => string
+): string {
+  return renderDataTable({
+    headers: ["Achievement", "Status", "Awarded", "Dog", "Actions"],
+    rows: achievements.map((achievement) => [
+      `<a href="${detailPath(achievement)}">${escapeHtml(achievement.title)}</a>`,
+      renderAchievementStatusPill(achievement.status),
+      escapeHtml(formatAdminDate(achievement.awardedOn)),
+      escapeHtml(achievement.dogName ?? "Client-wide"),
+      `<div class="table-actions"><a href="${detailPath(achievement)}">Open</a></div>`
+    ]),
+    emptyMessage: "No achievements recorded yet."
+  });
+}
+
+function renderPetFilesPreviewTable(
+  files: PetFile[],
+  contentPath: (file: PetFile) => string
+): string {
+  return renderDataTable({
+    headers: ["File", "Type", "Uploaded", "Description", "Actions"],
+    rows: files.map((file) => [
+      `<a href="${contentPath(file)}">${escapeHtml(file.originalName)}</a>`,
+      renderStatusPill(toTitleCase(file.fileType), file.fileType === "photo" ? "info" : "default"),
+      escapeHtml(formatAdminDateTime(file.uploadedAt)),
+      escapeHtml(truncateText(file.description, 64)),
+      `<div class="table-actions"><a href="${contentPath(file)}">Open</a></div>`
+    ]),
+    emptyMessage: "No files have been uploaded yet."
+  });
+}
+
+function petMatchesAchievement(pet: Pet, achievement: ClientAchievement): boolean {
+  return (achievement.dogName?.trim().toLowerCase() ?? "") === pet.name.trim().toLowerCase();
+}
+
+function renderExpenseStatusPill(expense: {
+  billable: boolean;
+  invoiced: boolean;
+}): string {
+  if (expense.invoiced) {
+    return renderStatusPill("Invoiced");
+  }
+  if (expense.billable) {
+    return renderStatusPill("Billable", "success");
+  }
+  return renderStatusPill("Non-Billable", "info");
 }
 
 function toTitleCase(value: string): string {
@@ -3333,6 +3725,23 @@ function renderLegacyPublicFormResponses(submission: FormSubmission): string {
   return `<div class="detail-grid">${rows.join("")}</div>`;
 }
 
+function formatAdminDate(value: string | null | undefined): string {
+  const normalized = value?.trim() ?? "";
+  if (normalized === "") {
+    return "Not available";
+  }
+
+  const parsed = new Date(`${normalized}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime())) {
+    return normalized;
+  }
+
+  return parsed.toLocaleDateString("en-US", {
+    dateStyle: "medium",
+    timeZone: "UTC"
+  });
+}
+
 function formatAdminDateTime(value: string | null | undefined): string {
   const normalized = value?.trim() ?? "";
   if (normalized === "") {
@@ -4262,13 +4671,14 @@ function shouldRenderSavedPublicPageContent(htmlContent: string): boolean {
 }
 
 function renderSavedPublicPageContent(htmlContent: string): string {
-  if (hasImportedPageRoot(htmlContent)) {
-    return wrapImportedPageHtml(htmlContent);
+  const normalizedHtmlContent = normalizeSavedPublicPageHtml(htmlContent);
+  if (hasImportedPageRoot(normalizedHtmlContent)) {
+    return wrapImportedPageHtml(normalizedHtmlContent);
   }
 
   return [
     '<div class="marketing-stack">',
-    `<section class="public-rich-copy">${htmlContent}</section>`,
+    `<section class="public-rich-copy public-rich-copy--page">${normalizedHtmlContent}</section>`,
     "</div>"
   ].join("");
 }
@@ -4320,11 +4730,12 @@ function renderPublicPageContent(page: {
   htmlContent: string;
   metaDescription: string;
 }): string {
-  const heroTitle = extractFirstTagText(page.htmlContent, "h1") ?? page.title;
-  const heroBody = extractFirstTagText(page.htmlContent, "p") ?? page.metaDescription;
+  const normalizedHtmlContent = normalizeSavedPublicPageHtml(page.htmlContent);
+  const heroTitle = extractFirstTagText(normalizedHtmlContent, "h1") ?? page.title;
+  const heroBody = extractFirstTagText(normalizedHtmlContent, "p") ?? page.metaDescription;
 
-  if (shouldRenderSavedPublicPageContent(page.htmlContent)) {
-    return renderSavedPublicPageContent(page.htmlContent);
+  if (shouldRenderSavedPublicPageContent(normalizedHtmlContent)) {
+    return renderSavedPublicPageContent(normalizedHtmlContent);
   }
 
   if (page.slug === "home") {
@@ -4486,7 +4897,7 @@ function renderPublicPageContent(page: {
     `<h1>${escapeHtml(heroTitle)}</h1>`,
     `<p class="section-copy">${escapeHtml(heroBody)}</p>`,
     "</section>",
-    `<section class="public-rich-copy">${page.htmlContent}</section>`,
+    `<section class="public-rich-copy public-rich-copy--page">${normalizedHtmlContent}</section>`,
     "</div>"
   ].join("");
 }
@@ -4565,7 +4976,11 @@ function renderPublicBlogPostPage(post: {
   content: string;
   coverPhoto?: string | null;
 }): string {
-  const coverPhoto = normalizeNullableBlogCoverPhotoPath(post.coverPhoto ?? null);
+  const normalizedCoverPhoto = post.coverPhoto == null
+    ? null
+    : normalizePublicContentAssetUrl(post.coverPhoto) ?? post.coverPhoto;
+  const coverPhoto = normalizeNullableBlogCoverPhotoPath(normalizedCoverPhoto);
+  const normalizedContent = normalizePublicContentAssetMarkup(post.content);
   return [
     '<div class="marketing-stack">',
     '<section class="marketing-hero marketing-hero--compact">',
@@ -4576,7 +4991,7 @@ function renderPublicBlogPostPage(post: {
     coverPhoto == null ? "" : `<div class="featured-story__media"><img src="${escapeHtml(coverPhoto)}" alt="${escapeHtml(post.title)}"></div>`,
     "</section>",
     '<section class="article-shell">',
-    `<article class="article-content public-rich-copy">${post.content}</article>`,
+    `<article class="article-content public-rich-copy">${normalizedContent}</article>`,
     '<aside class="article-sidebar">',
     '<section class="surface-block">',
     "<p class=\"eyebrow\">Need Help Applying This?</p>",
@@ -4588,6 +5003,49 @@ function renderPublicBlogPostPage(post: {
     "</section>",
     "</div>"
   ].join("");
+}
+
+function buildBuiltInPublicPageFallback(slug: string): Pick<SitePage, "slug" | "title" | "htmlContent" | "cssContent" | "metaDescription"> | null {
+  if (!BUILT_IN_PUBLIC_PAGE_SLUGS.has(slug)) {
+    return null;
+  }
+
+  if (slug === "services") {
+    return {
+      slug,
+      title: "Services",
+      htmlContent: "<section><h1>Training programs built around your dog and your home.</h1><p>Private lessons, board-and-train support, and puppy foundations tailored to real-life handling.</p></section>",
+      cssContent: "",
+      metaDescription: "Private lessons, board-and-train support, and puppy foundations tailored to real-life handling."
+    };
+  }
+
+  return {
+    slug,
+    title: "Directory",
+    htmlContent: "<section><h1>Training resources and trusted next steps.</h1><p>Prep guidance, referrals, and follow-through support for dogs and their people.</p></section>",
+    cssContent: "",
+    metaDescription: "Prep guidance, referrals, and follow-through support for dogs and their people."
+  };
+}
+
+async function getPublicSitePageForRender(
+  slug: string,
+  content: ContentManagementDependencies
+): Promise<Pick<SitePage, "slug" | "title" | "htmlContent" | "cssContent" | "metaDescription">> {
+  try {
+    const page = await getPublicSitePage(slug, content);
+    return page.item;
+  } catch (error) {
+    if (error instanceof ContentError && error.code === "not_found") {
+      const fallbackPage = buildBuiltInPublicPageFallback(slug);
+      if (fallbackPage != null) {
+        return fallbackPage;
+      }
+    }
+
+    throw error;
+  }
 }
 
 function toSafeInlineJson(value: unknown): string {
@@ -5820,7 +6278,7 @@ function renderLayout(input: {
   const publicRequestUrl = parsePublicRequestUrl(input.publicRenderContext?.requestPath);
   const publicPathname = publicRequestUrl?.pathname ?? "";
   const publicNavContext = resolveCurrentPublicNavContext(input.publicRenderContext?.requestPath);
-  const isServicesPath = publicPathname === "/services";
+  const isServicesPath = publicNavContext === "services";
   const isBookPath = publicPathname === "/book" || publicPathname === "/book/confirmation";
   const isPortalPath = publicPathname.startsWith("/portal");
   const homeNavClass = publicNavContext === "home" ? "nav-link active" : "nav-link";
@@ -5835,12 +6293,12 @@ function renderLayout(input: {
     '<nav class="navbar public-navbar">',
     '<a class="navbar-brand" href="/"><img class="navbar-brand__mark" src="/assets/images/bdta-logo.png" alt="Brook&apos;s Dog Training Academy logo"><span>Brook&apos;s Dog Training Academy</span></a>',
     '<div class="navbar-links">',
-    `<a class="${homeNavClass}" href="/">Home</a>`,
-    `<a class="${servicesNavClass}" href="/services">Services</a>`,
-    `<a class="${directoryNavClass}" href="/directory">Directory</a>`,
-    `<a class="${blogNavClass}" href="/blog">Blog</a>`,
-    `<a class="${bookNavClass}" href="/book">Book</a>`,
-    `<a class="${portalNavClass}" href="/portal/login">Portal</a>`,
+    `<a class="${homeNavClass}" href="/"${publicNavContext === "home" ? ' aria-current="page"' : ""}>Home</a>`,
+    `<a class="${servicesNavClass}" href="/services"${publicNavContext === "services" ? ' aria-current="page"' : ""}>Services</a>`,
+    `<a class="${directoryNavClass}" href="/directory"${publicNavContext === "directory" ? ' aria-current="page"' : ""}>Directory</a>`,
+    `<a class="${blogNavClass}" href="/blog"${publicNavContext === "blog" ? ' aria-current="page"' : ""}>Blog</a>`,
+    `<a class="${bookNavClass}" href="/book"${isBookPath ? ' aria-current="page"' : ""}>Book</a>`,
+    `<a class="${portalNavClass}" href="/portal/login"${isPortalPath ? ' aria-current="page"' : ""}>Portal</a>`,
     "</div>",
     "</nav>",
     "</header>",
@@ -5887,10 +6345,11 @@ function renderLayout(input: {
     '<div class="app-sidebar__brand">Brook\'s Dog Training Academy</div>',
     '<div class="app-sidebar__subtitle">Clients, bookings, and billing</div>',
     '<a class="app-sidebar__link" href="/client/index.php">Dashboard</a>',
-    '<a class="app-sidebar__link" href="/admin/clients">Clients</a>',
-    '<a class="app-sidebar__link" href="/admin/bookings">Bookings</a>',
-    '<a class="app-sidebar__link" href="/admin/invoices">Invoices</a>',
-    '<a class="app-sidebar__link" href="/admin/quotes">Quotes</a>',
+ '<a class="app-sidebar__link" href="/admin/clients">Clients</a>',
+ '<a class="app-sidebar__link" href="/admin/bookings">Bookings</a>',
+ '<a class="app-sidebar__link" href="/admin/expenses">Expenses</a>',
+ '<a class="app-sidebar__link" href="/admin/invoices">Invoices</a>',
+ '<a class="app-sidebar__link" href="/admin/quotes">Quotes</a>',
     '<a class="app-sidebar__link" href="/admin/contracts">Contracts</a>',
     '<a class="app-sidebar__link" href="/admin/forms">Forms</a>',
     '<a class="app-sidebar__link" href="/admin/pets">Pets</a>',
@@ -6058,10 +6517,12 @@ function renderLayout(input: {
     ".navbar-brand { display: inline-flex; align-items: center; gap: 0.75rem; font-family: 'Montserrat', sans-serif; font-size: 1.05rem; font-weight: 700; color: #1f2937; }",
     ".navbar-brand__mark { width: 2.5rem; height: 2.5rem; object-fit: contain; border-radius: 999px; box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08); background: #fff; }",
     ".navbar-links { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }",
-    ".nav-link { position: relative; font-weight: 500; color: #374151; }",
-    ".nav-link:hover { color: var(--theme-primary); }",
-    ".nav-cta { padding: 0.7rem 1rem; border-radius: 999px; background: var(--theme-primary); color: #fff; }",
-    ".nav-cta:hover { color: #fff; background: var(--theme-primary-dark); }",
+    ".nav-link { position: relative; display: inline-flex; align-items: center; justify-content: center; padding: 0.55rem 0.85rem; border-radius: 999px; font-weight: 500; color: #374151; }",
+    ".nav-link:hover { color: var(--theme-primary); background: rgba(154, 0, 115, 0.08); }",
+    ".nav-link.active { color: var(--theme-primary-dark); background: rgba(154, 0, 115, 0.12); box-shadow: inset 0 0 0 1px rgba(154, 0, 115, 0.14); }",
+    ".nav-cta { padding: 0.7rem 1rem; border-radius: 999px; background: rgba(154, 0, 115, 0.12); color: var(--theme-primary-dark); box-shadow: inset 0 0 0 1px rgba(154, 0, 115, 0.22); }",
+    ".nav-cta:hover { color: #fff; background: var(--theme-primary-dark); box-shadow: none; }",
+    ".nav-cta.active { background: var(--theme-primary); color: #fff; box-shadow: 0 12px 28px rgba(154, 0, 115, 0.22); }",
     ".public-main { min-height: calc(100vh - 76px); background: linear-gradient(135deg, #f0f9ff 0%, #ffffff 60%, #f8fafc 100%); }",
     ".hero-section { padding: 3rem 1.25rem 4rem; }",
     ".public-shell { max-width: 1180px; margin: 0 auto; }",
@@ -6093,6 +6554,10 @@ function renderLayout(input: {
     "html[data-bs-theme='dark'] h1, html[data-bs-theme='dark'] h2, html[data-bs-theme='dark'] h3, html[data-bs-theme='dark'] h4, html[data-bs-theme='dark'] h5, html[data-bs-theme='dark'] h6 { color: #f8fafc; }",
     "html[data-bs-theme='dark'] .site-header { background: rgba(15, 23, 42, 0.94); border-bottom-color: rgba(148, 163, 184, 0.18); }",
     "html[data-bs-theme='dark'] .navbar-brand, html[data-bs-theme='dark'] .nav-link { color: #e2e8f0; }",
+    "html[data-bs-theme='dark'] .nav-link:hover { background: rgba(154, 0, 115, 0.22); color: #f8fafc; }",
+    "html[data-bs-theme='dark'] .nav-link.active { background: rgba(154, 0, 115, 0.28); color: #f8fafc; box-shadow: inset 0 0 0 1px rgba(244, 114, 182, 0.26); }",
+    "html[data-bs-theme='dark'] .nav-cta { background: rgba(154, 0, 115, 0.22); color: #f8fafc; box-shadow: inset 0 0 0 1px rgba(244, 114, 182, 0.24); }",
+    "html[data-bs-theme='dark'] .nav-cta.active { background: var(--theme-primary); box-shadow: 0 12px 28px rgba(154, 0, 115, 0.32); }",
     "html[data-bs-theme='dark'] .public-main { background: linear-gradient(135deg, #0f172a 0%, #111827 55%, #1e293b 100%); }",
     "html[data-bs-theme='dark'] .public-shell > article, html[data-bs-theme='dark'] .public-shell > section, html[data-bs-theme='dark'] .public-shell > div > article, html[data-bs-theme='dark'] .public-shell > div > section, html[data-bs-theme='dark'] .marketing-hero, html[data-bs-theme='dark'] .public-section, html[data-bs-theme='dark'] .article-content, html[data-bs-theme='dark'] .article-sidebar, html[data-bs-theme='dark'] .booking-form-card, html[data-bs-theme='dark'] .booking-benefits, html[data-bs-theme='dark'] .surface-block, html[data-bs-theme='dark'] .service-card, html[data-bs-theme='dark'] .resource-card, html[data-bs-theme='dark'] .process-card, html[data-bs-theme='dark'] .story-card, html[data-bs-theme='dark'] .testimonial-card, html[data-bs-theme='dark'] .summary-card, html[data-bs-theme='dark'] .detail-card, html[data-bs-theme='dark'] .marketing-aside-card, html[data-bs-theme='dark'] .quick-link-card { background: rgba(15, 23, 42, 0.92); color: #e5e7eb; border-color: rgba(148, 163, 184, 0.2); }",
     "html[data-bs-theme='dark'] .section-copy, html[data-bs-theme='dark'] .meta, html[data-bs-theme='dark'] .quick-link-card__meta, html[data-bs-theme='dark'] .detail-card__label, html[data-bs-theme='dark'] .summary-card__meta { color: #cbd5e1; }",
@@ -6119,7 +6584,25 @@ function renderLayout(input: {
     ".public-section { padding: 2rem; border-radius: 1.5rem; background: rgba(255, 255, 255, 0.92); border: 1px solid rgba(148, 163, 184, 0.18); box-shadow: 0 20px 44px rgba(15, 23, 42, 0.06); }",
     ".public-section--alt { background: linear-gradient(135deg, rgba(154, 0, 115, 0.04) 0%, rgba(10, 154, 156, 0.05) 100%); }",
     ".bdta-newsletter-embed-section { padding: 0 1.25rem 4rem; }",
+    ".bdta-newsletter-embed-copy { width: min(100%, 46rem); margin: 0 auto 1rem; }",
+    ".bdta-newsletter-embed-copy .section-copy { margin-bottom: 0; }",
     ".bdta-newsletter-embed-card { width: min(100%, 46rem); margin: 0 auto; padding: 1.5rem; border-radius: 1.5rem; background: linear-gradient(145deg, rgba(255, 255, 255, 0.98) 0%, rgba(240, 249, 255, 0.98) 100%); border: 1px solid rgba(148, 163, 184, 0.18); box-shadow: 0 24px 54px rgba(15, 23, 42, 0.08); }",
+    ".bdta-newsletter-embed-body--mailjet .bdta-newsletter-mailjet { width: 100%; }",
+    ".bdta-newsletter-embed-body--mailjet .pas-form { padding: 0 !important; background: transparent !important; }",
+    ".bdta-newsletter-embed-body--mailjet .pas-text, .bdta-newsletter-embed-body--mailjet .pas-input, .bdta-newsletter-embed-body--mailjet .pas-optin, .bdta-newsletter-embed-body--mailjet .pas-submit { padding-left: 0 !important; padding-right: 0 !important; }",
+    ".bdta-newsletter-embed-body--mailjet .pas-text { color: inherit !important; font-family: 'Poppins', sans-serif !important; }",
+    ".bdta-newsletter-embed-body--mailjet .pas-text-container h1, .bdta-newsletter-embed-body--mailjet .pas-text-container h2, .bdta-newsletter-embed-body--mailjet .pas-text-container h3 { font-family: 'Montserrat', sans-serif !important; color: #1f2937 !important; text-align: left !important; }",
+    ".bdta-newsletter-embed-body--mailjet .pas-input-text span, .bdta-newsletter-embed-body--mailjet .pas-optin-text span { color: #475569 !important; font-family: 'Poppins', sans-serif !important; }",
+    ".bdta-newsletter-embed-body--mailjet .pas-input-input { height: auto !important; min-height: 3rem !important; border-radius: 0.9rem !important; border: 1px solid rgba(148, 163, 184, 0.35) !important; padding: 0.9rem 1rem !important; background: #fff !important; color: #1f2937 !important; }",
+    ".bdta-newsletter-embed-body--mailjet .pas-optin { display: grid !important; grid-template-columns: auto 1fr; gap: 0.85rem; align-items: start; }",
+    ".bdta-newsletter-embed-body--mailjet input[type='checkbox'] { margin-top: 0.2rem; }",
+    ".bdta-newsletter-embed-body--mailjet .pas-submit button { width: 100%; margin: 0 !important; border-radius: 0.9rem !important; background: var(--theme-primary) !important; color: #fff !important; font: 600 1rem 'Poppins', sans-serif !important; }",
+    ".bdta-newsletter-embed-body--mailjet .pas-submit button:hover { background: var(--theme-primary-dark) !important; }",
+    "html[data-bs-theme='dark'] .bdta-newsletter-embed-card, html[data-bs-theme='dark'] .bdta-newsletter-embed-copy { color: #e5e7eb; }",
+    "html[data-bs-theme='dark'] .bdta-newsletter-embed-card { background: linear-gradient(145deg, rgba(15, 23, 42, 0.92) 0%, rgba(30, 41, 59, 0.96) 100%); border-color: rgba(148, 163, 184, 0.18); }",
+    "html[data-bs-theme='dark'] .bdta-newsletter-embed-body--mailjet .pas-text-container h1, html[data-bs-theme='dark'] .bdta-newsletter-embed-body--mailjet .pas-text-container h2, html[data-bs-theme='dark'] .bdta-newsletter-embed-body--mailjet .pas-text-container h3 { color: #f8fafc !important; }",
+    "html[data-bs-theme='dark'] .bdta-newsletter-embed-body--mailjet .pas-input-text span, html[data-bs-theme='dark'] .bdta-newsletter-embed-body--mailjet .pas-optin-text span { color: #cbd5e1 !important; }",
+    "html[data-bs-theme='dark'] .bdta-newsletter-embed-body--mailjet .pas-input-input { border-color: rgba(148, 163, 184, 0.26) !important; background: rgba(15, 23, 42, 0.92) !important; color: #f8fafc !important; }",
     ".service-overview-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }",
     ".section-heading { margin-bottom: 1.4rem; }",
     ".section-heading h2 { margin-bottom: 0.35rem; }",
@@ -6144,6 +6627,7 @@ function renderLayout(input: {
     ".article-content, .article-sidebar { min-width: 0; }",
     ".article-content { padding: 2rem; border-radius: 1.5rem; background: #fff; border: 1px solid rgba(148, 163, 184, 0.18); box-shadow: var(--theme-shadow-sm); }",
     ".public-rich-copy { line-height: 1.8; }",
+    ".public-rich-copy img, .public-rich-copy iframe, .public-rich-copy video { max-width: 100%; height: auto; }",
     ".public-rich-copy p { margin: 0 0 1rem; }",
     ".public-rich-copy h2 { margin: 1.6rem 0 0.8rem; }",
     ".public-cta-banner { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1.6rem 1.8rem; border-radius: 1.5rem; background: linear-gradient(135deg, rgba(31, 41, 55, 0.96) 0%, rgba(95, 25, 76, 0.96) 100%); color: #fff; box-shadow: 0 28px 50px rgba(15, 23, 42, 0.18); }",
@@ -7494,9 +7978,10 @@ async function resolvePublicRenderAssets(
     dependencies.listAdminSettings(),
     loadPersistedSession(sessionStore, request)
   ]);
+  const newsletterEmbedWrappedMarkup = await buildNewsletterEmbedWrappedMarkup(resolveSettingValue(settings, "newsletter_embed_html"));
 
   return {
-    newsletterEmbedWrappedMarkup: buildNewsletterEmbedWrappedMarkup(resolveSettingValue(settings, "newsletter_embed_html")),
+    newsletterEmbedWrappedMarkup,
     publicNoticeMarkup: buildPublicNoticeMarkup(
       readBooleanSettingValue(resolveSettingValue(settings, "public_notice_enabled")),
       resolveSettingValue(settings, "public_notice_text")
@@ -7564,6 +8049,39 @@ function readRouteError(body: unknown): { code: string; message: string; details
 
   const details = "details" in error ? error.details : undefined;
   return { code, message, details };
+}
+
+function readRouteItem<T>(body: unknown): T | null {
+  if (readRouteError(body) != null || typeof body !== "object" || body == null || !("item" in body)) {
+    return null;
+  }
+
+  return (body as { item: T }).item ?? null;
+}
+
+function readRouteItems<T>(body: unknown): T[] {
+  if (readRouteError(body) != null || typeof body !== "object" || body == null || !("items" in body)) {
+    return [];
+  }
+
+  const items = (body as { items?: unknown }).items;
+  return Array.isArray(items) ? (items as T[]) : [];
+}
+
+async function loadSafeRouteItem<T>(load: () => Promise<{ body: unknown }>): Promise<T | null> {
+  try {
+    return readRouteItem<T>((await load()).body);
+  } catch {
+    return null;
+  }
+}
+
+async function loadSafeRouteItems<T>(load: () => Promise<{ body: unknown }>): Promise<T[]> {
+  try {
+    return readRouteItems<T>((await load()).body);
+  } catch {
+    return [];
+  }
 }
 
 function isAuthRouteErrorCode(code: string): boolean {
@@ -8887,11 +9405,12 @@ return;
       const portalPetFileDeleteMatch = /^\/portal\/pets\/([^/]+)\/files\/([^/]+)\/delete$/.exec(url.pathname);
       const portalPackageDetailMatch = /^\/portal\/packages\/([^/]+)$/.exec(url.pathname);
       const portalCreditDetailMatch = /^\/portal\/credits\/([^/]+)$/.exec(url.pathname);
-      const adminClientContactDetailMatch = /^\/admin\/clients\/([^/]+)\/contacts\/([^/]+)$/.exec(url.pathname);
-      const adminClientContactDeleteMatch = /^\/admin\/clients\/([^/]+)\/contacts\/([^/]+)\/delete$/.exec(url.pathname);
-      const adminBookingDetailMatch = /^\/admin\/bookings\/([^/]+)$/.exec(url.pathname);
-      const adminInvoiceDetailMatch = /^\/admin\/invoices\/([^/]+)$/.exec(url.pathname);
-      const adminQuoteDetailMatch = /^\/admin\/quotes\/([^/]+)$/.exec(url.pathname);
+ const adminClientContactDetailMatch = /^\/admin\/clients\/([^/]+)\/contacts\/([^/]+)$/.exec(url.pathname);
+ const adminClientContactDeleteMatch = /^\/admin\/clients\/([^/]+)\/contacts\/([^/]+)\/delete$/.exec(url.pathname);
+ const adminBookingDetailMatch = /^\/admin\/bookings\/([^/]+)$/.exec(url.pathname);
+ const adminExpenseDetailMatch = /^\/admin\/expenses\/([^/]+)$/.exec(url.pathname);
+ const adminInvoiceDetailMatch = /^\/admin\/invoices\/([^/]+)$/.exec(url.pathname);
+ const adminQuoteDetailMatch = /^\/admin\/quotes\/([^/]+)$/.exec(url.pathname);
       const adminContractDetailMatch = /^\/admin\/contracts\/([^/]+)$/.exec(url.pathname);
       const adminPetDetailMatch = /^\/admin\/pets\/([^/]+)$/.exec(url.pathname);
       const adminPetFilesMatch = /^\/admin\/pets\/([^/]+)\/files$/.exec(url.pathname);
@@ -10674,42 +11193,194 @@ const portalNav = "";
 
         if (url.pathname === "/portal/profile") {
           const profile = await handlers.handlePortalProfile(session);
-          if ("error" in profile.body) {
-            await handleProtectedRouteFailure({
-              response,
-              request,
-              sessionStore: resolved.sessionStore,
-              loginPath: buildPortalLoginRedirectPath(request),
-              title: "Profile",
-              result: profile
-            });
-            return;
-          }
+if ("error" in profile.body) {
+await handleProtectedRouteFailure({
+response,
+request,
+sessionStore: resolved.sessionStore,
+loginPath: buildPortalLoginRedirectPath(request),
+title: "Profile",
+result: profile
+});
+return;
+}
 
-          writeHtml(response, 200, renderLayout({
+const portalProfileItem = (profile.body as { item: ClientProfile }).item;
+const clientId = portalProfileItem.id;
+const [
+contacts,
+pets,
+allBookings,
+allInvoices,
+allQuotes,
+allContracts,
+allForms,
+achievements
+] = await Promise.all([
+loadSafeRouteItems<ClientContact>(() => handlers.handlePortalContacts(session)),
+loadSafeRouteItems<Pet>(() => handlers.handlePortalPets(session)),
+loadSafeRouteItems<Booking>(() => handlers.handlePortalBookings(session)),
+loadSafeRouteItems<Invoice>(() => handlers.handlePortalInvoices(session)),
+loadSafeRouteItems<Quote>(() => handlers.handlePortalQuotes(session)),
+loadSafeRouteItems<Contract>(() => handlers.handlePortalContracts(session)),
+loadSafeRouteItems<FormSubmission>(() => handlers.handlePortalForms(session)),
+loadSafeRouteItems<ClientAchievement>(() => handlers.handlePortalAchievements(session))
+]);
+const activePets = pets.filter((item) => !item.archived);
+const primaryContact = contacts.find((contact) => contact.isPrimary) ?? contacts[0] ?? null;
+const upcomingBookings = sortByTimeAsc(
+allBookings.filter((booking) => booking.status !== "completed" && booking.status !== "cancelled"),
+(booking) => booking.startsAt
+).slice(0, 5);
+const portalForms = sortByTimeDesc(
+allForms,
+(form) => form.reviewedAt ?? form.submittedAt ?? null
+);
+const recentForms = portalForms.slice(0, 5);
+const recentAchievements = sortByTimeDesc(
+achievements,
+(achievement) => achievement.revokedAt ?? achievement.updatedAt ?? achievement.awardedOn
+).slice(0, 5);
+const openInvoices = sortByTimeAsc(
+allInvoices.filter((invoice) => invoice.status !== "paid" && invoice.status !== "void" && invoice.outstandingAmount > 0),
+(invoice) => invoice.dueAt
+);
+const outstandingBalance = openInvoices.reduce((total, invoice) => total + invoice.outstandingAmount, 0);
+const activeQuotes = allQuotes.filter((quote) => quote.status === "draft" || quote.status === "sent");
+const pendingContracts = allContracts.filter((contract) => contract.status !== "signed" && contract.status !== "void");
+const formsToReview = portalForms.filter((form) => normalizeAdminFormSubmissionStatus(form) !== "reviewed").length;
+const nextBooking = upcomingBookings[0] ?? null;
+const latestAchievement = recentAchievements[0] ?? null;
+
+writeHtml(response, 200, renderLayout({
+title: "Profile",
+body: [
+'<article class="content-stack">',
+renderSectionIntro({
+eyebrow: "Profile",
+ title: (profile.body as { item: ClientProfile }).item.name,
+description: "Manage primary contact information, pets, forms, and billing details in one place instead of jumping across separate portal pages."
+}),
+portalNav,
+renderStatsGrid([
+{ label: "Pets", value: pets.length, meta: formatCountLabel(activePets.length, "active profile"), accent: "primary" },
+{ label: "Contacts", value: contacts.length, meta: primaryContact == null ? "No primary contact saved yet" : `Primary: ${primaryContact.name}`, accent: "secondary" },
+{ label: "Upcoming Visits", value: upcomingBookings.length, meta: nextBooking == null ? "Nothing on the calendar yet" : formatAdminDateTime(nextBooking.startsAt), accent: "success" },
+{ label: "Open Balance", value: formatCurrency(outstandingBalance), meta: `${formatCountLabel(openInvoices.length, "invoice")} still open`, accent: "warning" }
+]),
+'<section class="surface-block">',
+"<h2>Account Details</h2>",
+renderDetailGrid([
+{ label: "Client ID", value: escapeHtml(clientId) },
+{ label: "Email", value: escapeHtml(portalProfileItem.email) },
+{ label: "Phone", value: escapeHtml(portalProfileItem.phone ?? "Not provided") },
+{ label: "Address", value: escapeHtml(portalProfileItem.address ?? "Not provided") },
+{
+label: "Primary Contact",
+value: primaryContact == null
+? "No primary contact on file"
+: `<a href="/portal/contacts/${encodeURIComponent(primaryContact.id)}">${escapeHtml(primaryContact.name)}</a>`
+},
+{
+label: "Next Appointment",
+value: nextBooking == null
+? "No active appointments"
+: `<a href="/portal/appointments/${encodeURIComponent(nextBooking.id)}">${escapeHtml(formatAdminDateTime(nextBooking.startsAt))}</a>`
+},
+{
+label: "Forms Pending Review",
+value: escapeHtml(formatCountLabel(formsToReview, "submission"))
+},
+{
+label: "Latest Achievement",
+value: latestAchievement == null
+? "No achievements awarded yet"
+: `<a href="/portal/achievements/${encodeURIComponent(latestAchievement.id)}">${escapeHtml(latestAchievement.title)}</a>`
+}
+]),
+"</section>",
+'<section class="surface-block">',
+"<h2>Account Snapshot</h2>",
+renderQuickLinksGrid([
+{ href: "/portal/appointments", label: "Appointments", description: upcomingBookings.length === 0 ? "No active appointments scheduled." : `${formatCountLabel(upcomingBookings.length, "upcoming appointment")} ready to review.` },
+{ href: "/portal/invoices", label: "Invoices", description: openInvoices.length === 0 ? "No outstanding balance." : `${formatCurrency(outstandingBalance)} still due.` },
+{ href: "/portal/quotes", label: "Quotes", description: activeQuotes.length === 0 ? "No quotes need your attention." : `${formatCountLabel(activeQuotes.length, "quote")} is still open.` },
+{ href: "/portal/contracts", label: "Contracts", description: pendingContracts.length === 0 ? "No unsigned contracts pending." : `${formatCountLabel(pendingContracts.length, "contract")} still needs action.` },
+{ href: "/portal/forms", label: "Forms", description: formsToReview === 0 ? "No pending form submissions." : `${formatCountLabel(formsToReview, "submission")} is still in flight.` },
+{ href: "/portal/achievements", label: "Achievements", description: recentAchievements.length === 0 ? "No achievements on file yet." : `${formatCountLabel(recentAchievements.length, "recent award")} available in your portal.` },
+{ href: "/portal/pets", label: "Pets", description: pets.length === 0 ? "No pet profiles added yet." : `${formatCountLabel(pets.length, "pet profile")} linked to this account.` },
+{ href: "/portal/contacts", label: "Contacts", description: contacts.length === 0 ? "Add a household or emergency contact." : `${formatCountLabel(contacts.length, "contact")} available to manage.` }
+]),
+"</section>",
+'<section class="surface-block">',
+"<h2>Household Contacts</h2>",
+renderContactsPreviewTable(contacts, (contact) => `/portal/contacts/${encodeURIComponent(contact.id)}`),
+"</section>",
+'<section class="surface-block">',
+"<h2>Pet Profiles</h2>",
+renderPetsPreviewTable(pets, {
+detailPath: (petItem) => `/portal/pets/${encodeURIComponent(petItem.id)}`,
+filePath: (petItem) => `/portal/pets/${encodeURIComponent(petItem.id)}/files`
+}),
+"</section>",
+'<section class="surface-block">',
+"<h2>Upcoming Appointments</h2>",
+renderBookingsPreviewTable(upcomingBookings, (booking) => `/portal/appointments/${encodeURIComponent(booking.id)}`),
+"</section>",
+'<section class="surface-block">',
+"<h2>Recent Forms</h2>",
+renderFormsPreviewTable(recentForms, (form) => `/portal/forms/${encodeURIComponent(form.id)}`),
+"</section>",
+'<section class="surface-block">',
+"<h2>Achievements</h2>",
+renderAchievementsPreviewTable(recentAchievements, (achievement) => `/portal/achievements/${encodeURIComponent(achievement.id)}`),
+"</section>",
+'<section class="surface-block">',
+"<h2>Update Profile</h2>",
+'<form class="form-grid" method="post" action="/portal/profile">',
+'<div class="form-grid form-grid--two">',
+`<label>Name<input type="text" name="name" value="${escapeHtml(portalProfileItem.name)}" required></label>`,
+`<label>Email<input type="email" name="email" value="${escapeHtml(portalProfileItem.email)}" required></label>`,
+`<label>Phone<input type="text" name="phone" value="${escapeHtml(portalProfileItem.phone ?? "")}"></label>`,
+"</div>",
+`<label>Address<textarea name="address">${escapeHtml(portalProfileItem.address ?? "")}</textarea></label>`,
+'<div class="form-grid form-grid--two">',
+'<label>Current Password<input type="password" name="currentPassword"></label>',
+'<label>New Password<input type="password" name="newPassword"></label>',
+"</div>",
+'<label>Confirm Password<input type="password" name="confirmPassword"></label>',
+'<div class="form-actions"><button type="submit">Save Profile</button></div>',
+"</form>",
+"</section>",
+"</article>"
+].join("")
+}));
+return;
+
+writeHtml(response, 200, renderLayout({
             title: "Profile",
             body: [
               '<article class="content-stack">',
               renderSectionIntro({
                 eyebrow: "Profile",
-                title: profile.body.item.name,
+ title: portalProfileItem.name,
                   description: "Manage the primary contact information and password used for your client access."
               }),
               portalNav,
               renderDetailGrid([
-                { label: "Email", value: escapeHtml(profile.body.item.email) },
-                { label: "Phone", value: escapeHtml(profile.body.item.phone ?? "Not provided") },
-                { label: "Address", value: escapeHtml(profile.body.item.address ?? "Not provided") }
+ { label: "Email", value: escapeHtml((profile.body as { item: ClientProfile }).item.email) },
+ { label: "Phone", value: escapeHtml((profile.body as { item: ClientProfile }).item.phone ?? "Not provided") },
+ { label: "Address", value: escapeHtml((profile.body as { item: ClientProfile }).item.address ?? "Not provided") }
               ]),
               '<section class="surface-block">',
               "<h2>Update Profile</h2>",
               '<form class="form-grid" method="post" action="/portal/profile">',
               '<div class="form-grid form-grid--two">',
-              `<label>Name<input type="text" name="name" value="${escapeHtml(profile.body.item.name)}" required></label>`,
-              `<label>Email<input type="email" name="email" value="${escapeHtml(profile.body.item.email)}" required></label>`,
-              `<label>Phone<input type="text" name="phone" value="${escapeHtml(profile.body.item.phone ?? "")}"></label>`,
+ `<label>Name<input type="text" name="name" value="${escapeHtml((profile.body as { item: ClientProfile }).item.name)}" required></label>`,
+ `<label>Email<input type="email" name="email" value="${escapeHtml((profile.body as { item: ClientProfile }).item.email)}" required></label>`,
+ `<label>Phone<input type="text" name="phone" value="${escapeHtml((profile.body as { item: ClientProfile }).item.phone ?? "")}"></label>`,
               "</div>",
-              `<label>Address<textarea name="address">${escapeHtml(profile.body.item.address ?? "")}</textarea></label>`,
+ `<label>Address<textarea name="address">${escapeHtml((profile.body as { item: ClientProfile }).item.address ?? "")}</textarea></label>`,
               '<div class="form-grid form-grid--two">',
               '<label>Current Password<input type="password" name="currentPassword"></label>',
               '<label>New Password<input type="password" name="newPassword"></label>',
@@ -11032,34 +11703,145 @@ return;
         if (portalPetDetailMatch != null) {
           const petId = decodeURIComponent(portalPetDetailMatch[1] ?? "");
           const pet = await handlers.handlePortalPetDetail(session, petId);
-          if ("error" in pet.body) {
-            redirect(response, "/portal/pets");
-            return;
-          }
+if ("error" in pet.body) {
+redirect(response, "/portal/pets");
+return;
+}
 
-          writeHtml(response, 200, renderLayout({
+const portalPetItem = (pet.body as { item: Pet }).item;
+const [profile, contacts, files, allBookings, allForms, allAchievements] = await Promise.all([
+loadSafeRouteItem<ClientProfile>(() => handlers.handlePortalProfile(session)),
+loadSafeRouteItems<ClientContact>(() => handlers.handlePortalContacts(session)),
+loadSafeRouteItems<PetFile>(() => handlers.handlePortalPetFiles(session, petId)),
+loadSafeRouteItems<Booking>(() => handlers.handlePortalBookings(session)),
+loadSafeRouteItems<FormSubmission>(() => handlers.handlePortalForms(session)),
+loadSafeRouteItems<ClientAchievement>(() => handlers.handlePortalAchievements(session))
+]);
+const primaryContact = contacts.find((contact) => contact.isPrimary) ?? contacts[0] ?? null;
+const petBookings = sortByTimeAsc(
+allBookings.filter((booking) => booking.petIds.includes(portalPetItem.id)),
+(booking) => booking.startsAt
+);
+const upcomingBookings = petBookings.filter((booking) => booking.status !== "completed" && booking.status !== "cancelled").slice(0, 5);
+const recentFiles = sortByTimeDesc(files, (file) => file.uploadedAt).slice(0, 5);
+const petForms = sortByTimeDesc(
+allForms.filter((form) => form.petId === portalPetItem.id),
+(form) => form.reviewedAt ?? form.submittedAt ?? null
+).slice(0, 5);
+const petAchievements = sortByTimeDesc(
+allAchievements.filter((achievement) => petMatchesAchievement(portalPetItem, achievement)),
+(achievement) => achievement.revokedAt ?? achievement.updatedAt ?? achievement.awardedOn
+).slice(0, 5);
+const nextBooking = upcomingBookings[0] ?? null;
+const latestFile = recentFiles[0] ?? null;
+const latestForm = petForms[0] ?? null;
+
+writeHtml(response, 200, renderLayout({
+title: "Portal Pet Detail",
+body: [
+'<article class="content-stack">',
+renderSectionIntro({
+eyebrow: "Pets",
+title: portalPetItem.name,
+description: "Review care notes, shared files, appointments, and completed paperwork for this pet from one profile."
+}),
+portalNav,
+renderStatsGrid([
+{ label: "Files", value: files.length, meta: latestFile == null ? "No uploads yet" : latestFile.originalName, accent: "primary" },
+{ label: "Appointments", value: upcomingBookings.length, meta: nextBooking == null ? "No active appointments" : formatAdminDateTime(nextBooking.startsAt), accent: "success" },
+{ label: "Forms", value: petForms.length, meta: latestForm == null ? "No linked forms yet" : getAdminFormSubmissionTitle(latestForm), accent: "secondary" },
+{ label: "Achievements", value: petAchievements.length, meta: petAchievements.length === 0 ? "No pet-specific awards yet" : "Training milestones linked", accent: "warning" }
+]),
+'<section class="surface-block">',
+"<h2>Pet Details</h2>",
+renderDetailGrid([
+{ label: "Pet ID", value: escapeHtml(portalPetItem.id) },
+{ label: "Species", value: escapeHtml(portalPetItem.species) },
+{ label: "Status", value: renderStatusPill(portalPetItem.archived ? "Archived" : "Active", portalPetItem.archived ? "warning" : "success") },
+{ label: "Shared Files", value: escapeHtml(formatCountLabel(files.length, "file")) },
+{
+label: "Household Contact",
+value: primaryContact == null
+? "No contact on file"
+: `<a href="/portal/contacts/${encodeURIComponent(primaryContact.id)}">${escapeHtml(primaryContact.name)}</a>`
+},
+{
+label: "Account Profile",
+value: profile == null ? "Profile unavailable" : `<a href="/portal/profile">${escapeHtml(profile.name)}</a>`
+},
+{
+label: "Next Appointment",
+value: nextBooking == null
+? "No active appointments"
+: `<a href="/portal/appointments/${encodeURIComponent(nextBooking.id)}">${escapeHtml(formatAdminDateTime(nextBooking.startsAt))}</a>`
+},
+{
+label: "Latest Form",
+value: latestForm == null
+? "No linked forms"
+: `<a href="/portal/forms/${encodeURIComponent(latestForm.id)}">${escapeHtml(getAdminFormSubmissionTitle(latestForm))}</a>`
+}
+]),
+"</section>",
+'<section class="surface-block">',
+"<h2>Care Notes</h2>",
+renderLongTextBlock(portalPetItem.petSittingNotes, "No care notes have been recorded for this pet yet."),
+"</section>",
+'<section class="surface-block">',
+"<h2>Pet Workspace</h2>",
+renderQuickLinksGrid([
+{ href: `/portal/pets/${encodeURIComponent(portalPetItem.id)}/files`, label: "Manage Files", description: files.length === 0 ? "Upload vaccination, intake, or photo records." : `${formatCountLabel(files.length, "shared file")} already on record.` },
+{ href: "/portal/appointments", label: "Appointments", description: upcomingBookings.length === 0 ? "No upcoming appointments for this pet." : `${formatCountLabel(upcomingBookings.length, "upcoming visit")} linked here.` },
+{ href: "/portal/forms", label: "Forms", description: petForms.length === 0 ? "No pet-specific forms submitted yet." : `${formatCountLabel(petForms.length, "linked form")} visible from this profile.` },
+{ href: "/portal/achievements", label: "Achievements", description: petAchievements.length === 0 ? "No awards linked to this pet yet." : `${formatCountLabel(petAchievements.length, "achievement")} recorded for this pet.` },
+{ href: "/portal/profile", label: "Account Profile", description: "Return to the full household and billing view." },
+{ href: "/portal/pets", label: "Back to Pets", description: "Open the full pet directory." }
+]),
+"</section>",
+'<section class="surface-block">',
+"<h2>Shared Files</h2>",
+renderPetFilesPreviewTable(recentFiles, (file) => `/portal/pets/${encodeURIComponent(portalPetItem.id)}/files/${encodeURIComponent(file.id)}/content`),
+"</section>",
+'<section class="surface-block">',
+"<h2>Appointments</h2>",
+renderBookingsPreviewTable(upcomingBookings, (booking) => `/portal/appointments/${encodeURIComponent(booking.id)}`),
+"</section>",
+'<section class="surface-block">',
+"<h2>Linked Forms</h2>",
+renderFormsPreviewTable(petForms, (form) => `/portal/forms/${encodeURIComponent(form.id)}`),
+"</section>",
+'<section class="surface-block">',
+"<h2>Achievements</h2>",
+renderAchievementsPreviewTable(petAchievements, (achievement) => `/portal/achievements/${encodeURIComponent(achievement.id)}`),
+"</section>",
+"</article>"
+].join("")
+}));
+return;
+
+writeHtml(response, 200, renderLayout({
             title: "Portal Pet Detail",
             body: [
               '<article class="content-stack">',
               renderSectionIntro({
                 eyebrow: "Pets",
-                title: pet.body.item.name,
+                title: portalPetItem.name,
                 description: "Review the pet profile details and jump into shared client files for this pet."
               }),
               portalNav,
               '<section class="surface-block">',
               "<h2>Pet Details</h2>",
               renderDetailGrid([
-                { label: "Pet ID", value: escapeHtml(pet.body.item.id) },
-                { label: "Name", value: escapeHtml(pet.body.item.name) },
-                { label: "Species", value: escapeHtml(pet.body.item.species) },
+                { label: "Pet ID", value: escapeHtml(portalPetItem.id) },
+                { label: "Name", value: escapeHtml(portalPetItem.name) },
+                { label: "Species", value: escapeHtml(portalPetItem.species) },
                 {
                   label: "Status",
-                  value: renderStatusPill(pet.body.item.archived ? "Archived" : "Active", pet.body.item.archived ? "warning" : "success")
+                  value: renderStatusPill(portalPetItem.archived ? "Archived" : "Active", portalPetItem.archived ? "warning" : "success")
                 },
-                { label: "Pet Sitting Notes", value: escapeHtml(pet.body.item.petSittingNotes) }
+                { label: "Pet Sitting Notes", value: escapeHtml(portalPetItem.petSittingNotes) }
               ]),
-              `<div class="form-actions"><a href="/portal/pets/${encodeURIComponent(pet.body.item.id)}/files">Manage Files</a><a href="/portal/pets">Back to Pets</a></div>`,
+              `<div class="form-actions"><a href="/portal/pets/${encodeURIComponent(portalPetItem.id)}/files">Manage Files</a><a href="/portal/pets">Back to Pets</a></div>`,
               "</section>",
               "</article>"
             ].join("")
@@ -11992,11 +12774,14 @@ const adminNav = "";
           url.pathname === "/admin"
           || url.pathname === "/admin/dashboard"
           || url.pathname === "/client/index.php"
-          || url.pathname === "/admin/clients"
-          || url.pathname === "/admin/bookings"
-          || adminBookingDetailMatch != null
-          || url.pathname === "/admin/invoices"
-          || adminInvoiceDetailMatch != null
+ || url.pathname === "/admin/clients"
+ || url.pathname === "/admin/bookings"
+ || adminBookingDetailMatch != null
+ || url.pathname === "/admin/expenses"
+ || url.pathname === "/client/expenses_list.php"
+ || adminExpenseDetailMatch != null
+ || url.pathname === "/admin/invoices"
+ || adminInvoiceDetailMatch != null
           || url.pathname === "/client/invoices_list.php"
           || url.pathname === "/admin/quotes"
           || adminQuoteDetailMatch != null
@@ -12086,20 +12871,19 @@ const adminNav = "";
 
 const adminNav = "";
 
-if (url.pathname === "/admin" || url.pathname === "/admin/dashboard" || url.pathname === "/client/index.php") {
-const dashboard = await handlers.handleAdminDashboard(session);
-if ("error" in dashboard.body) {
-if (dashboard.body.error.code === "unauthorized" || dashboard.body.error.code === "actor_not_found") {
-redirect(response, buildAdminLoginRedirectPath(request), await clearPersistedSession(resolved.sessionStore, request));
-return;
-}
-
-writeHtml(response, dashboard.status, renderLayout({
-title: "Admin Dashboard",
-body: `<article><h1>Admin Dashboard</h1><p>${escapeHtml(dashboard.body.error.message)}</p></article>`
-}));
-return;
-}
+    if (url.pathname === "/admin" || url.pathname === "/admin/dashboard" || url.pathname === "/client/index.php") {
+      const dashboard = await handlers.handleAdminDashboard(session);
+      if ("error" in dashboard.body) {
+        await handleProtectedRouteFailure({
+          response,
+          request,
+          sessionStore: resolved.sessionStore,
+          loginPath: buildAdminLoginRedirectPath(request),
+          title: "Admin Dashboard",
+          result: dashboard
+        });
+        return;
+      }
 
           writeHtml(response, 200, renderLayout({
             title: "Admin Dashboard",
@@ -12116,11 +12900,12 @@ return;
                 { label: "overdueInvoices", value: dashboard.body.metrics.overdueInvoices, meta: "Needs follow-up", accent: "primary" },
                 { label: "activeClients", value: dashboard.body.metrics.activeClients, meta: "Accessible client records", accent: "success" }
               ]),
-              renderQuickLinksGrid([
-                { href: "/admin/clients", label: "Clients", description: "Profiles and contacts" },
-                { href: "/admin/bookings", label: "Bookings", description: "Schedule and status" },
-                { href: "/admin/invoices", label: "Invoices", description: "Revenue and balances" },
-                { href: "/admin/contracts", label: "Contracts", description: "Pending signatures" },
+ renderQuickLinksGrid([
+ { href: "/admin/clients", label: "Clients", description: "Profiles and contacts" },
+ { href: "/admin/bookings", label: "Bookings", description: "Schedule and status" },
+ { href: "/admin/expenses", label: "Expenses", description: "Operating and billable costs" },
+ { href: "/admin/invoices", label: "Invoices", description: "Revenue and balances" },
+ { href: "/admin/contracts", label: "Contracts", description: "Pending signatures" },
                 { href: "/admin/workflows", label: "Workflows", description: "Automation enrollment" },
                 { href: "/admin/appointment-types", label: "Appointment Types", description: "Booking configuration" },
                 { href: "/admin/form-templates", label: "Form Templates", description: "Client and internal forms" },
@@ -12219,23 +13004,175 @@ result: profile
 return;
 }
 
-          writeHtml(response, 200, renderLayout({
+const adminClientProfileItem = (profile.body as { item: ClientProfile }).item;
+const [
+contacts,
+allPets,
+allBookings,
+allInvoices,
+allQuotes,
+allContracts,
+allForms,
+achievements
+] = await Promise.all([
+loadSafeRouteItems<ClientContact>(() => handlers.handleAdminClientContacts(session, clientId)),
+loadSafeRouteItems<Pet>(() => handlers.handleAdminPets(session)),
+loadSafeRouteItems<Booking>(() => handlers.handleAdminBookings(session)),
+loadSafeRouteItems<Invoice>(() => handlers.handleAdminInvoices(session)),
+loadSafeRouteItems<Quote>(() => handlers.handleAdminQuotes(session)),
+loadSafeRouteItems<Contract>(() => handlers.handleAdminContracts(session)),
+loadSafeRouteItems<FormSubmission>(() => handlers.handleAdminForms(session)),
+loadSafeRouteItems<ClientAchievement>(() => handlers.handleAdminClientAchievements(session, clientId))
+]);
+const pets = allPets.filter((item) => item.clientId === clientId);
+const activePets = pets.filter((item) => !item.archived);
+const primaryContact = contacts.find((contact) => contact.isPrimary) ?? contacts[0] ?? null;
+const upcomingBookings = sortByTimeAsc(
+allBookings.filter((booking) => booking.clientId === clientId && booking.status !== "completed" && booking.status !== "cancelled"),
+(booking) => booking.startsAt
+).slice(0, 5);
+const clientForms = sortByTimeDesc(
+allForms.filter((form) => form.clientId === clientId),
+(form) => form.reviewedAt ?? form.submittedAt ?? null
+);
+const recentForms = clientForms.slice(0, 5);
+const recentAchievements = sortByTimeDesc(
+achievements,
+(achievement) => achievement.revokedAt ?? achievement.updatedAt ?? achievement.awardedOn
+).slice(0, 5);
+const openInvoices = sortByTimeAsc(
+allInvoices.filter((invoice) => invoice.clientId === clientId && invoice.status !== "paid" && invoice.status !== "void" && invoice.outstandingAmount > 0),
+(invoice) => invoice.dueAt
+);
+const outstandingBalance = openInvoices.reduce((total, invoice) => total + invoice.outstandingAmount, 0);
+const activeQuotes = allQuotes.filter((quote) => quote.clientId === clientId && (quote.status === "draft" || quote.status === "sent"));
+const pendingContracts = allContracts.filter((contract) => contract.clientId === clientId && contract.status !== "signed" && contract.status !== "void");
+const formsNeedingReview = clientForms.filter((form) => normalizeAdminFormSubmissionStatus(form) !== "reviewed").length;
+const nextBooking = upcomingBookings[0] ?? null;
+const latestAchievement = recentAchievements[0] ?? null;
+
+writeHtml(response, 200, renderLayout({
+title: "Client Profile",
+body: [
+'<article class="content-stack">',
+renderSectionIntro({
+eyebrow: "Client Profile",
+title: adminClientProfileItem.name,
+description: "Review household context, linked pets, billing, forms, and service activity without leaving this client record."
+}),
+adminNav,
+renderStatsGrid([
+{ label: "Pets", value: pets.length, meta: formatCountLabel(activePets.length, "active record"), accent: "primary" },
+{ label: "Contacts", value: contacts.length, meta: primaryContact == null ? "No primary contact on file" : `Primary: ${primaryContact.name}`, accent: "secondary" },
+{ label: "Upcoming Visits", value: upcomingBookings.length, meta: nextBooking == null ? "Nothing scheduled yet" : formatAdminDateTime(nextBooking.startsAt), accent: "success" },
+{ label: "Open Balance", value: formatCurrency(outstandingBalance), meta: `${formatCountLabel(openInvoices.length, "invoice")} awaiting action`, accent: "warning" }
+]),
+'<section class="surface-block">',
+"<h2>Client Details</h2>",
+renderDetailGrid([
+{ label: "Client ID", value: escapeHtml(adminClientProfileItem.id) },
+{ label: "Email", value: escapeHtml(adminClientProfileItem.email) },
+{ label: "Phone", value: escapeHtml(adminClientProfileItem.phone ?? "Not provided") },
+{ label: "Address", value: escapeHtml(adminClientProfileItem.address ?? "Not provided") },
+{
+label: "Admin Access",
+value: renderStatusPill(adminClientProfileItem.isAdmin ? "Enabled" : "Disabled", adminClientProfileItem.isAdmin ? "success" : "default")
+},
+{
+label: "Primary Contact",
+value: primaryContact == null
+? "No primary contact on file"
+: `<a href="/admin/clients/${encodeURIComponent(clientId)}/contacts/${encodeURIComponent(primaryContact.id)}">${escapeHtml(primaryContact.name)}</a>`
+},
+{
+label: "Next Appointment",
+value: nextBooking == null
+? "No active appointments"
+: `<a href="/admin/bookings/${encodeURIComponent(nextBooking.id)}">${escapeHtml(formatAdminDateTime(nextBooking.startsAt))}</a>`
+},
+{
+label: "Latest Achievement",
+value: latestAchievement == null
+? "No achievements awarded"
+: `<a href="/admin/clients/${encodeURIComponent(clientId)}/achievements/${encodeURIComponent(latestAchievement.id)}">${escapeHtml(latestAchievement.title)}</a>`
+}
+]),
+"</section>",
+'<section class="surface-block">',
+"<h2>Client Actions</h2>",
+`<div class="form-actions"><a href="/client/form_requests_create.php?form_type=client_form&client_id=${encodeURIComponent(clientId)}">Request Client Form</a><a href="/client/form_requests_create.php?form_type=survey_form&client_id=${encodeURIComponent(clientId)}">Request Survey</a><a href="/admin/clients/${encodeURIComponent(clientId)}/contacts">Manage Contacts</a><a href="/admin/clients/${encodeURIComponent(clientId)}/achievements">View Achievements</a></div>`,
+renderQuickLinksGrid([
+{ href: "/admin/bookings", label: "Appointments", description: upcomingBookings.length === 0 ? "No active appointments linked right now." : `${formatCountLabel(upcomingBookings.length, "upcoming appointment")} scheduled.` },
+{ href: "/admin/invoices", label: "Invoices", description: openInvoices.length === 0 ? "No outstanding invoices." : `${formatCurrency(outstandingBalance)} still due across ${formatCountLabel(openInvoices.length, "invoice")}.` },
+{ href: "/admin/quotes", label: "Quotes", description: activeQuotes.length === 0 ? "No open quotes awaiting response." : `${formatCountLabel(activeQuotes.length, "quote")} still active.` },
+{ href: "/admin/contracts", label: "Contracts", description: pendingContracts.length === 0 ? "No unsigned contracts pending." : `${formatCountLabel(pendingContracts.length, "contract")} still needs action.` },
+{ href: "/admin/forms", label: "Forms", description: formsNeedingReview === 0 ? "No pending form review." : `${formatCountLabel(formsNeedingReview, "submission")} still needs review.` },
+{ href: `/admin/clients/${encodeURIComponent(clientId)}/achievements`, label: "Achievements", description: recentAchievements.length === 0 ? "No awards on record." : `${formatCountLabel(recentAchievements.length, "recent award")} visible from this profile.` }
+]),
+"</section>",
+'<section class="surface-block">',
+"<h2>Operational Notes</h2>",
+renderLongTextBlock(adminClientProfileItem.notes, "No internal notes recorded for this client yet."),
+"</section>",
+'<section class="surface-block">',
+"<h2>Household Contacts</h2>",
+renderContactsPreviewTable(contacts, (contact) => `/admin/clients/${encodeURIComponent(clientId)}/contacts/${encodeURIComponent(contact.id)}`),
+"</section>",
+'<section class="surface-block">',
+"<h2>Pet Roster</h2>",
+renderPetsPreviewTable(pets, {
+detailPath: (petItem) => `/admin/pets/${encodeURIComponent(petItem.id)}`,
+filePath: (petItem) => `/admin/pets/${encodeURIComponent(petItem.id)}/files`
+}),
+"</section>",
+'<section class="surface-block">',
+"<h2>Upcoming Appointments</h2>",
+renderBookingsPreviewTable(upcomingBookings, (booking) => `/admin/bookings/${encodeURIComponent(booking.id)}`),
+"</section>",
+'<section class="surface-block">',
+"<h2>Recent Forms</h2>",
+renderFormsPreviewTable(recentForms, (form) => `/admin/forms/${encodeURIComponent(form.id)}`),
+"</section>",
+'<section class="surface-block">',
+"<h2>Achievements</h2>",
+renderAchievementsPreviewTable(recentAchievements, (achievement) => `/admin/clients/${encodeURIComponent(clientId)}/achievements/${encodeURIComponent(achievement.id)}`),
+"</section>",
+'<section class="surface-block">',
+"<h2>Edit Client</h2>",
+`<form class="form-grid" method="post" action="/admin/clients/${encodeURIComponent(clientId)}/profile">`,
+'<div class="form-grid form-grid--two">',
+`<label>Name<input type="text" name="name" value="${escapeHtml(adminClientProfileItem.name)}" required></label>`,
+`<label>Email<input type="email" name="email" value="${escapeHtml(adminClientProfileItem.email)}" required></label>`,
+`<label>Phone<input type="text" name="phone" value="${escapeHtml(adminClientProfileItem.phone ?? "")}"></label>`,
+"</div>",
+`<label>Address<textarea name="address">${escapeHtml(adminClientProfileItem.address ?? "")}</textarea></label>`,
+`<label>Notes<textarea name="notes">${escapeHtml(adminClientProfileItem.notes ?? "")}</textarea></label>`,
+`<label><input type="checkbox" name="isAdmin"${adminClientProfileItem.isAdmin ? " checked" : ""}> Grant admin access</label>`,
+'<div class="form-actions"><button type="submit">Save Client</button></div>',
+"</form>",
+"</section>",
+"</article>"
+].join("")
+}));
+return;
+
+ writeHtml(response, 200, renderLayout({
             title: "Client Profile",
             body: [
               '<article class="content-stack">',
               renderSectionIntro({
                 eyebrow: "Client Profile",
-                title: profile.body.item.name,
+ title: adminClientProfileItem.name,
                 description: "Update the core CRM record for this client, including admin access and operational notes."
               }),
               adminNav,
               renderDetailGrid([
-                { label: "Email", value: escapeHtml(profile.body.item.email) },
-                { label: "Phone", value: escapeHtml(profile.body.item.phone ?? "Not provided") },
-                { label: "Address", value: escapeHtml(profile.body.item.address ?? "Not provided") },
+ { label: "Email", value: escapeHtml(adminClientProfileItem.email) },
+ { label: "Phone", value: escapeHtml(adminClientProfileItem.phone ?? "Not provided") },
+ { label: "Address", value: escapeHtml(adminClientProfileItem.address ?? "Not provided") },
                 {
                   label: "Admin Access",
-                  value: renderStatusPill(profile.body.item.isAdmin ? "Enabled" : "Disabled", profile.body.item.isAdmin ? "success" : "default")
+ value: renderStatusPill(adminClientProfileItem.isAdmin ? "Enabled" : "Disabled", adminClientProfileItem.isAdmin ? "success" : "default")
                 }
               ]),
               '<section class="surface-block">',
@@ -12246,13 +13183,13 @@ return;
               "<h2>Edit Client</h2>",
               `<form class="form-grid" method="post" action="/admin/clients/${encodeURIComponent(clientId)}/profile">`,
               '<div class="form-grid form-grid--two">',
-              `<label>Name<input type="text" name="name" value="${escapeHtml(profile.body.item.name)}" required></label>`,
-              `<label>Email<input type="email" name="email" value="${escapeHtml(profile.body.item.email)}" required></label>`,
-              `<label>Phone<input type="text" name="phone" value="${escapeHtml(profile.body.item.phone ?? "")}"></label>`,
+ `<label>Name<input type="text" name="name" value="${escapeHtml(adminClientProfileItem.name)}" required></label>`,
+ `<label>Email<input type="email" name="email" value="${escapeHtml(adminClientProfileItem.email)}" required></label>`,
+ `<label>Phone<input type="text" name="phone" value="${escapeHtml(adminClientProfileItem.phone ?? "")}"></label>`,
               "</div>",
-              `<label>Address<textarea name="address">${escapeHtml(profile.body.item.address ?? "")}</textarea></label>`,
-              `<label>Notes<textarea name="notes">${escapeHtml(profile.body.item.notes ?? "")}</textarea></label>`,
-              `<label><input type="checkbox" name="isAdmin"${profile.body.item.isAdmin ? " checked" : ""}> Grant admin access</label>`,
+ `<label>Address<textarea name="address">${escapeHtml(adminClientProfileItem.address ?? "")}</textarea></label>`,
+ `<label>Notes<textarea name="notes">${escapeHtml(adminClientProfileItem.notes ?? "")}</textarea></label>`,
+ `<label><input type="checkbox" name="isAdmin"${adminClientProfileItem.isAdmin ? " checked" : ""}> Grant admin access</label>`,
               '<div class="form-actions"><button type="submit">Save Client</button></div>',
               "</form>",
               "</section>",
@@ -12555,10 +13492,134 @@ return;
               "</article>"
             ].join("")
           }));
-          return;
-        }
+ return;
+ }
 
-        if (url.pathname === "/admin/invoices" || url.pathname === "/client/invoices_list.php") {
+ if (url.pathname === "/admin/expenses" || url.pathname === "/client/expenses_list.php") {
+ const expenses = await handlers.handleAdminExpenses(session);
+ if ("error" in expenses.body) {
+ await handleProtectedRouteFailure({
+ response,
+ request,
+ sessionStore: resolved.sessionStore,
+ loginPath: buildAdminLoginRedirectPath(request),
+ title: "Admin Expenses",
+ result: expenses
+ });
+ return;
+ }
+
+ const totalExpenses = expenses.body.items.reduce((sum, expense) => sum + expense.amount, 0);
+ const billableExpenses = expenses.body.items.reduce((sum, expense) => expense.billable ? sum + expense.amount : sum, 0);
+ const invoicedExpenses = expenses.body.items.filter((expense) => expense.invoiced).length;
+
+ writeHtml(response, 200, renderLayout({
+ title: "Admin Expenses",
+ body: [
+ '<article class="content-stack">',
+ renderSectionIntro({
+ eyebrow: "Expenses",
+ title: "Expenses",
+ description: "Track operating costs, billable reimbursements, and receipt coverage across the business."
+ }),
+ renderStatsGrid([
+ {
+ label: "Total Expenses",
+ value: formatCurrency(totalExpenses),
+ meta: "All recorded expense amounts",
+ accent: "primary"
+ },
+ {
+ label: "Billable Amount",
+ value: formatCurrency(billableExpenses),
+ meta: "Eligible to pass through clients",
+ accent: "success"
+ },
+ {
+ label: "Invoiced Entries",
+ value: invoicedExpenses,
+ meta: invoicedExpenses === 1 ? "Expense already invoiced" : "Expenses already invoiced",
+ accent: "warning"
+ }
+ ]),
+ adminNav,
+ '<section class="surface-block">',
+ "<h2>Expense Ledger</h2>",
+ renderDataTable({
+ headers: ["Expense ID", "Date", "Category", "Description", "Client", "Amount", "Status"],
+ rows: expenses.body.items.map((expense) => [
+ `<a href="/admin/expenses/${encodeURIComponent(expense.id)}">${escapeHtml(expense.id)}</a>`,
+ escapeHtml(formatAdminDate(expense.expenseDate)),
+ escapeHtml(expense.category),
+ escapeHtml(expense.description),
+ expense.clientId == null
+ ? "General"
+ : `<a href="/admin/clients/${encodeURIComponent(expense.clientId)}">${escapeHtml(expense.clientName ?? expense.clientId)}</a>`,
+ escapeHtml(formatCurrency(expense.amount)),
+ renderExpenseStatusPill(expense)
+ ]),
+ emptyMessage: "No expenses."
+ }),
+ "</section>",
+ "</article>"
+ ].join("")
+ }));
+ return;
+ }
+
+ if (adminExpenseDetailMatch != null) {
+ const expenseId = decodeURIComponent(adminExpenseDetailMatch[1] ?? "");
+ const expense = await handlers.handleAdminExpenseDetail(session, expenseId);
+ if ("error" in expense.body) {
+ redirect(response, "/admin/expenses");
+ return;
+ }
+
+ const receiptLink = expense.body.item.receiptFile == null
+ ? "No receipt uploaded"
+ : `<a href="/backend/uploads/receipts/${encodeURIComponent(expense.body.item.receiptFile)}" target="_blank" rel="noreferrer">Open receipt</a>`;
+ const clientValue = expense.body.item.clientId == null
+ ? "General"
+ : `<a href="/admin/clients/${encodeURIComponent(expense.body.item.clientId)}">${escapeHtml(expense.body.item.clientName ?? expense.body.item.clientId)}</a>`;
+
+ writeHtml(response, 200, renderLayout({
+ title: "Admin Expense Detail",
+ body: [
+ '<article class="content-stack">',
+ renderSectionIntro({
+ eyebrow: "Expenses",
+ title: expense.body.item.id,
+ description: "Review classification, reimbursement status, attached receipt, and bookkeeping notes for this expense."
+ }),
+ adminNav,
+ '<section class="surface-block">',
+ "<h2>Expense Details</h2>",
+ renderDetailGrid([
+ { label: "Expense ID", value: escapeHtml(expense.body.item.id) },
+ { label: "Client", value: clientValue },
+ { label: "Category", value: escapeHtml(expense.body.item.category) },
+ { label: "Amount", value: escapeHtml(formatCurrency(expense.body.item.amount)) },
+ { label: "Expense Date", value: escapeHtml(formatAdminDate(expense.body.item.expenseDate)) },
+ { label: "Status", value: renderExpenseStatusPill(expense.body.item) },
+ { label: "Receipt", value: receiptLink },
+ { label: "Created", value: escapeHtml(formatAdminDateTime(expense.body.item.createdAt)) }
+ ]),
+ "</section>",
+ '<section class="surface-block">',
+ "<h2>Description</h2>",
+ `<p>${escapeHtml(expense.body.item.description)}</p>`,
+ "</section>",
+ '<section class="surface-block">',
+ "<h2>Notes</h2>",
+ `<p>${escapeHtml(expense.body.item.notes.trim() === "" ? "No notes provided." : expense.body.item.notes)}</p>`,
+ "</section>",
+ "</article>"
+ ].join("")
+ }));
+ return;
+ }
+
+ if (url.pathname === "/admin/invoices" || url.pathname === "/client/invoices_list.php") {
           const invoices = await handlers.handleAdminInvoices(session);
           if ("error" in invoices.body) {
             await handleProtectedRouteFailure({
@@ -12931,35 +13992,149 @@ return;
         if (adminPetDetailMatch != null) {
           const petId = decodeURIComponent(adminPetDetailMatch[1] ?? "");
           const pet = await handlers.handleAdminPetDetail(session, petId);
-          if ("error" in pet.body) {
-            redirect(response, "/admin/pets");
-            return;
-          }
+if ("error" in pet.body) {
+redirect(response, "/admin/pets");
+return;
+}
 
-          writeHtml(response, 200, renderLayout({
+const adminPetItem = (pet.body as { item: Pet }).item;
+const ownerProfile = await loadSafeRouteItem<ClientProfile>(() => handlers.handleAdminClientProfile(session, adminPetItem.clientId));
+const [contacts, files, allBookings, allForms, allAchievements] = await Promise.all([
+loadSafeRouteItems<ClientContact>(() => handlers.handleAdminClientContacts(session, adminPetItem.clientId)),
+loadSafeRouteItems<PetFile>(() => handlers.handleAdminPetFiles(session, petId)),
+loadSafeRouteItems<Booking>(() => handlers.handleAdminBookings(session)),
+loadSafeRouteItems<FormSubmission>(() => handlers.handleAdminForms(session)),
+loadSafeRouteItems<ClientAchievement>(() => handlers.handleAdminClientAchievements(session, adminPetItem.clientId))
+]);
+const primaryContact = contacts.find((contact) => contact.isPrimary) ?? contacts[0] ?? null;
+const petBookings = sortByTimeAsc(
+allBookings.filter((booking) => booking.petIds.includes(adminPetItem.id)),
+(booking) => booking.startsAt
+);
+const upcomingBookings = petBookings.filter((booking) => booking.status !== "completed" && booking.status !== "cancelled").slice(0, 5);
+const recentFiles = sortByTimeDesc(files, (file) => file.uploadedAt).slice(0, 5);
+const petForms = sortByTimeDesc(
+allForms.filter((form) => form.petId === adminPetItem.id),
+(form) => form.reviewedAt ?? form.submittedAt ?? null
+).slice(0, 5);
+const petAchievements = sortByTimeDesc(
+allAchievements.filter((achievement) => petMatchesAchievement(adminPetItem, achievement)),
+(achievement) => achievement.revokedAt ?? achievement.updatedAt ?? achievement.awardedOn
+).slice(0, 5);
+const nextBooking = upcomingBookings[0] ?? null;
+const latestFile = recentFiles[0] ?? null;
+const latestForm = petForms[0] ?? null;
+
+writeHtml(response, 200, renderLayout({
+title: "Admin Pet Detail",
+body: [
+'<article class="content-stack">',
+renderSectionIntro({
+eyebrow: "Pets",
+title: adminPetItem.name,
+description: "Review ownership, care notes, linked files, appointments, and pet-specific paperwork from the same record."
+}),
+adminNav,
+renderStatsGrid([
+{ label: "Files", value: files.length, meta: latestFile == null ? "No uploads yet" : latestFile.originalName, accent: "primary" },
+{ label: "Appointments", value: upcomingBookings.length, meta: nextBooking == null ? "No active bookings" : formatAdminDateTime(nextBooking.startsAt), accent: "success" },
+{ label: "Forms", value: petForms.length, meta: latestForm == null ? "No linked forms yet" : getAdminFormSubmissionTitle(latestForm), accent: "secondary" },
+{ label: "Achievements", value: petAchievements.length, meta: petAchievements.length === 0 ? "No pet-specific awards yet" : "Training milestones linked", accent: "warning" }
+]),
+'<section class="surface-block">',
+"<h2>Pet Details</h2>",
+renderDetailGrid([
+{ label: "Pet ID", value: escapeHtml(adminPetItem.id) },
+{ label: "Species", value: escapeHtml(adminPetItem.species) },
+{ label: "Status", value: renderStatusPill(adminPetItem.archived ? "Archived" : "Active", adminPetItem.archived ? "warning" : "success") },
+{ label: "Owner ID", value: escapeHtml(adminPetItem.clientId) },
+{
+label: "Owner Profile",
+value: ownerProfile == null
+? "Owner profile unavailable"
+: `<a href="/admin/clients/${encodeURIComponent(ownerProfile.id)}/profile">${escapeHtml(ownerProfile.name)}</a>`
+},
+{
+label: "Primary Contact",
+value: primaryContact == null
+? "No contact on file"
+: `<a href="/admin/clients/${encodeURIComponent(adminPetItem.clientId)}/contacts/${encodeURIComponent(primaryContact.id)}">${escapeHtml(primaryContact.name)}</a>`
+},
+{
+label: "Next Appointment",
+value: nextBooking == null
+? "No active appointments"
+: `<a href="/admin/bookings/${encodeURIComponent(nextBooking.id)}">${escapeHtml(formatAdminDateTime(nextBooking.startsAt))}</a>`
+},
+{
+label: "Latest Form",
+value: latestForm == null
+? "No linked forms"
+: `<a href="/admin/forms/${encodeURIComponent(latestForm.id)}">${escapeHtml(getAdminFormSubmissionTitle(latestForm))}</a>`
+}
+]),
+"</section>",
+'<section class="surface-block">',
+"<h2>Care Notes</h2>",
+renderLongTextBlock(adminPetItem.petSittingNotes, "No care notes have been recorded for this pet yet."),
+"</section>",
+'<section class="surface-block">',
+"<h2>Pet Workspace</h2>",
+`<div class="form-actions"><a href="/client/form_requests_create.php?form_type=pet_form&pet_id=${encodeURIComponent(adminPetItem.id)}">Create Pet Form</a><a href="/admin/pets/${encodeURIComponent(adminPetItem.id)}/files">Manage Files</a><a href="/admin/pets">Back to Pets</a></div>`,
+renderQuickLinksGrid([
+{ href: `/admin/pets/${encodeURIComponent(adminPetItem.id)}/files`, label: "Files", description: files.length === 0 ? "Upload intake, vaccine, or image records." : `${formatCountLabel(files.length, "stored file")} linked to this pet.` },
+{ href: `/admin/clients/${encodeURIComponent(adminPetItem.clientId)}/profile`, label: "Owner", description: ownerProfile == null ? "Open the linked client profile." : ownerProfile.name },
+{ href: "/admin/bookings", label: "Appointments", description: upcomingBookings.length === 0 ? "No upcoming bookings linked to this pet." : `${formatCountLabel(upcomingBookings.length, "upcoming visit")} linked here.` },
+{ href: "/admin/forms", label: "Forms", description: petForms.length === 0 ? "No pet-specific forms submitted yet." : `${formatCountLabel(petForms.length, "linked form")} visible from this profile.` },
+{ href: `/admin/clients/${encodeURIComponent(adminPetItem.clientId)}/achievements`, label: "Achievements", description: petAchievements.length === 0 ? "No awards linked to this pet yet." : `${formatCountLabel(petAchievements.length, "achievement")} recorded for this pet.` },
+{ href: `/admin/clients/${encodeURIComponent(adminPetItem.clientId)}/contacts`, label: "Contacts", description: contacts.length === 0 ? "No household contacts available." : `${formatCountLabel(contacts.length, "contact")} available for follow-up.` }
+]),
+"</section>",
+'<section class="surface-block">',
+"<h2>Stored Files</h2>",
+renderPetFilesPreviewTable(recentFiles, (file) => `/admin/pets/${encodeURIComponent(adminPetItem.id)}/files/${encodeURIComponent(file.id)}/content`),
+"</section>",
+'<section class="surface-block">',
+"<h2>Appointments</h2>",
+renderBookingsPreviewTable(upcomingBookings, (booking) => `/admin/bookings/${encodeURIComponent(booking.id)}`),
+"</section>",
+'<section class="surface-block">',
+"<h2>Linked Forms</h2>",
+renderFormsPreviewTable(petForms, (form) => `/admin/forms/${encodeURIComponent(form.id)}`),
+"</section>",
+'<section class="surface-block">',
+"<h2>Achievements</h2>",
+renderAchievementsPreviewTable(petAchievements, (achievement) => `/admin/clients/${encodeURIComponent(adminPetItem.clientId)}/achievements/${encodeURIComponent(achievement.id)}`),
+"</section>",
+"</article>"
+].join("")
+}));
+return;
+
+writeHtml(response, 200, renderLayout({
             title: "Admin Pet Detail",
             body: [
               '<article class="content-stack">',
               renderSectionIntro({
                 eyebrow: "Pets",
-                title: pet.body.item.name,
+ title: adminPetItem.name,
                 description: "Review this pet profile, service notes, and linked file management."
               }),
               adminNav,
               '<section class="surface-block">',
               "<h2>Pet Details</h2>",
               renderDetailGrid([
-                { label: "Pet ID", value: escapeHtml(pet.body.item.id) },
-                { label: "Client ID", value: escapeHtml(pet.body.item.clientId) },
-                { label: "Name", value: escapeHtml(pet.body.item.name) },
-                { label: "Species", value: escapeHtml(pet.body.item.species) },
+ { label: "Pet ID", value: escapeHtml(adminPetItem.id) },
+ { label: "Client ID", value: escapeHtml(adminPetItem.clientId) },
+ { label: "Name", value: escapeHtml(adminPetItem.name) },
+ { label: "Species", value: escapeHtml(adminPetItem.species) },
                 {
                   label: "Status",
-                  value: renderStatusPill(pet.body.item.archived ? "Archived" : "Active", pet.body.item.archived ? "warning" : "success")
+ value: renderStatusPill(adminPetItem.archived ? "Archived" : "Active", adminPetItem.archived ? "warning" : "success")
                 },
-                { label: "Pet Sitting Notes", value: escapeHtml(pet.body.item.petSittingNotes) }
+ { label: "Pet Sitting Notes", value: escapeHtml(adminPetItem.petSittingNotes) }
               ]),
-              `<div class="form-actions"><a href="/client/form_requests_create.php?form_type=pet_form&pet_id=${encodeURIComponent(pet.body.item.id)}">Create Pet Form</a><a href="/admin/pets/${encodeURIComponent(pet.body.item.id)}/files">Manage Files</a><a href="/admin/pets">Back to Pets</a></div>`,
+ `<div class="form-actions"><a href="/client/form_requests_create.php?form_type=pet_form&pet_id=${encodeURIComponent(adminPetItem.id)}">Create Pet Form</a><a href="/admin/pets/${encodeURIComponent(adminPetItem.id)}/files">Manage Files</a><a href="/admin/pets">Back to Pets</a></div>`,
               "</section>",
               "</article>"
             ].join("")
@@ -15001,45 +16176,45 @@ return;
         return;
       }
 
-      if (url.pathname === "/page.php") {
-        const pageSlug = url.searchParams.get("slug")?.trim() ?? "";
-        const page = await getPublicSitePage(pageSlug, resolved.content);
-        writeHtml(response, 200, renderPublicPageLayout({
-          title: page.item.title,
-          description: page.item.metaDescription,
-          css: page.item.cssContent,
-          publicRenderAssets: await getPublicRenderAssets(),
-          includeNewsletterEmbed: true,
-          requestPath,
-          body: renderPublicPageContent({
-            slug: pageSlug,
-            title: page.item.title,
-            htmlContent: page.item.htmlContent,
-            metaDescription: page.item.metaDescription
-          })
-        }));
-        return;
-      }
+if (url.pathname === "/page.php") {
+  const pageSlug = url.searchParams.get("slug")?.trim() ?? "";
+  const page = await getPublicSitePageForRender(pageSlug, resolved.content);
+  writeHtml(response, 200, renderPublicPageLayout({
+    title: page.title,
+    description: page.metaDescription,
+    css: page.cssContent,
+    publicRenderAssets: await getPublicRenderAssets(),
+    includeNewsletterEmbed: true,
+    requestPath,
+    body: renderPublicPageContent({
+      slug: pageSlug,
+      title: page.title,
+      htmlContent: page.htmlContent,
+      metaDescription: page.metaDescription
+    })
+  }));
+  return;
+}
 
-      const slug = url.pathname.replace(/^\/+/, "");
-      if (slug !== "") {
-        const page = await getPublicSitePage(slug, resolved.content);
-        writeHtml(response, 200, renderPublicPageLayout({
-          title: page.item.title,
-          description: page.item.metaDescription,
-          css: page.item.cssContent,
-          publicRenderAssets: await getPublicRenderAssets(),
-          includeNewsletterEmbed: true,
-          requestPath,
-          body: renderPublicPageContent({
-            slug,
-            title: page.item.title,
-            htmlContent: page.item.htmlContent,
-            metaDescription: page.item.metaDescription
-          })
-        }));
-        return;
-      }
+const slug = url.pathname.replace(/^\/+/, "");
+if (slug !== "") {
+  const page = await getPublicSitePageForRender(slug, resolved.content);
+  writeHtml(response, 200, renderPublicPageLayout({
+    title: page.title,
+    description: page.metaDescription,
+    css: page.cssContent,
+    publicRenderAssets: await getPublicRenderAssets(),
+    includeNewsletterEmbed: true,
+    requestPath,
+    body: renderPublicPageContent({
+      slug,
+      title: page.title,
+      htmlContent: page.htmlContent,
+      metaDescription: page.metaDescription
+    })
+  }));
+  return;
+}
 
       writeHtml(response, 404, renderPublicPageLayout({
         title: "Not Found",

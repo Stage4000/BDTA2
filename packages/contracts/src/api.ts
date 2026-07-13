@@ -13,6 +13,7 @@ import {
   creditSchema,
   emailTemplateSchema,
   emailSchema,
+  expenseSchema,
   formTemplateSchema,
   formSubmissionSchema,
   idSchema,
@@ -138,6 +139,10 @@ export const adminIntegrationCallbackLogDetailSchema = z.object({
 
 export const bookingCollectionSchema = z.object({
   items: z.array(bookingSchema)
+});
+
+export const expenseCollectionSchema = z.object({
+  items: z.array(expenseSchema)
 });
 
 export const invoiceCollectionSchema = z.object({
@@ -339,6 +344,10 @@ export const scheduledTaskCollectionSchema = z.object({
 
 export const bookingDetailSchema = z.object({
   item: bookingSchema
+});
+
+export const expenseDetailSchema = z.object({
+  item: expenseSchema
 });
 
 export const blogPostDetailSchema = z.object({
@@ -725,6 +734,7 @@ export type AdminIntegrationCallbackLog = z.infer<typeof adminIntegrationCallbac
 export type AdminIntegrationCallbackLogCollection = z.infer<typeof adminIntegrationCallbackLogCollectionSchema>;
 export type AdminIntegrationCallbackLogDetail = z.infer<typeof adminIntegrationCallbackLogDetailSchema>;
 export type BookingCollection = z.infer<typeof bookingCollectionSchema>;
+export type ExpenseCollection = z.infer<typeof expenseCollectionSchema>;
 export type InvoiceCollection = z.infer<typeof invoiceCollectionSchema>;
 export type QuoteCollection = z.infer<typeof quoteCollectionSchema>;
 export type ContractCollection = z.infer<typeof contractCollectionSchema>;
@@ -757,6 +767,7 @@ export type AdminSettingsAccountType = z.infer<typeof adminSettingsAccountTypeSc
 export type AdminSettingsUser = z.infer<typeof adminSettingsUserSchema>;
 export type AdminSettingsOverview = z.infer<typeof adminSettingsOverviewSchema>;
 export type BookingDetail = z.infer<typeof bookingDetailSchema>;
+export type ExpenseDetail = z.infer<typeof expenseDetailSchema>;
 export type BlogPostDetail = z.infer<typeof blogPostDetailSchema>;
 export type SitePageDetail = z.infer<typeof sitePageDetailSchema>;
 export type SettingDetail = z.infer<typeof settingDetailSchema>;
