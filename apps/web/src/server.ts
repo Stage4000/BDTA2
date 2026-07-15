@@ -39,6 +39,7 @@ import {
 import type {
   AppointmentType,
   Booking,
+  Client,
   ClientAchievement,
   ClientContact,
   ClientProfile,
@@ -1872,6 +1873,74 @@ function renderLongTextBlock(value: string | null | undefined, emptyMessage: str
 
 function formatCountLabel(count: number, singular: string, plural = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function renderAdminClientDisplayName(client: Client): string {
+  const fullName = `${client.firstName} ${client.lastName}`.trim();
+  return fullName === "" ? client.email : fullName;
+}
+
+function renderAdminClientCreateModal(): string {
+  return [
+    "<style>",
+    ".admin-client-modal { width: min(720px, calc(100vw - 2rem)); padding: 0; border: none; border-radius: 1.2rem; box-shadow: 0 30px 80px rgba(15, 23, 42, 0.35); }",
+    ".admin-client-modal::backdrop { background: rgba(15, 23, 42, 0.72); }",
+    ".admin-client-modal__card { display: grid; gap: 1rem; padding: 1.5rem; }",
+    ".admin-client-modal__header { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; }",
+    ".admin-client-modal__header h2 { margin-bottom: 0.35rem; }",
+    ".admin-client-modal__close { white-space: nowrap; }",
+    "</style>",
+    '<section class="surface-block">',
+    "<h2>Create Client</h2>",
+    '<p class="section-copy">Start a new client record without leaving the directory. Detailed editing remains on the client profile after creation.</p>',
+    '<div class="form-actions"><button type="button" id="admin-client-create-open">New Client</button></div>',
+    "</section>",
+    '<dialog id="admin-client-create-dialog" class="admin-client-modal" aria-labelledby="admin-client-create-title">',
+    '<div class="admin-client-modal__card">',
+    '<div class="admin-client-modal__header">',
+    '<div><p class="eyebrow">Clients</p><h2 id="admin-client-create-title">Create Client</h2><p class="section-copy">Add the household record, then use the client profile to manage notes, contacts, and training history.</p></div>',
+    '<button type="button" class="admin-client-modal__close" id="admin-client-create-close" aria-label="Close create client modal">Close</button>',
+    "</div>",
+    '<form class="form-grid" method="post" action="/admin/clients">',
+    '<div class="form-grid form-grid--two">',
+    '<label>Name<input type="text" name="name" required></label>',
+    '<label>Email<input type="email" name="email" required></label>',
+    '<label>Phone<input type="text" name="phone"></label>',
+    '<label><span>Admin Access</span><input type="checkbox" name="isAdmin"></label>',
+    "</div>",
+    '<label>Address<textarea name="address"></textarea></label>',
+    '<label>Notes<textarea name="notes"></textarea></label>',
+    '<div class="form-actions"><button type="submit">Create Client</button><button type="button" id="admin-client-create-cancel">Cancel</button></div>',
+    "</form>",
+    "</div>",
+    "</dialog>",
+    "<script>",
+    "(function () {",
+    " const dialog = document.getElementById('admin-client-create-dialog');",
+    " if (!(dialog instanceof HTMLDialogElement)) return;",
+    " const openButton = document.getElementById('admin-client-create-open');",
+    " const closeButtons = [document.getElementById('admin-client-create-close'), document.getElementById('admin-client-create-cancel')];",
+    " const closeDialog = () => { if (dialog.open) dialog.close(); };",
+    " openButton?.addEventListener('click', () => dialog.showModal());",
+    " for (const button of closeButtons) button?.addEventListener('click', closeDialog);",
+    " dialog.addEventListener('click', (event) => { const rect = dialog.getBoundingClientRect(); const inside = event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom; if (!inside) closeDialog(); });",
+    "})();",
+    "</script>"
+  ].join("");
+}
+
+function renderAdminClientDirectoryTable(clients: Client[]): string {
+  return renderDataTable({
+    headers: ["ID", "Client", "Email", "Status", "Actions"],
+    rows: clients.map((client) => [
+      `<a href="/admin/clients/${encodeURIComponent(client.id)}/profile">${escapeHtml(client.id)}</a>`,
+      `<a href="/admin/clients/${encodeURIComponent(client.id)}/profile">${escapeHtml(renderAdminClientDisplayName(client))}</a>`,
+      escapeHtml(client.email),
+      renderStatusPill(client.archived ? "Archived" : "Active", client.archived ? "warning" : "success"),
+      `<div class="table-actions"><a href="/admin/clients/${encodeURIComponent(client.id)}/profile">Manage</a><a href="/admin/clients/${encodeURIComponent(client.id)}/contacts">Contacts</a><a href="/admin/clients/${encodeURIComponent(client.id)}/achievements">Achievements</a></div>`
+    ]),
+    emptyMessage: "No clients."
+  });
 }
 
 function renderContactsPreviewTable(
@@ -13003,39 +13072,19 @@ return;
           writeHtml(response, 200, renderLayout({
             title: "Admin Clients",
             body: [
-              "<article>",
-              renderSectionIntro({
-                eyebrow: "Clients",
-                title: "Client Management",
-                description: "Create client records and move into detailed profile, contacts, and training history views."
-              }),
-              '<section class="surface-block">',
-              "<h2>Create Client</h2>",
-              '<form class="form-grid" method="post" action="/admin/clients">',
-              '<div class="form-grid form-grid--two">',
-              '<label>Name<input type="text" name="name" required></label>',
-              '<label>Email<input type="email" name="email" required></label>',
-              '<label>Phone<input type="text" name="phone"></label>',
-              '<label><span>Admin Access</span><input type="checkbox" name="isAdmin"></label>',
-              "</div>",
-              '<label>Address<textarea name="address"></textarea></label>',
-              '<label>Notes<textarea name="notes"></textarea></label>',
-              '<div class="form-actions"><button type="submit">Create Client</button></div>',
-              "</form>",
-              "</section>",
-              '<section class="surface-block">',
-              "<h2>Client Directory</h2>",
-              renderDataTable({
-                headers: ["ID", "Name", "Email"],
-                rows: clients.body.items.map((client) => [
-                  `<a href="/admin/clients/${encodeURIComponent(client.id)}/profile">${escapeHtml(client.id)}</a>`,
-                  escapeHtml(`${client.firstName} ${client.lastName}`.trim()),
-                  escapeHtml(client.email)
-                ]),
-                emptyMessage: "No clients."
-              }),
-              "</section>",
-              "</article>"
+      '<article class="content-stack">',
+      renderSectionIntro({
+        eyebrow: "Clients",
+        title: "Client Management",
+        description: "Create client records, jump directly into profile management, and keep contacts and achievements one click away."
+      }),
+      renderAdminClientCreateModal(),
+      '<section class="surface-block">',
+      "<h2>Client Directory</h2>",
+      '<p class="section-copy">Open the client profile to edit the CRM record, then use the dedicated management links for contacts and achievements.</p>',
+      renderAdminClientDirectoryTable(clients.body.items),
+      "</section>",
+      "</article>"
             ].join("")
           }));
           return;
