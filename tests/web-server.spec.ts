@@ -4840,9 +4840,10 @@ expect(legacyContractView.headers.get("location")).toBe("/admin/contracts/contra
       expect(settingsHtml).toContain('class="settings-shell" data-no-reveal');
       expect(settingsHtml).toContain('href="/admin/settings" aria-current="page"');
       expect(settingsHtml).toContain("settings-sidebar__panel");
-      expect(settingsHtml).toContain("API-Key Access");
-      expect(settingsHtml).toContain("?category=database");
-      expect(settingsHtml).toContain("settings-summary-grid");
+expect(settingsHtml).toContain("API-Key Access");
+expect(settingsHtml).toContain("?category=database");
+expect(settingsHtml).toContain("?category=calendar");
+expect(settingsHtml).toContain("settings-summary-grid");
     expect(settingsHtml).toContain("Validation and Live Launch Status");
     expect(settingsHtml).toContain("Release Validation");
     expect(settingsHtml).toContain("Integration Readiness");
