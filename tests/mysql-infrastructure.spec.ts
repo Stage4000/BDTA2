@@ -346,6 +346,39 @@ it("normalizes legacy booking timestamps before listing admin bookings", async (
   expect(executor.calls[0]?.sql).toContain("FROM bookings");
 });
 
+it("normalizes Date-backed legacy booking rows before listing recent bookings", async () => {
+  const executor = new FakeSqlExecutor([
+    rows([{
+      id: 84,
+      client_id: 9,
+      service_type: "svc-private-lesson",
+      appointment_date: new Date("2026-06-02T00:00:00.000Z"),
+      appointment_time: "4:15 PM",
+      duration_minutes: 45,
+      status: "confirmed",
+      ical_token: null
+    }])
+  ]);
+
+  const recentBookings = await createMySqlApiDependencies(executor, {
+    now: () => "2026-06-01T12:00:00.000Z"
+  }).adminDashboard.listRecentBookings();
+
+  expect(recentBookings).toEqual([
+    {
+      id: "84",
+      clientId: "9",
+      petIds: [],
+      serviceId: "svc-private-lesson",
+      startsAt: "2026-06-02T16:15:00.000Z",
+      endsAt: "2026-06-02T17:00:00.000Z",
+      status: "confirmed",
+      icalAccess: null
+    }
+  ]);
+  expect(executor.calls[0]?.sql).toContain("FROM bookings");
+});
+
 it("normalizes legacy transactional records with missing references before listing admin resources", async () => {
   const executor = new FakeSqlExecutor([
     rows([{

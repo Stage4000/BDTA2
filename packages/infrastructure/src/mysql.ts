@@ -561,7 +561,15 @@ function normalizeLegacyDateValue(value: string | Date | null | undefined): stri
   return trimmed === "" || isLegacyZeroDateValue(trimmed) ? null : trimmed;
 }
 
-function normalizeLegacyTimeOfDay(value: string): string {
+function normalizeLegacyTimeOfDay(value: string | Date | null | undefined): string {
+  if (value == null) {
+    return "00:00:00";
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString().slice(11, 19);
+  }
+
   const normalized = value.trim();
   if (/^\d{1,2}:\d{2}$/.test(normalized)) {
     return `${normalized}:00`;
@@ -585,8 +593,11 @@ function normalizeLegacyTimeOfDay(value: string): string {
   return "00:00:00";
 }
 
-function toTimestamp(date: string, time: string): string {
-  const normalizedDate = /^\d{4}-\d{2}-\d{2}$/.test(date.trim()) ? date.trim() : "1970-01-01";
+function toTimestamp(date: string | Date | null | undefined, time: string | Date | null | undefined): string {
+  const normalizedDateValue = normalizeLegacyDateValue(date);
+  const normalizedDate = normalizedDateValue != null && /^\d{4}-\d{2}-\d{2}$/.test(normalizedDateValue)
+    ? normalizedDateValue
+    : "1970-01-01";
   const timestamp = `${normalizedDate}T${normalizeLegacyTimeOfDay(time)}.000Z`;
   return Number.isNaN(Date.parse(timestamp)) ? "1970-01-01T00:00:00.000Z" : timestamp;
 }
@@ -610,8 +621,8 @@ function fromLegacyBookingRow(row: {
   id: number;
   client_id?: number | null;
   service_type: string;
-  appointment_date: string;
-  appointment_time: string;
+  appointment_date: string | Date;
+  appointment_time: string | Date;
   duration_minutes: number;
   status: string | null;
   ical_token?: string | null;
@@ -1864,8 +1875,8 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
     id: number;
     client_id?: number | null;
     service_type: string;
-    appointment_date: string;
-    appointment_time: string;
+    appointment_date: string | Date;
+    appointment_time: string | Date;
     duration_minutes: number;
     status: string | null;
     ical_token?: string | null;
