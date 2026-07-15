@@ -3511,6 +3511,7 @@ expect(dashboardHtml).toContain("booking-1");
       expect(dashboardHtml).toContain("app-main-content");
 expect(dashboardHtml).toContain("summary-grid");
 expect(dashboardHtml).toContain("summary-grid--count-4");
+expect(dashboardHtml).toContain("quick-links-grid--count-11");
 expect(dashboardHtml).toContain("data-table");
       expect(dashboardHtml).not.toContain('class="inline-link-list"');
     expect(clientsHtml).toContain("client-portal-1");
