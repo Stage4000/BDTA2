@@ -4515,16 +4515,21 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
         },
         redirect: "manual"
       });
-      const databaseSettings = await fetch(`${baseUrl}/admin/settings?category=database`, {
-        headers: {
-          cookie: adminCookie ?? ""
-        }
-      });
-      const communicationsSettings = await fetch(`${baseUrl}/admin/settings?category=communications`, {
-        headers: {
-          cookie: adminCookie ?? ""
-        }
-      });
+    const databaseSettings = await fetch(`${baseUrl}/admin/settings?category=database`, {
+      headers: {
+        cookie: adminCookie ?? ""
+      }
+    });
+    const calendarSettings = await fetch(`${baseUrl}/admin/settings?category=calendar`, {
+      headers: {
+        cookie: adminCookie ?? ""
+      }
+    });
+    const communicationsSettings = await fetch(`${baseUrl}/admin/settings?category=communications`, {
+      headers: {
+        cookie: adminCookie ?? ""
+      }
+    });
       const adminSettingsUsersPage = await fetch(`${baseUrl}/admin/settings?category=admins`, {
         headers: {
           cookie: adminCookie ?? ""
@@ -4587,10 +4592,11 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
       expect(sitePageEditor.status).toBe(200);
       expect(legacySitePageEditor.status).toBe(200);
       expect(settings.status).toBe(200);
-      expect(overviewSettings.status).toBe(200);
-      expect(overviewSettingsRedirect.status).toBe(302);
-      expect(databaseSettings.status).toBe(200);
-      expect(communicationsSettings.status).toBe(200);
+    expect(overviewSettings.status).toBe(200);
+    expect(overviewSettingsRedirect.status).toBe(302);
+    expect(databaseSettings.status).toBe(200);
+    expect(calendarSettings.status).toBe(200);
+    expect(communicationsSettings.status).toBe(200);
       expect(adminSettingsUsersPage.status).toBe(200);
       expect(legacySettings.status).toBe(200);
       expect(settingDetail.status).toBe(200);
@@ -4612,10 +4618,11 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
       const sitePageDetailHtml = await sitePageDetail.text();
       const sitePageEditorHtml = await sitePageEditor.text();
       const legacySitePageEditorHtml = await legacySitePageEditor.text();
-      const settingsHtml = await settings.text();
-      const overviewSettingsHtml = await overviewSettings.text();
-      const databaseSettingsHtml = await databaseSettings.text();
-      const communicationsSettingsHtml = await communicationsSettings.text();
+    const settingsHtml = await settings.text();
+    const overviewSettingsHtml = await overviewSettings.text();
+    const databaseSettingsHtml = await databaseSettings.text();
+    const calendarSettingsHtml = await calendarSettings.text();
+    const communicationsSettingsHtml = await communicationsSettings.text();
       const adminSettingsUsersHtml = await adminSettingsUsersPage.text();
       const legacySettingsHtml = await legacySettings.text();
       const settingDetailHtml = await settingDetail.text();
@@ -4691,12 +4698,15 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
       expect(settingsHtml).toContain("API-Key Access");
       expect(settingsHtml).toContain("?category=database");
       expect(settingsHtml).toContain("settings-summary-grid");
-      expect(settingsHtml).toContain("Validation and Live Launch Status");
-      expect(settingsHtml).toContain("Release Validation");
-      expect(settingsHtml).toContain("Integration Readiness");
-      expect(settingsHtml).toContain("settings-console-search");
-      expect(settingsHtml).toContain("settings-category-section");
-      expect(settingsHtml).toContain("Site");
+    expect(settingsHtml).toContain("Validation and Live Launch Status");
+    expect(settingsHtml).toContain("Release Validation");
+    expect(settingsHtml).toContain("Integration Readiness");
+    expect(settingsHtml).toContain("settings-console-search");
+    expect(settingsHtml).toContain("settings-category-section");
+    expect(settingsHtml).toContain("Google Calendar Connection");
+    expect(settingsHtml).toContain('/backend/public/google_oauth_initiate.php');
+    expect(settingsHtml).toContain("Legacy-Compatible");
+    expect(settingsHtml).toContain("Site");
       expect(settingsHtml).toContain("Payments");
       expect(settingsHtml).toContain("Communications");
       expect(settingsHtml).toContain("Advanced");
@@ -4704,12 +4714,14 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
       expect(overviewSettingsRedirect.headers.get("location")).toBe("/admin/settings");
       expect(overviewSettingsHtml).toContain('href="/admin/settings" aria-current="page"');
       expect(overviewSettingsHtml).not.toContain('href="/admin/settings?category=overview"');
-      expect(databaseSettingsHtml).toContain("Runtime Environment");
-      expect(databaseSettingsHtml).toContain(".env.production");
-      expect(databaseSettingsHtml).toContain("MySQL Host");
-      expect(databaseSettingsHtml).toContain('value="db.plesk.internal"');
-      expect(databaseSettingsHtml).toContain("Plesk App Env");
-      expect(communicationsSettingsHtml).toContain("SMTP Password");
+    expect(databaseSettingsHtml).toContain("Runtime Environment");
+    expect(databaseSettingsHtml).toContain(".env.production");
+    expect(databaseSettingsHtml).toContain("MySQL Host");
+    expect(databaseSettingsHtml).toContain('value="db.plesk.internal"');
+    expect(databaseSettingsHtml).toContain("Plesk App Env");
+    expect(calendarSettingsHtml).toContain("Google Calendar Connection");
+    expect(calendarSettingsHtml).toContain("Legacy Calendar Screen");
+    expect(communicationsSettingsHtml).toContain("SMTP Password");
       expect(communicationsSettingsHtml).toContain("IMAP Folder");
       expect(communicationsSettingsHtml).toContain("Mailjet API Secret");
       expect(adminSettingsUsersHtml).toContain("Admin User Management");

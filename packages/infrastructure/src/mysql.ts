@@ -864,35 +864,36 @@ function toSettingRecord(row: {
   id: string | number;
   setting_key: string;
   setting_value: string | null;
-  setting_type: string;
-  category: string;
-  label: string;
-  description: string | null;
-  is_secret: number;
-  updated_at: string;
+  setting_type?: string | null;
+  category?: string | null;
+  label?: string | null;
+  description?: string | null;
+  is_secret?: number | null;
+  updated_at?: string | null;
 }): Setting {
   return {
     id: String(row.id),
     key: row.setting_key,
     value: row.setting_value ?? "",
-    type: row.setting_type,
-    category: row.category,
-    label: row.label,
+    type: row.setting_type?.trim() ? row.setting_type : "text",
+    category: row.category?.trim() ? row.category : "general",
+    label: row.label?.trim() ? row.label : row.setting_key,
     description: row.description ?? "",
-    secret: Number(row.is_secret) === 1,
-    updatedAt: row.updated_at
+    secret: Number(row.is_secret ?? 0) === 1,
+    updatedAt: row.updated_at?.trim() ? row.updated_at : "1970-01-01T00:00:00.000Z"
   };
 }
 
 function toAdminSettingsUserRecord(row: {
   id: string | number;
-  username: string;
-  email: string | null;
-  account_type: string | null;
-  can_manage_admin_users: number | null;
-  can_manage_api_keys: number | null;
+  username?: string | null;
+  email?: string | null;
+  account_type?: string | null;
+  can_manage_admin_users?: number | null;
+  can_manage_api_keys?: number | null;
 }) {
-  const username = row.username.trim();
+  const normalizedEmail = row.email?.trim() ?? "";
+  const username = row.username?.trim() || normalizedEmail || `admin-${String(row.id)}`;
   const accountTypeValue = row.account_type?.trim().toLowerCase() ?? "standard";
   const isMainAccount = username.toLowerCase() === "admin" || accountTypeValue === "main" || accountTypeValue === "owner";
   const accountType = isMainAccount
@@ -906,7 +907,7 @@ function toAdminSettingsUserRecord(row: {
   return {
     actorId: String(row.id),
     username,
-    email: row.email?.trim() ? row.email.trim() : `${username}@example.com`,
+    email: normalizedEmail !== "" ? normalizedEmail : `${username}@example.com`,
     accountType,
     role,
     isMainAccount,
@@ -1550,6 +1551,295 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
     return maybeCode === "ER_BAD_FIELD_ERROR"
       || maybeCode === "ER_NO_SUCH_TABLE"
       || (typeof maybeMessage === "string" && (/unknown column/i.test(maybeMessage) || /doesn't exist/i.test(maybeMessage)));
+  }
+
+  function getErrorMessage(error: unknown): string {
+    return typeof error === "object"
+      && error != null
+      && "message" in error
+      && typeof error.message === "string"
+      ? error.message.toLowerCase()
+      : "";
+  }
+
+  type LegacySettingRow = {
+    id: string;
+    setting_key: string;
+    setting_value: string | null;
+    setting_type?: string | null;
+    category?: string | null;
+    label?: string | null;
+    description?: string | null;
+    is_secret?: number | null;
+    updated_at?: string | null;
+  };
+
+  type SettingsSelectSqlFallback = {
+    omitCategory?: boolean;
+    omitLabel?: boolean;
+    omitDescription?: boolean;
+    omitSecret?: boolean;
+    omitUpdatedAt?: boolean;
+    omitType?: boolean;
+  };
+
+  function buildSettingsSelectSql(input: {
+    whereClause?: string;
+    fallback: SettingsSelectSqlFallback;
+  }): string {
+    const settingTypeSelect = input.fallback.omitType ? "'text' AS setting_type" : "setting_type";
+    const categorySelect = input.fallback.omitCategory ? "'general' AS category" : "category";
+    const labelSelect = input.fallback.omitLabel ? "setting_key AS label" : "label";
+    const descriptionSelect = input.fallback.omitDescription ? "NULL AS description" : "description";
+    const secretSelect = input.fallback.omitSecret ? "0 AS is_secret" : "is_secret";
+    const updatedAtSelect = input.fallback.omitUpdatedAt ? "NULL AS updated_at" : "updated_at";
+    const orderBy = input.fallback.omitCategory || input.fallback.omitLabel
+      ? "ORDER BY setting_key ASC"
+      : "ORDER BY category ASC, label ASC";
+
+    return [
+      `SELECT setting_key AS id, setting_key, setting_value, ${settingTypeSelect}, ${categorySelect}, ${labelSelect}, ${descriptionSelect}, ${secretSelect}, ${updatedAtSelect}`,
+      "FROM settings",
+      input.whereClause ?? "",
+      orderBy
+    ].filter((part) => part.trim() !== "").join(" ");
+  }
+
+  function getNextSettingsSelectFallback(
+    error: unknown,
+    current: SettingsSelectSqlFallback
+  ): SettingsSelectSqlFallback | null {
+    const message = getErrorMessage(error);
+    const next = { ...current };
+
+    if (message.includes("setting_type")) {
+      next.omitType = true;
+    }
+    if (message.includes("category")) {
+      next.omitCategory = true;
+    }
+    if (message.includes("label")) {
+      next.omitLabel = true;
+    }
+    if (message.includes("description")) {
+      next.omitDescription = true;
+    }
+    if (message.includes("is_secret")) {
+      next.omitSecret = true;
+    }
+    if (message.includes("updated_at")) {
+      next.omitUpdatedAt = true;
+    }
+
+    if (JSON.stringify(next) !== JSON.stringify(current)) {
+      return next;
+    }
+
+    if (!current.omitType) {
+      return { ...current, omitType: true };
+    }
+    if (!current.omitCategory) {
+      return { ...current, omitCategory: true };
+    }
+    if (!current.omitLabel) {
+      return { ...current, omitLabel: true };
+    }
+    if (!current.omitDescription) {
+      return { ...current, omitDescription: true };
+    }
+    if (!current.omitSecret) {
+      return { ...current, omitSecret: true };
+    }
+    if (!current.omitUpdatedAt) {
+      return { ...current, omitUpdatedAt: true };
+    }
+
+    return null;
+  }
+
+  async function loadLegacySettingRows(input: {
+    whereClause?: string;
+    params?: unknown[];
+  }): Promise<LegacySettingRow[]> {
+    let fallback: SettingsSelectSqlFallback = {};
+
+    while (true) {
+      try {
+        const [rows] = await executor.execute<Array<LegacySettingRow>>(
+          buildSettingsSelectSql({
+            whereClause: input.whereClause,
+            fallback
+          }),
+          input.params ?? []
+        );
+        return rows;
+      } catch (error) {
+        if (!isMissingColumnError(error)) {
+          throw error;
+        }
+
+        const nextFallback = getNextSettingsSelectFallback(error, fallback);
+        if (nextFallback == null) {
+          throw error;
+        }
+
+        fallback = nextFallback;
+      }
+    }
+  }
+
+  type LegacyAdminUserRow = {
+    id: number;
+    username?: string | null;
+    email?: string | null;
+    account_type?: string | null;
+    can_manage_admin_users?: number | null;
+    can_manage_api_keys?: number | null;
+    password_hash?: string | null;
+  };
+
+  type AdminUserSelectSqlFallback = {
+    synthesizeUsername?: boolean;
+    omitEmail?: boolean;
+    omitAccountType?: boolean;
+    omitManageAdminUsers?: boolean;
+    omitManageApiKeys?: boolean;
+    lookupByEmail?: boolean;
+  };
+
+  function buildAdminUserSelectSql(input: {
+    whereField?: "id" | "username";
+    includePasswordHash?: boolean;
+    forSettingsList?: boolean;
+    fallback: AdminUserSelectSqlFallback;
+  }): string {
+    const usernameSelect = input.fallback.synthesizeUsername
+      ? (input.fallback.omitEmail
+        ? "CONCAT('admin-', id) AS username"
+        : "COALESCE(NULLIF(TRIM(email), ''), CONCAT('admin-', id)) AS username")
+      : "username";
+    const emailSelect = input.fallback.omitEmail ? "NULL AS email" : "email";
+    const accountTypeSelect = input.fallback.omitAccountType ? "NULL AS account_type" : "account_type";
+    const manageAdminUsersSelect = input.fallback.omitManageAdminUsers ? "NULL AS can_manage_admin_users" : "can_manage_admin_users";
+    const manageApiKeysSelect = input.fallback.omitManageApiKeys ? "NULL AS can_manage_api_keys" : "can_manage_api_keys";
+
+    const fields = [
+      "id",
+      usernameSelect,
+      emailSelect,
+      accountTypeSelect,
+      manageAdminUsersSelect,
+      manageApiKeysSelect,
+      input.includePasswordHash ? "password_hash" : null
+    ].filter((field): field is string => field != null);
+
+    const whereClause = input.whereField === "id"
+      ? "WHERE id = ?"
+      : input.whereField === "username"
+        ? (input.fallback.lookupByEmail && !input.fallback.omitEmail ? "WHERE LOWER(email) = LOWER(?)" : "WHERE LOWER(username) = LOWER(?)")
+        : "";
+
+    const orderBy = input.forSettingsList
+      ? (input.fallback.synthesizeUsername || input.fallback.omitEmail || input.fallback.omitAccountType
+        ? "ORDER BY id ASC"
+        : "ORDER BY CASE WHEN username = 'admin' OR account_type IN ('main', 'owner') THEN 0 ELSE 1 END, username ASC, email ASC")
+      : "";
+
+    const limitClause = input.whereField == null ? "" : "LIMIT 1";
+
+    return [
+      `SELECT ${fields.join(", ")}`,
+      "FROM admin_users",
+      whereClause,
+      orderBy,
+      limitClause
+    ].filter((part) => part.trim() !== "").join(" ");
+  }
+
+  function getNextAdminUserSelectFallback(
+    error: unknown,
+    current: AdminUserSelectSqlFallback,
+    whereField?: "id" | "username"
+  ): AdminUserSelectSqlFallback | null {
+    const message = getErrorMessage(error);
+    const next = { ...current };
+
+    if (message.includes("username")) {
+      next.synthesizeUsername = true;
+      if (whereField === "username" && !current.omitEmail) {
+        next.lookupByEmail = true;
+      }
+    }
+    if (message.includes("email")) {
+      next.omitEmail = true;
+      next.lookupByEmail = false;
+    }
+    if (message.includes("account_type")) {
+      next.omitAccountType = true;
+    }
+    if (message.includes("can_manage_admin_users")) {
+      next.omitManageAdminUsers = true;
+    }
+    if (message.includes("can_manage_api_keys")) {
+      next.omitManageApiKeys = true;
+    }
+
+    if (JSON.stringify(next) !== JSON.stringify(current)) {
+      return next;
+    }
+
+    if (!current.omitAccountType) {
+      return { ...current, omitAccountType: true };
+    }
+    if (!current.omitManageAdminUsers) {
+      return { ...current, omitManageAdminUsers: true };
+    }
+    if (!current.omitManageApiKeys) {
+      return { ...current, omitManageApiKeys: true };
+    }
+    if (!current.omitEmail) {
+      return { ...current, omitEmail: true };
+    }
+    if (!current.synthesizeUsername) {
+      return { ...current, synthesizeUsername: true };
+    }
+
+    return null;
+  }
+
+  async function loadLegacyAdminUserRows(input: {
+    whereField?: "id" | "username";
+    params?: unknown[];
+    includePasswordHash?: boolean;
+    forSettingsList?: boolean;
+  }): Promise<LegacyAdminUserRow[]> {
+    let fallback: AdminUserSelectSqlFallback = {};
+
+    while (true) {
+      try {
+        const [rows] = await executor.execute<Array<LegacyAdminUserRow>>(
+          buildAdminUserSelectSql({
+            whereField: input.whereField,
+            includePasswordHash: input.includePasswordHash,
+            forSettingsList: input.forSettingsList,
+            fallback
+          }),
+          input.params ?? []
+        );
+        return rows;
+      } catch (error) {
+        if (!isMissingColumnError(error)) {
+          throw error;
+        }
+
+        const nextFallback = getNextAdminUserSelectFallback(error, fallback, input.whereField);
+        if (nextFallback == null) {
+          throw error;
+        }
+
+        fallback = nextFallback;
+      }
+    }
   }
 
   type LegacyBookingRow = {
@@ -2731,33 +3021,25 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
   const adminLogin: AdminLoginDependencies = {
     now,
     async findAdminUserByUsername(username) {
-      const [rows] = await executor.execute<Array<{
-        id: number;
-        username: string;
-        password_hash: string;
-        account_type: "owner" | "admin" | "accountant" | "staff" | "main" | "standard";
-      }>>(
-        [
-          "SELECT id, username, password_hash, account_type",
-          "FROM admin_users",
-          "WHERE username = ?",
-          "LIMIT 1"
-        ].join(" "),
-        [username]
-      );
+      const rows = await loadLegacyAdminUserRows({
+        whereField: "username",
+        params: [username],
+        includePasswordHash: true
+      });
 
       const user = rows[0];
-      if (user == null) {
+      if (user == null || user.password_hash == null || user.username == null) {
         return null;
       }
 
+      const accountTypeValue = user.account_type?.trim().toLowerCase() ?? "standard";
       return {
         actorId: String(user.id),
         source: "admin_user",
         username: user.username,
         displayName: user.username,
         passwordHash: user.password_hash,
-        role: user.account_type === "accountant" ? "accountant" : "admin"
+        role: accountTypeValue === "accountant" ? "accountant" : "admin"
       };
     },
     async findAdminClientByEmail(email) {
@@ -2840,28 +3122,21 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
 
   const adminActorProfile: AdminActorProfileDependencies = {
     async findAdminActorById(actorId) {
-      const [adminRows] = await executor.execute<Array<{
-        id: number;
-        username: string;
-        account_type: "owner" | "admin" | "accountant" | "staff" | "main" | "standard";
-      }>>(
-        [
-          "SELECT id, username, account_type",
-          "FROM admin_users",
-          "WHERE id = ?",
-          "LIMIT 1"
-        ].join(" "),
-        [actorId]
-      );
+      const adminRows = await loadLegacyAdminUserRows({
+        whereField: "id",
+        params: [actorId]
+      });
 
       const adminUser = adminRows[0];
       if (adminUser != null) {
+        const username = adminUser.username?.trim() || adminUser.email?.trim() || `admin-${String(adminUser.id)}`;
+        const accountTypeValue = adminUser.account_type?.trim().toLowerCase() ?? "standard";
         return {
           actorId: String(adminUser.id),
           source: "admin_user",
-          username: adminUser.username,
-          displayName: adminUser.username,
-          role: adminUser.account_type === "accountant" ? "accountant" : "admin",
+          username,
+          displayName: username,
+          role: accountTypeValue === "accountant" ? "accountant" : "admin",
           active: true
         };
       }
@@ -4512,47 +4787,14 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
       return Number(result.affectedRows ?? 0) > 0;
     },
     async listAdminSettings() {
-      const [rows] = await executor.execute<Array<{
-        id: string;
-        setting_key: string;
-        setting_value: string | null;
-        setting_type: string;
-        category: string;
-        label: string;
-        description: string | null;
-        is_secret: number;
-        updated_at: string;
-      }>>(
-        [
-          "SELECT setting_key AS id, setting_key, setting_value, setting_type, category, label, description, is_secret, updated_at",
-          "FROM settings",
-          "ORDER BY category ASC, label ASC"
-        ].join(" ")
-      );
-
+      const rows = await loadLegacySettingRows({});
       return rows.map(toSettingRecord);
     },
     async findAdminSettingByKey(key) {
-      const [rows] = await executor.execute<Array<{
-        id: string;
-        setting_key: string;
-        setting_value: string | null;
-        setting_type: string;
-        category: string;
-        label: string;
-        description: string | null;
-        is_secret: number;
-        updated_at: string;
-      }>>(
-        [
-          "SELECT setting_key AS id, setting_key, setting_value, setting_type, category, label, description, is_secret, updated_at",
-          "FROM settings",
-          "WHERE setting_key = ?",
-          "LIMIT 1"
-        ].join(" "),
-        [key]
-      );
-
+      const rows = await loadLegacySettingRows({
+        whereClause: "WHERE setting_key = ?",
+        params: [key]
+      });
       const row = rows[0];
       return row == null ? null : toSettingRecord(row);
     },
@@ -4565,70 +4807,30 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         ].join(" "),
         [input.value, key]
       );
-
       if (Number(result.affectedRows ?? 0) === 0) {
         return null;
       }
-
       return content.findAdminSettingByKey(key);
     },
     async findAdminSettingsUserByActorId(actorId) {
-      const [rows] = await executor.execute<Array<{
-        id: number;
-        username: string;
-        email: string | null;
-        account_type: string | null;
-        can_manage_admin_users: number | null;
-        can_manage_api_keys: number | null;
-      }>>(
-        [
-          "SELECT id, username, email, account_type, can_manage_admin_users, can_manage_api_keys",
-          "FROM admin_users",
-          "WHERE id = ?",
-          "LIMIT 1"
-        ].join(" "),
-        [actorId]
-      );
-
+      const rows = await loadLegacyAdminUserRows({
+        whereField: "id",
+        params: [actorId]
+      });
       const row = rows[0];
       return row == null ? null : toAdminSettingsUserRecord(row);
     },
     async listAdminSettingsUsers() {
-      const [rows] = await executor.execute<Array<{
-        id: number;
-        username: string;
-        email: string | null;
-        account_type: string | null;
-        can_manage_admin_users: number | null;
-        can_manage_api_keys: number | null;
-      }>>(
-        [
-          "SELECT id, username, email, account_type, can_manage_admin_users, can_manage_api_keys",
-          "FROM admin_users",
-          "ORDER BY CASE WHEN username = 'admin' OR account_type IN ('main', 'owner') THEN 0 ELSE 1 END, username ASC, email ASC"
-        ].join(" ")
-      );
-
+      const rows = await loadLegacyAdminUserRows({
+        forSettingsList: true
+      });
       return rows.map(toAdminSettingsUserRecord);
     },
     async findAdminSettingsUserByUsername(username) {
-      const [rows] = await executor.execute<Array<{
-        id: number;
-        username: string;
-        email: string | null;
-        account_type: string | null;
-        can_manage_admin_users: number | null;
-        can_manage_api_keys: number | null;
-      }>>(
-        [
-          "SELECT id, username, email, account_type, can_manage_admin_users, can_manage_api_keys",
-          "FROM admin_users",
-          "WHERE LOWER(username) = LOWER(?)",
-          "LIMIT 1"
-        ].join(" "),
-        [username]
-      );
-
+      const rows = await loadLegacyAdminUserRows({
+        whereField: "username",
+        params: [username]
+      });
       const row = rows[0];
       return row == null ? null : toAdminSettingsUserRecord(row);
     },
@@ -4682,7 +4884,7 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
           [actorId]
         );
         const [, result] = await executor.execute(
-        "DELETE FROM admin_users WHERE id = ?",
+          "DELETE FROM admin_users WHERE id = ?",
           [actorId]
         );
         await executor.execute("COMMIT");
@@ -5440,8 +5642,7 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         [
           "SELECT id, name, email, COALESCE(is_archived, 0) AS is_archived",
           "FROM clients",
-          "ORDER BY updated_at DESC",
-          "LIMIT 50"
+          "ORDER BY updated_at DESC"
         ].join(" ")
       );
 
@@ -8168,6 +8369,20 @@ const mySqlBootstrapTableStatements = [
     ")"
   ].join(" "),
   [
+    "CREATE TABLE IF NOT EXISTS google_oauth_tokens (",
+    "id BIGINT PRIMARY KEY AUTO_INCREMENT,",
+    "admin_user_id BIGINT NOT NULL,",
+    "access_token TEXT NOT NULL,",
+    "refresh_token TEXT NULL,",
+    "token_type VARCHAR(32) NOT NULL DEFAULT 'Bearer',",
+    "expires_at TIMESTAMP NULL,",
+    "calendar_id VARCHAR(255) NOT NULL DEFAULT 'primary',",
+    "google_email VARCHAR(255) NULL,",
+    "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,",
+    "updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
+    ")"
+  ].join(" "),
+  [
     "CREATE TABLE IF NOT EXISTS workflows (",
     "id BIGINT PRIMARY KEY AUTO_INCREMENT,",
     "workflow_id VARCHAR(128) NOT NULL UNIQUE,",
@@ -8321,6 +8536,11 @@ const mySqlBootstrapIndexStatements: MySqlBootstrapIndexStatement[] = [
     table: "calendar_sync_links",
     indexName: "idx_calendar_sync_links_provider_synced_at",
     statement: "CREATE INDEX idx_calendar_sync_links_provider_synced_at ON calendar_sync_links(provider, synced_at)"
+  },
+  {
+    table: "google_oauth_tokens",
+    indexName: "idx_google_oauth_tokens_admin_user_id",
+    statement: "CREATE INDEX idx_google_oauth_tokens_admin_user_id ON google_oauth_tokens(admin_user_id)"
   },
   {
     table: "workflows",

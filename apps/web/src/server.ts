@@ -164,6 +164,8 @@ type SettingsConsoleViewModel = {
   };
 };
 
+type CalendarOAuthActionsViewModel = Pick<SettingsConsoleViewModel, "basePath" | "settings">;
+
 type RuntimeEnvironmentFieldDefinition = {
   key: string;
   label: string;
@@ -2259,6 +2261,41 @@ function resolveSettingsNotice(url: URL): SettingsConsoleViewModel["notice"] | u
   }
 }
 
+function hasConfiguredSettingValue(settings: Setting[], key: string): boolean {
+  const setting = settings.find((candidate) => candidate.key === key);
+  return setting != null && setting.value.trim() !== "";
+}
+
+function isCalendarOAuthConfigured(settings: Setting[]): boolean {
+  return ["google_oauth_client_id", "google_oauth_client_secret", "google_oauth_redirect_uri"].every((key) =>
+    hasConfiguredSettingValue(settings, key)
+  );
+}
+
+function renderCalendarOAuthActionPanel(model: CalendarOAuthActionsViewModel): string {
+  const oauthConfigured = isCalendarOAuthConfigured(model.settings);
+  const calendarSettingsHref = buildSettingsCategoryHref(model.basePath, "calendar");
+  const legacyCalendarHref = buildSettingsCategoryHref("/client/settings.php", "calendar");
+
+  return [
+    '<section class="surface-block">',
+    '<p class="eyebrow">Calendar OAuth</p>',
+    "<h2>Google Calendar Connection</h2>",
+    '<p class="section-copy">Use the legacy-compatible Google OAuth flow so the current admin console and the older PHP platform keep sharing the same calendar token storage.</p>',
+    `<div class="settings-badge-row">${renderStatusPill(oauthConfigured ? "OAuth Ready" : "OAuth Needs Setup", oauthConfigured ? "success" : "warning")}${renderStatusPill("Legacy-Compatible", "info")}</div>`,
+    '<div class="form-actions">',
+    `<a href="/backend/public/google_oauth_initiate.php">${oauthConfigured ? "Connect Google Calendar" : "Review Calendar OAuth Settings"}</a>`,
+    model.basePath === "/client/settings.php"
+      ? ""
+      : `<a href="${legacyCalendarHref}">Legacy Calendar Screen</a>`,
+    "</div>",
+    oauthConfigured
+      ? '<p class="meta">This button reuses the shared legacy OAuth endpoint instead of introducing a second token flow.</p>'
+      : `<p class="meta">Save the OAuth Client ID, Client Secret, and Redirect URI in <a href="${calendarSettingsHref}">Calendar settings</a>, then use the connect button.</p>`,
+    "</section>"
+  ].join("");
+}
+
 function canAccessRuntimeEnvironmentSettings(currentAdmin: AdminSettingsUserView): boolean {
   return currentAdmin.isMainAccount || currentAdmin.canManageApiKeys;
 }
@@ -2639,7 +2676,7 @@ function renderSettingsLaunchReadinessPanel(launchReadiness?: LaunchReadinessAss
   ].join("");
 }
 
-function renderSettingsOverview(model: Pick<SettingsConsoleViewModel, "settings" | "launchReadiness">): string {
+function renderSettingsOverview(model: Pick<SettingsConsoleViewModel, "basePath" | "settings" | "launchReadiness">): string {
   const settings = model.settings;
   const orderedSettings = [...settings].sort((left, right) => left.label.localeCompare(right.label));
   const categoryOrder = [...SETTINGS_CATEGORY_ORDER];
@@ -2663,6 +2700,7 @@ function renderSettingsOverview(model: Pick<SettingsConsoleViewModel, "settings"
     "</div>",
     "</div>",
     renderSettingsSummaryCards(orderedSettings),
+    renderCalendarOAuthActionPanel(model),
     renderSettingsLaunchReadinessPanel(model.launchReadiness),
     '<div class="settings-console-toolbar">',
     '<label class="settings-console-search">',
@@ -2776,16 +2814,17 @@ function renderSettingsConsole(model: SettingsConsoleViewModel): string {
           })
         : resolvedCategory === settingsDefaultCategory
           ? renderSettingsOverview(model)
-          : [
-              '<section class="surface-block">',
-              `<p class="eyebrow">${escapeHtml(formatSettingCategoryLabel(resolvedCategory))}</p>`,
-              `<h2>${escapeHtml(formatSettingCategoryLabel(resolvedCategory))} Settings</h2>`,
-              `<p class="section-copy">${escapeHtml(getSettingCategoryDescription(resolvedCategory))}</p>`,
-          "</section>",
-          selectedSettings.length === 0
-            ? '<section class="surface-block"><p>No visible settings are available in this category.</p></section>'
-            : `<section class="settings-category-section"><div class="settings-card-grid">${selectedSettings.map(renderSettingsCard).join("")}</div></section>`
-        ].join(""),
+        : [
+            '<section class="surface-block">',
+            `<p class="eyebrow">${escapeHtml(formatSettingCategoryLabel(resolvedCategory))}</p>`,
+            `<h2>${escapeHtml(formatSettingCategoryLabel(resolvedCategory))} Settings</h2>`,
+            `<p class="section-copy">${escapeHtml(getSettingCategoryDescription(resolvedCategory))}</p>`,
+            "</section>",
+            resolvedCategory === "calendar" ? renderCalendarOAuthActionPanel(model) : "",
+            selectedSettings.length === 0
+              ? '<section class="surface-block"><p>No visible settings are available in this category.</p></section>'
+              : `<section class="settings-category-section"><div class="settings-card-grid">${selectedSettings.map(renderSettingsCard).join("")}</div></section>`
+          ].join(""),
     "</div>",
     "</div>"
   ].join("");

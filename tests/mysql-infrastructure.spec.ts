@@ -157,13 +157,98 @@ describe("mysql infrastructure", () => {
     expect(executor.calls[5]?.sql).toContain("UPDATE admin_users");
     expect(executor.calls[7]?.sql).toBe("START TRANSACTION");
     expect(executor.calls[8]?.sql).toContain("UPDATE appointment_types SET admin_user_id = NULL");
-    expect(executor.calls[9]?.sql).toContain("UPDATE bookings SET admin_user_id = NULL");
-    expect(executor.calls[10]?.sql).toContain("DELETE FROM admin_users");
-    expect(executor.calls[11]?.sql).toBe("COMMIT");
+  expect(executor.calls[9]?.sql).toContain("UPDATE bookings SET admin_user_id = NULL");
+  expect(executor.calls[10]?.sql).toContain("DELETE FROM admin_users");
+  expect(executor.calls[11]?.sql).toBe("COMMIT");
+});
+
+it("falls back to legacy admin and settings columns for admin reads", async () => {
+  const missingSchemaError = (message: string, code: string) => Object.assign(new Error(message), { code });
+  const calls: Array<{ sql: string; params: unknown[] }> = [];
+  const queue: Array<QueuedResult | Error> = [
+    missingSchemaError("Unknown column 'category' in 'field list'", "ER_BAD_FIELD_ERROR"),
+    missingSchemaError("Unknown column 'label' in 'field list'", "ER_BAD_FIELD_ERROR"),
+    rows([{
+      id: "base_url",
+      setting_key: "base_url",
+      setting_value: "https://example.test",
+      setting_type: "text"
+    }]),
+    missingSchemaError("Unknown column 'account_type' in 'field list'", "ER_BAD_FIELD_ERROR"),
+    missingSchemaError("Unknown column 'can_manage_admin_users' in 'field list'", "ER_BAD_FIELD_ERROR"),
+    missingSchemaError("Unknown column 'can_manage_api_keys' in 'field list'", "ER_BAD_FIELD_ERROR"),
+    rows([{
+      id: 2,
+      username: "owner",
+      email: "owner@example.com"
+    }]),
+    missingSchemaError("Unknown column 'account_type' in 'field list'", "ER_BAD_FIELD_ERROR"),
+    rows([{
+      id: 2,
+      username: "owner"
+    }])
+  ];
+  const executor: SqlExecutor & { calls: Array<{ sql: string; params: unknown[] }> } = {
+    calls,
+    async execute<T>(sql: string, params: unknown[] = []): Promise<[T, SqlResultHeader]> {
+      calls.push({ sql, params });
+      const next = queue.shift();
+      if (next == null) {
+        throw new Error(`No fake SQL result queued for: ${sql}`);
+      }
+      if (next instanceof Error) {
+        throw next;
+      }
+      return [next[0] as T, next[1] ?? {}];
+    }
+  };
+  const dependencies = createMySqlApiDependencies(executor, {
+    now: () => "2026-05-27T18:00:00.000Z"
   });
 
-  it("creates public-booking dependencies against legacy-aligned MySQL tables", async () => {
-    const executor = new FakeSqlExecutor([
+  await expect(dependencies.content.listAdminSettings()).resolves.toEqual([
+    expect.objectContaining({
+      key: "base_url",
+      value: "https://example.test",
+      type: "text",
+      category: "general",
+      label: "base_url",
+      description: "",
+      secret: false
+    })
+  ]);
+  await expect(dependencies.content.findAdminSettingsUserByActorId("2")).resolves.toMatchObject({
+    actorId: "2",
+    username: "owner",
+    email: "owner@example.com",
+    accountType: "standard",
+    role: "admin",
+    canManageAdminUsers: false,
+    canManageApiKeys: false,
+    active: true
+  });
+  await expect(dependencies.adminActorProfile.findAdminActorById("2")).resolves.toMatchObject({
+    actorId: "2",
+    source: "admin_user",
+    username: "owner",
+    displayName: "owner",
+    role: "admin",
+    active: true
+  });
+
+  expect(executor.calls[0]?.sql).toContain("category");
+  expect(executor.calls[1]?.sql).toContain("'general' AS category");
+  expect(executor.calls[2]?.sql).toContain("setting_key AS label");
+  expect(executor.calls[3]?.sql).toContain("account_type");
+  expect(executor.calls[4]?.sql).toContain("NULL AS account_type");
+  expect(executor.calls[5]?.sql).toContain("NULL AS can_manage_admin_users");
+  expect(executor.calls[6]?.sql).toContain("NULL AS can_manage_api_keys");
+  expect(executor.calls[7]?.sql).toContain("FROM admin_users");
+  expect(executor.calls[8]?.sql).toContain("NULL AS account_type");
+});
+
+it("creates public-booking dependencies against legacy-aligned MySQL tables", async () => {
+  const executor = new FakeSqlExecutor([
       rows([{ overlapCount: 0 }]),
       rows([]),
       [[] as unknown[], { insertId: 77 }],
@@ -2388,6 +2473,7 @@ it("auto-enrolls MySQL workflow clients from appointment booking triggers", asyn
     expect(statements.some((sql) => sql.includes("CREATE TABLE IF NOT EXISTS job_queue"))).toBe(true);
     expect(statements.some((sql) => sql.includes("CREATE TABLE IF NOT EXISTS package_pending_purchases"))).toBe(true);
     expect(statements.some((sql) => sql.includes("CREATE TABLE IF NOT EXISTS calendar_sync_links"))).toBe(true);
+    expect(statements.some((sql) => sql.includes("CREATE TABLE IF NOT EXISTS google_oauth_tokens"))).toBe(true);
     expect(statements.some((sql) => sql.includes("CREATE TABLE IF NOT EXISTS workflows"))).toBe(true);
     expect(statements.some((sql) => sql.includes("CREATE TABLE IF NOT EXISTS workflow_enrollments"))).toBe(true);
     expect(statements.some((sql) => sql.includes("CREATE TABLE IF NOT EXISTS workflow_triggers"))).toBe(true);
@@ -2427,6 +2513,7 @@ it("auto-enrolls MySQL workflow clients from appointment booking triggers", asyn
     );
     expect(statements.some((sql) => sql.includes("CREATE INDEX idx_integration_callbacks_provider_received_at"))).toBe(true);
     expect(statements.some((sql) => sql.includes("CREATE INDEX idx_calendar_sync_links_provider_synced_at"))).toBe(true);
+    expect(statements.some((sql) => sql.includes("CREATE INDEX idx_google_oauth_tokens_admin_user_id"))).toBe(true);
     expect(statements).toContain(
       "CREATE INDEX idx_inbound_emails_provider_message_id ON inbound_emails(provider(16), message_id(170))"
     );
