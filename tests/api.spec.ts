@@ -936,24 +936,38 @@ function createAdminResourceReadDependencies(
  notes: "Purchased before private lesson.",
  createdAt: "2026-05-26T10:00:00.000Z"
  }],
- findAdminExpenseById: async (expenseId) => expenseId === "expense-1" ? {
- id: "expense-1",
- clientId: "client-1",
- clientName: "Client One",
- category: "Supplies",
+    findAdminExpenseById: async (expenseId) => expenseId === "expense-1" ? {
+      id: "expense-1",
+      clientId: "client-1",
+      clientName: "Client One",
+      category: "Supplies",
  description: "Training treats",
  amount: 48.75,
  expenseDate: "2026-05-26",
  receiptFile: "expense-1-receipt.pdf",
  billable: true,
- invoiced: false,
- notes: "Purchased before private lesson.",
- createdAt: "2026-05-26T10:00:00.000Z"
- } : null,
- listAdminInvoices: async () => [{
- id: "invoice-1",
- clientId: "client-1",
- status: "sent",
+      invoiced: false,
+      notes: "Purchased before private lesson.",
+      createdAt: "2026-05-26T10:00:00.000Z"
+    } : null,
+    createAdminExpense: async (input) => ({
+      id: "expense-created-1",
+      clientId: input.clientId,
+      clientName: input.clientId === "client-1" ? "Client One" : null,
+      category: input.category,
+      description: input.description,
+      amount: input.amount,
+      expenseDate: input.expenseDate,
+      receiptFile: null,
+      billable: input.billable,
+      invoiced: input.invoiced,
+      notes: input.notes,
+      createdAt: "2026-05-27T18:00:00.000Z"
+    }),
+    listAdminInvoices: async () => [{
+      id: "invoice-1",
+      clientId: "client-1",
+      status: "sent",
       totalAmount: 225,
       outstandingAmount: 125,
       dueAt: "2026-06-05T00:00:00.000Z"
@@ -966,6 +980,14 @@ function createAdminResourceReadDependencies(
       outstandingAmount: 125,
       dueAt: "2026-06-05T00:00:00.000Z"
     } : null,
+    createAdminInvoice: async (input) => ({
+      id: "invoice-created-1",
+      clientId: input.clientId,
+      status: input.status,
+      totalAmount: input.totalAmount,
+      outstandingAmount: input.status === "paid" || input.status === "void" ? 0 : input.totalAmount,
+      dueAt: input.dueAt
+    }),
     listAdminQuotes: async () => [{
       id: "quote-1",
       clientId: "client-1",

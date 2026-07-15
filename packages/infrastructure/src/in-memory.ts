@@ -2340,12 +2340,44 @@ function createAdminResourceReadDependencies(state: InMemoryPlatformState): Admi
     delete state.petFileContents[fileId];
     return true;
   },
-  listAdminBookings: async () => state.bookings,
-  findAdminBookingById: async (bookingId) => state.bookings.find((booking) => booking.id === bookingId) ?? null,
-  listAdminExpenses: async () => state.expenses,
-  findAdminExpenseById: async (expenseId) => state.expenses.find((expense) => expense.id === expenseId) ?? null,
-  listAdminInvoices: async () => state.invoices,
-  findAdminInvoiceById: async (invoiceId) => state.invoices.find((invoice) => invoice.id === invoiceId) ?? null,
+    listAdminBookings: async () => state.bookings,
+    findAdminBookingById: async (bookingId) => state.bookings.find((booking) => booking.id === bookingId) ?? null,
+    listAdminExpenses: async () => state.expenses,
+    findAdminExpenseById: async (expenseId) => state.expenses.find((expense) => expense.id === expenseId) ?? null,
+    createAdminExpense: async (input) => {
+      const item: Expense = {
+        id: `expense-${state.expenses.length + 1}`,
+        clientId: input.clientId,
+        category: input.category,
+        description: input.description,
+        amount: input.amount,
+        expenseDate: input.expenseDate,
+        receiptFile: null,
+        billable: input.billable,
+        invoiced: input.invoiced,
+        notes: input.notes,
+        createdAt: state.now()
+      };
+      state.expenses.unshift(item);
+      return item;
+    },
+    listAdminInvoices: async () => state.invoices,
+    findAdminInvoiceById: async (invoiceId) => state.invoices.find((invoice) => invoice.id === invoiceId) ?? null,
+    createAdminInvoice: async (input) => {
+      const outstandingAmount = input.status === "paid" || input.status === "void"
+        ? 0
+        : input.totalAmount;
+      const item: Invoice = {
+        id: `invoice-${state.invoices.length + 1}`,
+        clientId: input.clientId,
+        status: input.status,
+        totalAmount: input.totalAmount,
+        outstandingAmount,
+        dueAt: input.dueAt
+      };
+      state.invoices.unshift(item);
+      return item;
+    },
     listAdminQuotes: async () => state.quotes,
     findAdminQuoteById: async (quoteId) => state.quotes.find((quote) => quote.id === quoteId) ?? null,
     listAdminContracts: async () => state.contracts,

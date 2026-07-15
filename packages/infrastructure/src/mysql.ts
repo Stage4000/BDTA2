@@ -5953,7 +5953,7 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
       return deleted;
     },
     async listAdminBookings() {
-      const rows = await loadLegacyBookingRows({ limit: 50 });
+      const rows = await loadLegacyBookingRows({});
       return rows.map((row) => fromLegacyBookingRow(row));
     },
     async findAdminBookingById(bookingId) {
@@ -6014,6 +6014,38 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
 
       const row = rows[0];
       return row == null ? null : toExpenseRecord(row);
+    },
+    async createAdminExpense(input) {
+      const [, result] = await executor.execute(
+        [
+          "INSERT INTO expenses",
+          "(client_id, category, description, amount, expense_date, receipt_file, billable, invoiced, notes, created_at)",
+          "VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, CURRENT_TIMESTAMP)"
+        ].join(" "),
+        [
+          input.clientId,
+          input.category,
+          input.description,
+          input.amount,
+          normalizeLegacyDateValue(input.expenseDate),
+          input.billable ? 1 : 0,
+          input.invoiced ? 1 : 0,
+          input.notes
+        ]
+      );
+      return (await adminResources.findAdminExpenseById(String(result.insertId ?? 0))) ?? {
+        id: String(result.insertId ?? 0),
+        clientId: input.clientId,
+        category: input.category,
+        description: input.description,
+        amount: input.amount,
+        expenseDate: input.expenseDate,
+        receiptFile: null,
+        billable: input.billable,
+        invoiced: input.invoiced,
+        notes: input.notes,
+        createdAt: now()
+      };
     },
     async listAdminInvoices() {
       let rows: Array<{
@@ -6109,8 +6141,47 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         }
       }
 
-    const row = rows[0];
-    return row == null ? null : toInvoiceRecord(row);
+      const row = rows[0];
+      return row == null ? null : toInvoiceRecord(row);
+    },
+    async createAdminInvoice(input) {
+      const issueDate = normalizeLegacyDateValue(now()) ?? new Date().toISOString().slice(0, 10);
+      const dueDate = normalizeLegacyDateValue(input.dueAt) ?? issueDate;
+      const outstandingAmount = input.status === "paid" || input.status === "void"
+        ? 0
+        : input.totalAmount;
+      const paymentMethod = input.status === "paid" ? "manual" : null;
+      const paymentDate = input.status === "paid" ? issueDate : null;
+      const [, result] = await executor.execute(
+        [
+          "INSERT INTO invoices (",
+          "invoice_number, client_id, issue_date, due_date, subtotal, tax_rate, tax_amount, total_amount, outstanding_amount,",
+          "notes, status, pay_token, payment_method, payment_date, stripe_payment_intent_id",
+          ") VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, NULL)"
+        ].join(" "),
+        [
+          buildInvoiceNumber(),
+          input.clientId,
+          issueDate,
+          dueDate,
+          input.totalAmount,
+          input.totalAmount,
+          outstandingAmount,
+          input.notes,
+          input.status,
+          buildInvoicePayToken(),
+          paymentMethod,
+          paymentDate
+        ]
+      );
+      return (await adminResources.findAdminInvoiceById(String(result.insertId ?? 0))) ?? {
+        id: String(result.insertId ?? 0),
+        clientId: input.clientId,
+        status: input.status,
+        totalAmount: input.totalAmount,
+        outstandingAmount,
+        dueAt: input.dueAt
+      };
     },
     async listAdminQuotes() {
       let rows: Array<{

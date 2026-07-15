@@ -1861,6 +1861,65 @@ function sortByTimeDesc<T>(items: T[], getValue: (item: T) => string | null | un
   return [...items].sort((left, right) => toSortableTime(getValue(right)) - toSortableTime(getValue(left)));
 }
 
+function isBookingUpcoming(booking: Booking, referenceTime = new Date().toISOString()): boolean {
+  return booking.status !== "completed"
+    && booking.status !== "cancelled"
+    && toSortableTime(booking.startsAt) >= toSortableTime(referenceTime);
+}
+
+function normalizeSearchQuery(value: string | null | undefined): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function matchesSearchQuery(query: string, ...values: Array<string | null | undefined>): boolean {
+  if (query === "") {
+    return true;
+  }
+
+  return values.some((value) => normalizeSearchQuery(value).includes(query));
+}
+
+function buildAdminBookingsPath(filters: { q?: string | null } = {}): string {
+  const params = new URLSearchParams();
+  const q = filters.q?.trim() ?? "";
+  if (q !== "") {
+    params.set("q", q);
+  }
+
+  const query = params.toString();
+  return query === "" ? "/admin/bookings" : `/admin/bookings?${query}`;
+}
+
+function buildAdminExpensesPath(filters: { clientId?: string | null } = {}): string {
+  const params = new URLSearchParams();
+  const clientId = filters.clientId?.trim() ?? "";
+  if (clientId !== "") {
+    params.set("client_id", clientId);
+  }
+
+  const query = params.toString();
+  return query === "" ? "/admin/expenses" : `/admin/expenses?${query}`;
+}
+
+function buildAdminInvoicesPath(filters: { clientId?: string | null } = {}): string {
+  const params = new URLSearchParams();
+  const clientId = filters.clientId?.trim() ?? "";
+  if (clientId !== "") {
+    params.set("client_id", clientId);
+  }
+
+  const query = params.toString();
+  return query === "" ? "/admin/invoices" : `/admin/invoices?${query}`;
+}
+
+function summarizePackageItems(items: Package["items"] | undefined): string {
+  if ((items ?? []).length === 0) {
+    return "No appointment credits configured";
+  }
+
+  return (items ?? []).map((item) => `${item.quantity} x ${item.appointmentTypeName}`).join(", ");
+}
+
 function truncateText(value: string | null | undefined, maxLength = 88): string {
   const normalized = value?.trim() ?? "";
   if (normalized === "") {
@@ -1871,7 +1930,7 @@ function truncateText(value: string | null | undefined, maxLength = 88): string 
     return normalized;
   }
 
-  return `${normalized.slice(0, maxLength - 1).trimEnd()}…`;
+  return `${normalized.slice(0, maxLength - 1).trimEnd()}â€¦`;
 }
 
 function renderLongTextBlock(value: string | null | undefined, emptyMessage: string): string {
@@ -5526,7 +5585,7 @@ function renderSitePageEditorLegacyShell(page: SitePage): string {
     `<body data-editor="site_pages_editor">`,
     '<div class="site-pages-editor">',
     '<div class="site-pages-editor__topbar">',
-    '<a class="site-pages-editor__back" href="/admin/site-pages"><span aria-hidden="true">←</span><span>Back to pages</span></a>',
+    '<a class="site-pages-editor__back" href="/admin/site-pages"><span aria-hidden="true">â†</span><span>Back to pages</span></a>',
     '<div class="site-pages-editor__brand">',
     "<span>Visual Site Editor</span>",
     '<div class="site-pages-editor__title-row">',
@@ -6489,6 +6548,8 @@ function renderLayout(input: {
     '<a class="app-sidebar__link" href="/admin/pets">Pets</a>',
     '<a class="app-sidebar__link" href="/admin/workflows">Workflows</a>',
     '<a class="app-sidebar__link" href="/admin/appointment-types">Appointment Types</a>',
+    '<a class="app-sidebar__link" href="/admin/packages">Packages</a>',
+    '<a class="app-sidebar__link" href="/admin/credits">Credits</a>',
     '<a class="app-sidebar__link" href="/admin/form-templates">Form Templates</a>',
     '<a class="app-sidebar__link" href="/admin/email-templates">Email Templates</a>',
     '<a class="app-sidebar__link" href="/admin/scheduled-tasks">Scheduled Tasks</a>',
@@ -8279,7 +8340,7 @@ function formatDiagnosticValue(value: unknown, maxLength = 4000): string | null 
     return null;
   }
 
-  return trimmed.length <= maxLength ? trimmed : `${trimmed.slice(0, maxLength)}\n…truncated`;
+  return trimmed.length <= maxLength ? trimmed : `${trimmed.slice(0, maxLength)}\nâ€¦truncated`;
 }
 
 function describeUnexpectedError(error: unknown): { headline: string; message: string; details: string | null } {
@@ -11484,7 +11545,7 @@ loadSafeRouteItems<ClientAchievement>(() => handlers.handlePortalAchievements(se
 const activePets = pets.filter((item) => !item.archived);
 const primaryContact = contacts.find((contact) => contact.isPrimary) ?? contacts[0] ?? null;
 const upcomingBookings = sortByTimeAsc(
-allBookings.filter((booking) => booking.status !== "completed" && booking.status !== "cancelled"),
+allBookings.filter((booking) => isBookingUpcoming(booking)),
 (booking) => booking.startsAt
 ).slice(0, 5);
 const portalForms = sortByTimeDesc(
@@ -11977,7 +12038,7 @@ const petBookings = sortByTimeAsc(
 allBookings.filter((booking) => booking.petIds.includes(portalPetItem.id)),
 (booking) => booking.startsAt
 );
-const upcomingBookings = petBookings.filter((booking) => booking.status !== "completed" && booking.status !== "cancelled").slice(0, 5);
+const upcomingBookings = petBookings.filter((booking) => isBookingUpcoming(booking)).slice(0, 5);
 const recentFiles = sortByTimeDesc(files, (file) => file.uploadedAt).slice(0, 5);
 const petForms = sortByTimeDesc(
 allForms.filter((form) => form.petId === portalPetItem.id),
@@ -13022,13 +13083,15 @@ const adminNav = "";
         return;
       }
 
-      if (
-        method === "GET"
-        && handlers != null
-        && (
-          url.pathname === "/admin"
-          || url.pathname === "/admin/dashboard"
-          || url.pathname === "/client/index.php"
+        if (
+          handlers != null
+          && (
+            (
+              method === "GET"
+              && (
+              url.pathname === "/admin"
+ || url.pathname === "/admin/dashboard"
+ || url.pathname === "/client/index.php"
  || url.pathname === "/admin/clients"
  || url.pathname === "/admin/bookings"
  || adminBookingDetailMatch != null
@@ -13123,13 +13186,23 @@ const adminNav = "";
           || legacyInvoiceDetailPath
           || legacyQuoteListPath
           || legacyQuoteDetailPath
-          || legacyContractListPath
-          || legacyContractDetailPath
-          || legacyPackageListPath
-          || legacyPackageEditPath
-          || legacyCreditsManagePath
-        )
-      ) {
+ || legacyContractListPath
+ || legacyContractDetailPath
+ || legacyPackageListPath
+ || legacyPackageEditPath
+ || legacyCreditsManagePath
+              )
+            )
+            || (
+              method === "POST"
+              && resolved.api != null
+              && (
+                url.pathname === "/admin/expenses"
+                || url.pathname === "/admin/invoices"
+              )
+            )
+          )
+        ) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
         if (session == null) {
           redirect(response, buildAdminLoginRedirectPath(request));
@@ -13520,7 +13593,7 @@ const pets = allPets.filter((item) => item.clientId === clientId);
 const activePets = pets.filter((item) => !item.archived);
 const primaryContact = contacts.find((contact) => contact.isPrimary) ?? contacts[0] ?? null;
 const upcomingBookings = sortByTimeAsc(
-allBookings.filter((booking) => booking.clientId === clientId && booking.status !== "completed" && booking.status !== "cancelled"),
+allBookings.filter((booking) => booking.clientId === clientId && isBookingUpcoming(booking)),
 (booking) => booking.startsAt
 ).slice(0, 5);
 const clientForms = sortByTimeDesc(
@@ -13592,10 +13665,10 @@ value: latestAchievement == null
 "</section>",
 '<section class="surface-block">',
 "<h2>Client Actions</h2>",
-`<div class="form-actions"><a href="/client/form_requests_create.php?form_type=client_form&client_id=${encodeURIComponent(clientId)}">Request Client Form</a><a href="/client/form_requests_create.php?form_type=survey_form&client_id=${encodeURIComponent(clientId)}">Request Survey</a><a href="/admin/clients/${encodeURIComponent(clientId)}/contacts">Manage Contacts</a><a href="/admin/clients/${encodeURIComponent(clientId)}/achievements">View Achievements</a></div>`,
+`<div class="form-actions"><a href="/client/form_requests_create.php?form_type=client_form&client_id=${encodeURIComponent(clientId)}">Request Client Form</a><a href="/client/form_requests_create.php?form_type=survey_form&client_id=${encodeURIComponent(clientId)}">Request Survey</a><a href="${buildAdminInvoicesPath({ clientId })}#create-invoice">Create Invoice</a><a href="${buildAdminExpensesPath({ clientId })}#create-expense">Add Expense</a><a href="/admin/clients/${encodeURIComponent(clientId)}/contacts">Manage Contacts</a><a href="/admin/clients/${encodeURIComponent(clientId)}/achievements">View Achievements</a></div>`,
 renderQuickLinksGrid([
-{ href: "/admin/bookings", label: "Appointments", description: upcomingBookings.length === 0 ? "No active appointments linked right now." : `${formatCountLabel(upcomingBookings.length, "upcoming appointment")} scheduled.` },
-{ href: "/admin/invoices", label: "Invoices", description: openInvoices.length === 0 ? "No outstanding invoices." : `${formatCurrency(outstandingBalance)} still due across ${formatCountLabel(openInvoices.length, "invoice")}.` },
+{ href: buildAdminBookingsPath({ q: clientId }), label: "Appointments", description: upcomingBookings.length === 0 ? "No active appointments linked right now." : `${formatCountLabel(upcomingBookings.length, "upcoming appointment")} scheduled.` },
+{ href: `${buildAdminInvoicesPath({ clientId })}#create-invoice`, label: "Invoices", description: openInvoices.length === 0 ? "No outstanding invoices." : `${formatCurrency(outstandingBalance)} still due across ${formatCountLabel(openInvoices.length, "invoice")}.` },
 { href: "/admin/quotes", label: "Quotes", description: activeQuotes.length === 0 ? "No open quotes awaiting response." : `${formatCountLabel(activeQuotes.length, "quote")} still active.` },
 { href: "/admin/contracts", label: "Contracts", description: pendingContracts.length === 0 ? "No unsigned contracts pending." : `${formatCountLabel(pendingContracts.length, "contract")} still needs action.` },
 { href: "/admin/forms", label: "Forms", description: formsNeedingReview === 0 ? "No pending form review." : `${formatCountLabel(formsNeedingReview, "submission")} still needs review.` },
@@ -13899,7 +13972,12 @@ return;
         }
 
         if (url.pathname === "/admin/bookings") {
-          const bookings = await handlers.handleAdminBookings(session);
+          const [bookings, clients, pets, appointmentTypes] = await Promise.all([
+            handlers.handleAdminBookings(session),
+            resolved.api == null ? Promise.resolve([] as Client[]) : resolved.api.adminResources.listAdminClients(),
+            resolved.api == null ? Promise.resolve([] as Pet[]) : resolved.api.adminResources.listAdminPets(),
+            resolved.api == null ? Promise.resolve([] as AppointmentType[]) : resolved.api.adminConfiguration.listAdminAppointmentTypes()
+          ]);
           if ("error" in bookings.body) {
             await handleProtectedRouteFailure({
               response,
@@ -13912,6 +13990,41 @@ return;
             return;
           }
 
+          const clientById = new Map(clients.map((client) => [client.id, client]));
+          const petById = new Map(pets.map((pet) => [pet.id, pet]));
+          const appointmentTypeById = new Map(appointmentTypes.map((appointmentType) => [appointmentType.id, appointmentType]));
+          const bookingQuery = normalizeSearchQuery(url.searchParams.get("q"));
+          const bookingRows = bookings.body.items
+            .map((booking) => {
+              const client = clientById.get(booking.clientId) ?? null;
+              const linkedPets = booking.petIds.map((petId) => petById.get(petId) ?? null).filter((pet): pet is Pet => pet != null);
+              const appointmentType = appointmentTypeById.get(booking.serviceId) ?? null;
+              const clientLabel = client == null ? booking.clientId : renderAdminClientDisplayName(client);
+              const petLabel = linkedPets.length === 0 ? "Unassigned" : linkedPets.map((pet) => pet.name).join(", ");
+              const serviceLabel = appointmentType?.name ?? booking.serviceId;
+              const startsLabel = formatAdminDateTime(booking.startsAt);
+              return {
+                booking,
+                client,
+                linkedPets,
+                clientLabel,
+                petLabel,
+                serviceLabel,
+                startsLabel,
+                statusLabel: booking.status
+              };
+            })
+            .filter((item) => matchesSearchQuery(
+              bookingQuery,
+              item.booking.id,
+              item.booking.clientId,
+              item.clientLabel,
+              item.petLabel,
+              item.serviceLabel,
+              item.startsLabel,
+              item.statusLabel
+            ));
+
           writeHtml(response, 200, renderLayout({
             title: "Admin Bookings",
             body: [
@@ -13923,21 +14036,33 @@ return;
               }),
               adminNav,
               '<section class="surface-block">',
-              "<h2>Booking Ledger</h2>",
+              '<h2>Find Bookings</h2>',
+              `<form class="form-grid" method="get" action="/admin/bookings"><label>Client, pet, service, or booking ID<input type="search" name="q" value="${escapeAttribute(url.searchParams.get("q") ?? "")}" placeholder="Search by client name, pet name, appointment type, or booking ID"></label><div class="form-actions"><button type="submit">Filter Bookings</button><a href="/admin/bookings">Clear</a></div></form>`,
+              '</section>',
+              '<section class="surface-block">',
+              '<h2>Booking Ledger</h2>',
               renderDataTable({
-                headers: ["Booking ID", "Service", "Status", "Actions"],
-                rows: bookings.body.items.map((booking) => [
-                  `<a href="/admin/bookings/${encodeURIComponent(booking.id)}">${escapeHtml(booking.id)}</a>`,
-                  escapeHtml(booking.serviceId),
-                  renderStatusPill(booking.status, booking.status === "confirmed" ? "success" : "info"),
+                headers: ["Booking", "Client", "Pets", "Service", "Starts", "Status", "Actions"],
+                rows: bookingRows.map((item) => [
+                  `<a href="/admin/bookings/${encodeURIComponent(item.booking.id)}">${escapeHtml(item.booking.id)}</a>`,
+                  item.client == null
+                    ? escapeHtml(item.clientLabel)
+                    : `<a href="/admin/clients/${encodeURIComponent(item.client.id)}/profile">${escapeHtml(item.clientLabel)}</a>`,
+                  item.linkedPets.length === 0
+                    ? "Unassigned"
+                    : item.linkedPets.map((pet) => `<a href="/admin/pets/${encodeURIComponent(pet.id)}">${escapeHtml(pet.name)}</a>`).join(", "),
+                  escapeHtml(item.serviceLabel),
+                  escapeHtml(item.startsLabel),
+                  renderBookingStatusPill(item.booking.status),
                   renderTableActionLinks([
-                    { href: `/admin/bookings/${encodeURIComponent(booking.id)}`, label: "Manage" }
+                    { href: `/admin/bookings/${encodeURIComponent(item.booking.id)}`, label: "Manage" },
+                    { href: buildAdminBookingsPath({ q: item.booking.clientId }), label: "Client Bookings" }
                   ])
                 ]),
-                emptyMessage: "No bookings."
+                emptyMessage: bookingQuery === "" ? "No bookings." : "No bookings match this filter."
               }),
-              "</section>",
-              "</article>"
+              '</section>',
+              '</article>'
             ].join("")
           }));
           return;
@@ -13951,6 +14076,23 @@ return;
             return;
           }
 
+          const [client, linkedPets, appointmentType] = await Promise.all([
+            resolved.api == null ? Promise.resolve(null) : resolved.api.adminResources.findAdminClientById(booking.body.item.clientId),
+            resolved.api == null
+              ? Promise.resolve([] as Pet[])
+              : Promise.all(booking.body.item.petIds.map(async (petId) => resolved.api?.adminResources.findAdminPetById(petId) ?? null)).then((items) => items.filter((pet): pet is Pet => pet != null)),
+            resolved.api == null ? Promise.resolve(null) : resolved.api.adminConfiguration.findAdminAppointmentTypeById(booking.body.item.serviceId)
+          ]);
+          const clientValue = client == null
+            ? escapeHtml(booking.body.item.clientId)
+            : `<a href="/admin/clients/${encodeURIComponent(client.id)}/profile">${escapeHtml(renderAdminClientDisplayName(client))}</a>`;
+          const petsValue = linkedPets.length === 0
+            ? "No pets linked"
+            : linkedPets.map((pet) => `<a href="/admin/pets/${encodeURIComponent(pet.id)}">${escapeHtml(pet.name)}</a>`).join(", ");
+          const serviceValue = appointmentType == null
+            ? escapeHtml(booking.body.item.serviceId)
+            : `<a href="/admin/appointment-types/${encodeURIComponent(appointmentType.id)}">${escapeHtml(appointmentType.name)}</a>`;
+
           writeHtml(response, 200, renderLayout({
             title: "Admin Booking Detail",
             body: [
@@ -13962,163 +14104,232 @@ return;
               }),
               adminNav,
               '<section class="surface-block">',
-              "<h2>Booking Details</h2>",
+              '<h2>Booking Details</h2>',
               renderDetailGrid([
                 { label: "Booking ID", value: escapeHtml(booking.body.item.id) },
-                { label: "Client ID", value: escapeHtml(booking.body.item.clientId) },
-                { label: "Service", value: escapeHtml(booking.body.item.serviceId) },
-                {
-                  label: "Pets",
-                  value: escapeHtml(booking.body.item.petIds.length === 0 ? "None" : booking.body.item.petIds.join(", "))
-                },
-                { label: "Starts", value: escapeHtml(booking.body.item.startsAt) },
-                { label: "Ends", value: escapeHtml(booking.body.item.endsAt) },
-                {
-                  label: "Status",
-                  value: renderStatusPill(booking.body.item.status, booking.body.item.status === "confirmed" ? "success" : "info")
-                },
-                {
-                  label: "Calendar Access Token",
-                  value: escapeHtml(booking.body.item.icalAccess?.token ?? "Unavailable")
-                }
+                { label: "Client", value: clientValue },
+                { label: "Service", value: serviceValue },
+                { label: "Starts", value: escapeHtml(formatAdminDateTime(booking.body.item.startsAt)) },
+                { label: "Ends", value: escapeHtml(formatAdminDateTime(booking.body.item.endsAt)) },
+                { label: "Status", value: renderBookingStatusPill(booking.body.item.status) },
+                { label: "Pets", value: petsValue },
+                { label: "Calendar Access Token", value: escapeHtml(booking.body.item.icalAccess?.token ?? "Unavailable") }
               ]),
-              `<div class="form-actions"><a href="/client/form_requests_create.php?form_type=follow_up_note&booking_id=${encodeURIComponent(booking.body.item.id)}">Create Follow-up Note</a><a href="/admin/bookings">Back to Bookings</a></div>`,
-              "</section>",
-              "</article>"
+              '</section>',
+              '<section class="surface-block">',
+              '<h2>Linked Records</h2>',
+              `<div class="form-actions"><a href="/client/form_requests_create.php?form_type=follow_up_note&booking_id=${encodeURIComponent(booking.body.item.id)}">Create Follow-up Note</a><a href="${buildAdminBookingsPath({ q: booking.body.item.clientId })}">View Client Bookings</a><a href="/admin/bookings">Back to Bookings</a></div>`,
+              '</section>',
+              '</article>'
             ].join("")
           }));
- return;
- }
+          return;
+        }
+if (method === "POST" && handlers != null && resolved.api != null && url.pathname === "/admin/expenses") {
+          const session = await loadPersistedSession(resolved.sessionStore, request);
+          if (session == null) {
+            redirect(response, buildAdminLoginRedirectPath(request));
+            return;
+          }
 
- if (url.pathname === "/admin/expenses" || url.pathname === "/client/expenses_list.php") {
- const expenses = await handlers.handleAdminExpenses(session);
- if ("error" in expenses.body) {
- await handleProtectedRouteFailure({
- response,
- request,
- sessionStore: resolved.sessionStore,
- loginPath: buildAdminLoginRedirectPath(request),
- title: "Admin Expenses",
- result: expenses
- });
- return;
- }
+          try {
+            const form = await readFormBody(request);
+            const amount = Number.parseFloat(readRequiredFormValue(form, "amount"));
+            if (!Number.isFinite(amount) || amount < 0) {
+              throw new Error("Expense amount must be a valid positive number.");
+            }
 
- const totalExpenses = expenses.body.items.reduce((sum, expense) => sum + expense.amount, 0);
- const billableExpenses = expenses.body.items.reduce((sum, expense) => expense.billable ? sum + expense.amount : sum, 0);
- const invoicedExpenses = expenses.body.items.filter((expense) => expense.invoiced).length;
+            const createdExpense = await resolved.api.adminResources.createAdminExpense({
+              clientId: readOptionalFormValue(form, "clientId"),
+              category: readRequiredFormValue(form, "category"),
+              description: readRequiredFormValue(form, "description"),
+              amount,
+              expenseDate: readOptionalFormValue(form, "expenseDate"),
+              billable: readCheckedFormValue(form, "billable"),
+              invoiced: readCheckedFormValue(form, "invoiced"),
+              notes: form.get("notes")?.trim() ?? ""
+            });
+            redirect(response, `/admin/expenses/${encodeURIComponent(createdExpense.id)}`);
+          } catch (error) {
+            writeHtml(response, 400, renderLayout({
+              title: "Admin Expenses",
+              body: `<article><h1>Admin Expenses</h1><p>${escapeHtml(error instanceof Error ? error.message : "Unable to create expense.")}</p></article>`
+            }));
+          }
+          return;
+        }
 
- writeHtml(response, 200, renderLayout({
- title: "Admin Expenses",
- body: [
- '<article class="content-stack">',
- renderSectionIntro({
- eyebrow: "Expenses",
- title: "Expenses",
- description: "Track operating costs, billable reimbursements, and receipt coverage across the business."
- }),
- renderStatsGrid([
- {
- label: "Total Expenses",
- value: formatCurrency(totalExpenses),
- meta: "All recorded expense amounts",
- accent: "primary"
- },
- {
- label: "Billable Amount",
- value: formatCurrency(billableExpenses),
- meta: "Eligible to pass through clients",
- accent: "success"
- },
- {
- label: "Invoiced Entries",
- value: invoicedExpenses,
- meta: invoicedExpenses === 1 ? "Expense already invoiced" : "Expenses already invoiced",
- accent: "warning"
- }
- ]),
- adminNav,
- '<section class="surface-block">',
- "<h2>Expense Ledger</h2>",
- renderDataTable({
- headers: ["Expense ID", "Date", "Category", "Description", "Client", "Amount", "Status", "Actions"],
- rows: expenses.body.items.map((expense) => [
- `<a href="/admin/expenses/${encodeURIComponent(expense.id)}">${escapeHtml(expense.id)}</a>`,
- escapeHtml(formatAdminDate(expense.expenseDate)),
- escapeHtml(expense.category),
- escapeHtml(expense.description),
- expense.clientId == null
- ? "General"
- : `<a href="/admin/clients/${encodeURIComponent(expense.clientId)}">${escapeHtml(expense.clientName ?? expense.clientId)}</a>`,
- escapeHtml(formatCurrency(expense.amount)),
- renderExpenseStatusPill(expense),
- renderTableActionLinks([
- { href: `/admin/expenses/${encodeURIComponent(expense.id)}`, label: "Manage" }
- ])
- ]),
- emptyMessage: "No expenses."
- }),
- "</section>",
- "</article>"
- ].join("")
- }));
- return;
- }
+        if (url.pathname === "/admin/expenses" || url.pathname === "/client/expenses_list.php") {
+          const [expenses, clients] = await Promise.all([
+            handlers.handleAdminExpenses(session),
+            resolved.api == null ? Promise.resolve([] as Client[]) : resolved.api.adminResources.listAdminClients()
+          ]);
+          if ("error" in expenses.body) {
+            await handleProtectedRouteFailure({
+              response,
+              request,
+              sessionStore: resolved.sessionStore,
+              loginPath: buildAdminLoginRedirectPath(request),
+              title: "Admin Expenses",
+              result: expenses
+            });
+            return;
+          }
 
- if (adminExpenseDetailMatch != null) {
- const expenseId = decodeURIComponent(adminExpenseDetailMatch[1] ?? "");
- const expense = await handlers.handleAdminExpenseDetail(session, expenseId);
- if ("error" in expense.body) {
- redirect(response, "/admin/expenses");
- return;
- }
+          const selectedClientId = (url.searchParams.get("client_id") ?? "").trim();
+          const totalExpenses = expenses.body.items.reduce((sum, expense) => sum + expense.amount, 0);
+          const billableExpenses = expenses.body.items.reduce((sum, expense) => expense.billable ? sum + expense.amount : sum, 0);
+          const invoicedExpenses = expenses.body.items.filter((expense) => expense.invoiced).length;
 
- const receiptLink = expense.body.item.receiptFile == null
- ? "No receipt uploaded"
- : `<a href="/backend/uploads/receipts/${encodeURIComponent(expense.body.item.receiptFile)}" target="_blank" rel="noreferrer">Open receipt</a>`;
- const clientValue = expense.body.item.clientId == null
- ? "General"
- : `<a href="/admin/clients/${encodeURIComponent(expense.body.item.clientId)}">${escapeHtml(expense.body.item.clientName ?? expense.body.item.clientId)}</a>`;
+          writeHtml(response, 200, renderLayout({
+            title: "Admin Expenses",
+            body: [
+              '<article class="content-stack">',
+              renderSectionIntro({
+                eyebrow: "Expenses",
+                title: "Expenses",
+                description: "Track operating costs, billable reimbursements, and receipt coverage across the business."
+              }),
+              adminNav,
+              renderStatsGrid([
+                {
+                  label: "Total Expenses",
+                  value: formatCurrency(totalExpenses),
+                  meta: "All recorded expense amounts",
+                  accent: "primary"
+                },
+                {
+                  label: "Billable Amount",
+                  value: formatCurrency(billableExpenses),
+                  meta: "Eligible to pass through to clients",
+                  accent: "success"
+                },
+                {
+                  label: "Invoiced Entries",
+                  value: invoicedExpenses,
+                  meta: invoicedExpenses === 1 ? "Expense already invoiced" : "Expenses already invoiced",
+                  accent: "warning"
+                }
+              ]),
+              '<section id="create-expense" class="surface-block">',
+              '<h2>Add Expense</h2>',
+              `<form class="form-grid" method="post" action="/admin/expenses"><div class="form-grid form-grid--two"><label>Client<select name="clientId"><option value="">General business expense</option>${clients.map((client) => `<option value="${escapeAttribute(client.id)}"${client.id === selectedClientId ? " selected" : ""}>${escapeHtml(renderAdminClientDisplayName(client))}</option>`).join("")}</select></label><label>Expense Date<input type="date" name="expenseDate" value="${escapeAttribute(new Date().toISOString().slice(0, 10))}"></label><label>Category<input type="text" name="category" required></label><label>Amount<input type="number" name="amount" min="0" step="0.01" required></label></div><label>Description<input type="text" name="description" required></label><div class="form-grid form-grid--two"><label><input type="checkbox" name="billable"> Billable to client</label><label><input type="checkbox" name="invoiced"> Already invoiced</label></div><label>Notes<textarea name="notes" rows="4"></textarea></label><div class="form-actions"><button type="submit">Add Expense</button></div></form>`,
+              '</section>',
+              '<section class="surface-block">',
+              '<h2>Expense Ledger</h2>',
+              renderDataTable({
+                headers: ["Expense ID", "Date", "Category", "Description", "Client", "Amount", "Status", "Actions"],
+                rows: expenses.body.items.map((expense) => [
+                  `<a href="/admin/expenses/${encodeURIComponent(expense.id)}">${escapeHtml(expense.id)}</a>`,
+                  escapeHtml(formatAdminDate(expense.expenseDate)),
+                  escapeHtml(expense.category),
+                  escapeHtml(expense.description),
+                  expense.clientId == null
+                    ? "General"
+                    : `<a href="/admin/clients/${encodeURIComponent(expense.clientId)}/profile">${escapeHtml(expense.clientName ?? expense.clientId)}</a>`,
+                  escapeHtml(formatCurrency(expense.amount)),
+                  renderExpenseStatusPill(expense),
+                  renderTableActionLinks([
+                    { href: `/admin/expenses/${encodeURIComponent(expense.id)}`, label: "Manage" }
+                  ])
+                ]),
+                emptyMessage: "No expenses."
+              }),
+              '</section>',
+              '</article>'
+            ].join("")
+          }));
+          return;
+        }
 
- writeHtml(response, 200, renderLayout({
- title: "Admin Expense Detail",
- body: [
- '<article class="content-stack">',
- renderSectionIntro({
- eyebrow: "Expenses",
- title: expense.body.item.id,
- description: "Review classification, reimbursement status, attached receipt, and bookkeeping notes for this expense."
- }),
- adminNav,
- '<section class="surface-block">',
- "<h2>Expense Details</h2>",
- renderDetailGrid([
- { label: "Expense ID", value: escapeHtml(expense.body.item.id) },
- { label: "Client", value: clientValue },
- { label: "Category", value: escapeHtml(expense.body.item.category) },
- { label: "Amount", value: escapeHtml(formatCurrency(expense.body.item.amount)) },
- { label: "Expense Date", value: escapeHtml(formatAdminDate(expense.body.item.expenseDate)) },
- { label: "Status", value: renderExpenseStatusPill(expense.body.item) },
- { label: "Receipt", value: receiptLink },
- { label: "Created", value: escapeHtml(formatAdminDateTime(expense.body.item.createdAt)) }
- ]),
- "</section>",
- '<section class="surface-block">',
- "<h2>Description</h2>",
- `<p>${escapeHtml(expense.body.item.description)}</p>`,
- "</section>",
- '<section class="surface-block">',
- "<h2>Notes</h2>",
- `<p>${escapeHtml(expense.body.item.notes.trim() === "" ? "No notes provided." : expense.body.item.notes)}</p>`,
- "</section>",
- "</article>"
- ].join("")
- }));
- return;
- }
+        if (adminExpenseDetailMatch != null) {
+          const expenseId = decodeURIComponent(adminExpenseDetailMatch[1] ?? "");
+          const expense = await handlers.handleAdminExpenseDetail(session, expenseId);
+          if ("error" in expense.body) {
+            redirect(response, "/admin/expenses");
+            return;
+          }
 
- if (url.pathname === "/admin/invoices" || url.pathname === "/client/invoices_list.php") {
-          const invoices = await handlers.handleAdminInvoices(session);
+          const clientValue = expense.body.item.clientId == null
+            ? "General business expense"
+            : `<a href="/admin/clients/${encodeURIComponent(expense.body.item.clientId)}/profile">${escapeHtml(expense.body.item.clientName ?? expense.body.item.clientId)}</a>`;
+          const receiptLink = expense.body.item.receiptFile == null
+            ? "No receipt uploaded"
+            : `<a href="/backend/uploads/receipts/${encodeURIComponent(expense.body.item.receiptFile)}" target="_blank" rel="noreferrer">Open receipt</a>`;
+
+          writeHtml(response, 200, renderLayout({
+            title: "Admin Expense Detail",
+            body: [
+              '<article class="content-stack">',
+              renderSectionIntro({
+                eyebrow: "Expenses",
+                title: expense.body.item.id,
+                description: "Review classification, reimbursement status, attached receipt, and bookkeeping notes for this expense."
+              }),
+              adminNav,
+              '<section class="surface-block">',
+              '<h2>Expense Details</h2>',
+              renderDetailGrid([
+                { label: "Expense ID", value: escapeHtml(expense.body.item.id) },
+                { label: "Client", value: clientValue },
+                { label: "Category", value: escapeHtml(expense.body.item.category) },
+                { label: "Amount", value: escapeHtml(formatCurrency(expense.body.item.amount)) },
+                { label: "Expense Date", value: escapeHtml(formatAdminDate(expense.body.item.expenseDate)) },
+                { label: "Status", value: renderExpenseStatusPill(expense.body.item) },
+                { label: "Receipt", value: receiptLink },
+                { label: "Created", value: escapeHtml(formatAdminDateTime(expense.body.item.createdAt)) }
+              ]),
+              '</section>',
+              '<section class="surface-block">',
+              '<h2>Description</h2>',
+              `<p>${escapeHtml(expense.body.item.description)}</p>`,
+              '</section>',
+              '<section class="surface-block">',
+              '<h2>Notes</h2>',
+              `<p>${escapeHtml(expense.body.item.notes.trim() === "" ? "No notes recorded." : expense.body.item.notes)}</p>`,
+              `<div class="form-actions"><a href="${expense.body.item.clientId == null ? "/admin/expenses" : buildAdminExpensesPath({ clientId: expense.body.item.clientId })}">Back to Expenses</a></div>`,
+              '</section>',
+              '</article>'
+            ].join("")
+          }));
+          return;
+        }
+if (method === "POST" && handlers != null && resolved.api != null && url.pathname === "/admin/invoices") {
+          const session = await loadPersistedSession(resolved.sessionStore, request);
+          if (session == null) {
+            redirect(response, buildAdminLoginRedirectPath(request));
+            return;
+          }
+
+          try {
+            const form = await readFormBody(request);
+            const totalAmount = Number.parseFloat(readRequiredFormValue(form, "totalAmount"));
+            if (!Number.isFinite(totalAmount) || totalAmount < 0) {
+              throw new Error("Invoice total must be a valid positive number.");
+            }
+
+            const createdInvoice = await resolved.api.adminResources.createAdminInvoice({
+              clientId: readRequiredFormValue(form, "clientId"),
+              totalAmount,
+              dueAt: readOptionalFormValue(form, "dueAt"),
+              status: readRequiredFormValue(form, "status") as Invoice["status"],
+              notes: form.get("notes")?.trim() ?? ""
+            });
+            redirect(response, `/admin/invoices/${encodeURIComponent(createdInvoice.id)}`);
+          } catch (error) {
+            writeHtml(response, 400, renderLayout({
+              title: "Admin Invoices",
+              body: `<article><h1>Admin Invoices</h1><p>${escapeHtml(error instanceof Error ? error.message : "Unable to create invoice.")}</p></article>`
+            }));
+          }
+          return;
+        }
+
+        if (url.pathname === "/admin/invoices" || url.pathname === "/client/invoices_list.php") {
+          const [invoices, clients] = await Promise.all([
+            handlers.handleAdminInvoices(session),
+            resolved.api == null ? Promise.resolve([] as Client[]) : resolved.api.adminResources.listAdminClients()
+          ]);
           if ("error" in invoices.body) {
             await handleProtectedRouteFailure({
               response,
@@ -14131,6 +14342,9 @@ return;
             return;
           }
 
+          const clientById = new Map(clients.map((client) => [client.id, client]));
+          const selectedClientId = (url.searchParams.get("client_id") ?? "").trim();
+
           writeHtml(response, 200, renderLayout({
             title: "Admin Invoices",
             body: [
@@ -14138,28 +14352,40 @@ return;
               renderSectionIntro({
                 eyebrow: "Invoices",
                 title: "Invoices",
-                description: "Track outstanding balances and paid invoice history across all client accounts."
+                description: "Track revenue, due dates, and outstanding balances across client billing."
               }),
               adminNav,
+              '<section id="create-invoice" class="surface-block">',
+              '<h2>Create Invoice</h2>',
+              `<form class="form-grid" method="post" action="/admin/invoices"><div class="form-grid form-grid--two"><label>Client<select name="clientId" required><option value="">Select client</option>${clients.map((client) => `<option value="${escapeAttribute(client.id)}"${client.id === selectedClientId ? " selected" : ""}>${escapeHtml(renderAdminClientDisplayName(client))}</option>`).join("")}</select></label><label>Due Date<input type="date" name="dueAt" value="${escapeAttribute(new Date().toISOString().slice(0, 10))}"></label><label>Total Amount<input type="number" name="totalAmount" min="0" step="0.01" required></label><label>Status<select name="status"><option value="draft">Draft</option><option value="sent" selected>Sent</option><option value="paid">Paid</option><option value="void">Void</option></select></label></div><label>Notes<textarea name="notes" rows="4"></textarea></label><div class="form-actions"><button type="submit">Create Invoice</button></div></form>`,
+              '</section>',
               '<section class="surface-block">',
-              "<h2>Invoice Ledger</h2>",
+              '<h2>Invoice Ledger</h2>',
               renderDataTable({
-                headers: ["Invoice ID", "Outstanding", "Status", "Actions"],
-                rows: invoices.body.items.map((invoice) => [
-                  `<a href="/admin/invoices/${encodeURIComponent(invoice.id)}">${escapeHtml(invoice.id)}</a>`,
-                  escapeHtml(formatCurrency(invoice.outstandingAmount)),
-                  renderStatusPill(
-                    invoice.status,
-                    invoice.status === "paid" ? "success" : invoice.status === "void" ? "danger" : "warning"
-                  ),
-                  renderTableActionLinks([
-                    { href: `/admin/invoices/${encodeURIComponent(invoice.id)}`, label: "Manage" }
-                  ])
-                ]),
+                headers: ["Invoice ID", "Client", "Total", "Outstanding", "Due Date", "Status", "Actions"],
+                rows: invoices.body.items.map((invoice) => {
+                  const client = clientById.get(invoice.clientId) ?? null;
+                  return [
+                    `<a href="/admin/invoices/${encodeURIComponent(invoice.id)}">${escapeHtml(invoice.id)}</a>`,
+                    client == null
+                      ? escapeHtml(invoice.clientId)
+                      : `<a href="/admin/clients/${encodeURIComponent(client.id)}/profile">${escapeHtml(renderAdminClientDisplayName(client))}</a>`,
+                    escapeHtml(formatCurrency(invoice.totalAmount)),
+                    escapeHtml(formatCurrency(invoice.outstandingAmount)),
+                    escapeHtml(formatAdminDate(invoice.dueAt)),
+                    renderStatusPill(
+                      invoice.status,
+                      invoice.status === "paid" ? "success" : invoice.status === "void" ? "danger" : "warning"
+                    ),
+                    renderTableActionLinks([
+                      { href: `/admin/invoices/${encodeURIComponent(invoice.id)}`, label: "Manage" }
+                    ])
+                  ];
+                }),
                 emptyMessage: "No invoices."
               }),
-              "</section>",
-              "</article>"
+              '</section>',
+              '</article>'
             ].join("")
           }));
           return;
@@ -14173,6 +14399,13 @@ return;
             return;
           }
 
+          const client = resolved.api == null
+            ? null
+            : await resolved.api.adminResources.findAdminClientById(invoice.body.item.clientId);
+          const clientValue = client == null
+            ? escapeHtml(invoice.body.item.clientId)
+            : `<a href="/admin/clients/${encodeURIComponent(client.id)}/profile">${escapeHtml(renderAdminClientDisplayName(client))}</a>`;
+
           writeHtml(response, 200, renderLayout({
             title: "Admin Invoice Detail",
             body: [
@@ -14180,14 +14413,14 @@ return;
               renderSectionIntro({
                 eyebrow: "Invoices",
                 title: invoice.body.item.id,
-                description: "Review the balance, due date, and current collection state for this invoice."
+                description: "Review balance, due date, and current collection state for this invoice."
               }),
               adminNav,
               '<section class="surface-block">',
-              "<h2>Invoice Details</h2>",
+              '<h2>Invoice Details</h2>',
               renderDetailGrid([
                 { label: "Invoice ID", value: escapeHtml(invoice.body.item.id) },
-                { label: "Client ID", value: escapeHtml(invoice.body.item.clientId) },
+                { label: "Client", value: clientValue },
                 {
                   label: "Status",
                   value: renderStatusPill(
@@ -14197,17 +14430,16 @@ return;
                 },
                 { label: "Total Amount", value: escapeHtml(formatCurrency(invoice.body.item.totalAmount)) },
                 { label: "Outstanding Balance", value: escapeHtml(formatCurrency(invoice.body.item.outstandingAmount)) },
-                { label: "Due Date", value: escapeHtml(invoice.body.item.dueAt ?? "No due date") }
+                { label: "Due Date", value: escapeHtml(formatAdminDate(invoice.body.item.dueAt)) }
               ]),
-              '<div class="form-actions"><a href="/admin/invoices">Back to Invoices</a></div>',
-              "</section>",
-              "</article>"
+              `<div class="form-actions"><a href="${buildAdminInvoicesPath({ clientId: invoice.body.item.clientId })}">Back to Invoices</a></div>`,
+              '</section>',
+              '</article>'
             ].join("")
           }));
           return;
         }
-
-        if (url.pathname === "/admin/quotes") {
+if (url.pathname === "/admin/quotes") {
           const quotes = await handlers.handleAdminQuotes(session);
           if ("error" in quotes.body) {
             await handleProtectedRouteFailure({
@@ -14596,7 +14828,7 @@ renderLongTextBlock(adminPetItem.petSittingNotes, "No care notes have been recor
 renderQuickLinksGrid([
 { href: `/admin/pets/${encodeURIComponent(adminPetItem.id)}/files`, label: "Files", description: files.length === 0 ? "Upload intake, vaccine, or image records." : `${formatCountLabel(files.length, "stored file")} linked to this pet.` },
 { href: `/admin/clients/${encodeURIComponent(adminPetItem.clientId)}/profile`, label: "Owner", description: ownerProfile == null ? "Open the linked client profile." : ownerProfile.name },
-{ href: "/admin/bookings", label: "Appointments", description: upcomingBookings.length === 0 ? "No upcoming bookings linked to this pet." : `${formatCountLabel(upcomingBookings.length, "upcoming visit")} linked here.` },
+{ href: buildAdminBookingsPath({ q: adminPetItem.id }), label: "Appointments", description: upcomingBookings.length === 0 ? "No upcoming bookings linked to this pet." : `${formatCountLabel(upcomingBookings.length, "upcoming visit")} linked here.` },
 { href: "/admin/forms", label: "Forms", description: petForms.length === 0 ? "No pet-specific forms submitted yet." : `${formatCountLabel(petForms.length, "linked form")} visible from this profile.` },
 { href: `/admin/clients/${encodeURIComponent(adminPetItem.clientId)}/achievements`, label: "Achievements", description: petAchievements.length === 0 ? "No awards linked to this pet yet." : `${formatCountLabel(petAchievements.length, "achievement")} recorded for this pet.` },
 { href: `/admin/clients/${encodeURIComponent(adminPetItem.clientId)}/contacts`, label: "Contacts", description: contacts.length === 0 ? "No household contacts available." : `${formatCountLabel(contacts.length, "contact")} available for follow-up.` }
@@ -14675,17 +14907,21 @@ writeHtml(response, 200, renderLayout({
               renderSectionIntro({
                 eyebrow: "Packages",
                 title: "Packages",
-                description: "Review published package pricing and active training package options."
+                description: "Review published package pricing and confirm which appointment credits are included in each offer."
               }),
               adminNav,
               '<section class="surface-block">',
-              "<h2>Package Catalog</h2>",
+              '<h2>Package Catalog</h2>',
               renderDataTable({
-                headers: ["Package ID", "Name", "Price", "Status", "Actions"],
+                headers: ["Package ID", "Name", "Price", "Included Credits", "Public Link", "Status", "Actions"],
                 rows: packages.body.items.map((item) => [
                   `<a href="/admin/packages/${encodeURIComponent(item.id)}">${escapeHtml(item.id)}</a>`,
                   escapeHtml(item.name),
                   escapeHtml(formatCurrency(item.price)),
+                  escapeHtml(summarizePackageItems(item.items)),
+                  item.shareToken == null
+                    ? "Not shared"
+                    : `<a href="/client/package_detail.php?token=${encodeURIComponent(item.shareToken)}" target="_blank" rel="noreferrer">Open public page</a>`,
                   renderStatusPill(item.active ? "Active" : "Inactive", item.active ? "success" : "default"),
                   renderTableActionLinks([
                     { href: `/admin/packages/${encodeURIComponent(item.id)}`, label: "Manage" }
@@ -14693,8 +14929,8 @@ writeHtml(response, 200, renderLayout({
                 ]),
                 emptyMessage: "No packages."
               }),
-              "</section>",
-              "</article>"
+              '</section>',
+              '</article>'
             ].join("")
           }));
           return;
@@ -14715,11 +14951,11 @@ writeHtml(response, 200, renderLayout({
               renderSectionIntro({
                 eyebrow: "Packages",
                 title: packageDetail.body.item.name,
-                description: "Review training package pricing and whether this package is currently active."
+                description: "Review training package pricing and whether the package is currently active."
               }),
               adminNav,
               '<section class="surface-block">',
-              "<h2>Package Details</h2>",
+              '<h2>Package Details</h2>',
               renderDetailGrid([
                 { label: "Package ID", value: escapeHtml(packageDetail.body.item.id) },
                 { label: "Name", value: escapeHtml(packageDetail.body.item.name) },
@@ -14727,18 +14963,35 @@ writeHtml(response, 200, renderLayout({
                 {
                   label: "Status",
                   value: renderStatusPill(packageDetail.body.item.active ? "Active" : "Inactive", packageDetail.body.item.active ? "success" : "default")
+                },
+                {
+                  label: "Public Link",
+                  value: packageDetail.body.item.shareToken == null
+                    ? "Not shared publicly"
+                    : `<a href="/client/package_detail.php?token=${encodeURIComponent(packageDetail.body.item.shareToken)}" target="_blank" rel="noreferrer">Open package page</a>`
                 }
               ]),
-              '<div class="form-actions"><a href="/admin/packages">Back to Packages</a></div>',
-              "</section>",
-              "</article>"
+              '</section>',
+              '<section class="surface-block">',
+              '<h2>Included Credits</h2>',
+              `<p>${escapeHtml(summarizePackageItems(packageDetail.body.item.items))}</p>`,
+              '</section>',
+              '<section class="surface-block">',
+              '<h2>Description</h2>',
+              `<p>${escapeHtml((packageDetail.body.item.description ?? "").trim() === "" ? "No description provided." : packageDetail.body.item.description ?? "")}</p>`,
+              `<div class="form-actions"><a href="/admin/packages">Back to Packages</a></div>`,
+              '</section>',
+              '</article>'
             ].join("")
           }));
           return;
         }
-
-        if (url.pathname === "/admin/credits") {
-          const credits = await handlers.handleAdminCredits(session);
+if (url.pathname === "/admin/credits") {
+          const [credits, clients, appointmentTypes] = await Promise.all([
+            handlers.handleAdminCredits(session),
+            resolved.api == null ? Promise.resolve([] as Client[]) : resolved.api.adminResources.listAdminClients(),
+            resolved.api == null ? Promise.resolve([] as AppointmentType[]) : resolved.api.adminConfiguration.listAdminAppointmentTypes()
+          ]);
           if ("error" in credits.body) {
             await handleProtectedRouteFailure({
               response,
@@ -14751,6 +15004,9 @@ writeHtml(response, 200, renderLayout({
             return;
           }
 
+          const clientById = new Map(clients.map((client) => [client.id, client]));
+          const appointmentTypeById = new Map(appointmentTypes.map((appointmentType) => [appointmentType.id, appointmentType]));
+
           writeHtml(response, 200, renderLayout({
             title: "Admin Credits",
             body: [
@@ -14762,22 +15018,32 @@ writeHtml(response, 200, renderLayout({
               }),
               adminNav,
               '<section class="surface-block">',
-              "<h2>Credit Balances</h2>",
+              '<h2>Credit Balances</h2>',
               renderDataTable({
-                headers: ["Credit ID", "Remaining Units", "Package", "Status", "Actions"],
-                rows: credits.body.items.map((credit) => [
-                  `<a href="/admin/credits/${encodeURIComponent(credit.id)}">${escapeHtml(credit.id)}</a>`,
-                  escapeHtml(String(credit.remainingUnits)),
-                  escapeHtml(credit.packageId ?? "Unassigned"),
-                  renderStatusPill(credit.remainingUnits > 0 ? "Available" : "Used", credit.remainingUnits > 0 ? "success" : "warning"),
-                  renderTableActionLinks([
-                    { href: `/admin/credits/${encodeURIComponent(credit.id)}`, label: "Manage" }
-                  ])
-                ]),
+                headers: ["Credit ID", "Client", "Appointment Type", "Remaining Units", "Package", "Status", "Actions"],
+                rows: credits.body.items.map((credit) => {
+                  const client = clientById.get(credit.clientId) ?? null;
+                  const appointmentType = appointmentTypeById.get(credit.appointmentTypeId) ?? null;
+                  return [
+                    `<a href="/admin/credits/${encodeURIComponent(credit.id)}">${escapeHtml(credit.id)}</a>`,
+                    client == null
+                      ? escapeHtml(credit.clientId)
+                      : `<a href="/admin/clients/${encodeURIComponent(client.id)}/profile">${escapeHtml(renderAdminClientDisplayName(client))}</a>`,
+                    escapeHtml(appointmentType?.name ?? credit.appointmentTypeId),
+                    escapeHtml(String(credit.remainingUnits)),
+                    credit.packageId == null
+                      ? "Unassigned"
+                      : `<a href="/admin/packages/${encodeURIComponent(credit.packageId)}">${escapeHtml(credit.packageId)}</a>`,
+                    renderStatusPill(credit.remainingUnits > 0 ? "Available" : "Used", credit.remainingUnits > 0 ? "success" : "warning"),
+                    renderTableActionLinks([
+                      { href: `/admin/credits/${encodeURIComponent(credit.id)}`, label: "Manage" }
+                    ])
+                  ];
+                }),
                 emptyMessage: "No credits."
               }),
-              "</section>",
-              "</article>"
+              '</section>',
+              '</article>'
             ].join("")
           }));
           return;
@@ -14791,6 +15057,20 @@ writeHtml(response, 200, renderLayout({
             return;
           }
 
+          const [client, appointmentType] = await Promise.all([
+            resolved.api == null ? Promise.resolve(null) : resolved.api.adminResources.findAdminClientById(credit.body.item.clientId),
+            resolved.api == null ? Promise.resolve(null) : resolved.api.adminConfiguration.findAdminAppointmentTypeById(credit.body.item.appointmentTypeId)
+          ]);
+          const clientValue = client == null
+            ? escapeHtml(credit.body.item.clientId)
+            : `<a href="/admin/clients/${encodeURIComponent(client.id)}/profile">${escapeHtml(renderAdminClientDisplayName(client))}</a>`;
+          const appointmentTypeValue = appointmentType == null
+            ? escapeHtml(credit.body.item.appointmentTypeId)
+            : `<a href="/admin/appointment-types/${encodeURIComponent(appointmentType.id)}">${escapeHtml(appointmentType.name)}</a>`;
+          const packageValue = credit.body.item.packageId == null
+            ? "Unassigned"
+            : `<a href="/admin/packages/${encodeURIComponent(credit.body.item.packageId)}">${escapeHtml(credit.body.item.packageId)}</a>`;
+
           writeHtml(response, 200, renderLayout({
             title: "Admin Credit Detail",
             body: [
@@ -14798,30 +15078,31 @@ writeHtml(response, 200, renderLayout({
               renderSectionIntro({
                 eyebrow: "Credits",
                 title: credit.body.item.id,
-                description: "Review the remaining units and associated package allocation for this client credit."
+                description: "Review remaining units and the associated appointment type for this client credit."
               }),
               adminNav,
               '<section class="surface-block">',
-              "<h2>Credit Details</h2>",
+              '<h2>Credit Details</h2>',
               renderDetailGrid([
                 { label: "Credit ID", value: escapeHtml(credit.body.item.id) },
-                { label: "Client ID", value: escapeHtml(credit.body.item.clientId) },
-                { label: "Package", value: escapeHtml(credit.body.item.packageId ?? "Unassigned") },
+                { label: "Client", value: clientValue },
+                { label: "Appointment Type", value: appointmentTypeValue },
+                { label: "Package", value: packageValue },
                 { label: "Remaining Units", value: escapeHtml(String(credit.body.item.remainingUnits)) },
                 {
                   label: "Availability",
                   value: renderStatusPill(credit.body.item.remainingUnits > 0 ? "Available" : "Used", credit.body.item.remainingUnits > 0 ? "success" : "warning")
                 }
               ]),
-              '<div class="form-actions"><a href="/admin/credits">Back to Credits</a></div>',
-              "</section>",
-              "</article>"
+              `<div class="form-actions"><a href="/admin/credits">Back to Credits</a></div>`,
+              '</section>',
+              '</article>'
             ].join("")
           }));
           return;
         }
 
-if (url.pathname === "/admin/achievement-types") {
+        if (url.pathname === "/admin/achievement-types")if (url.pathname === "/admin/achievement-types") {
 const types = await handlers.handleAdminAchievementTypes(session);
 if ("error" in types.body) {
 await handleProtectedRouteFailure({
@@ -15898,11 +16179,11 @@ return;
                     item.appointmentTypeId == null
                       ? ""
                       : `For ${appointmentTypeNameById.get(item.appointmentTypeId) ?? item.appointmentTypeId}`
-                  ].filter((value) => value !== "").join(" • ")),
+                  ].filter((value) => value !== "").join(" â€¢ ")),
                   escapeHtml([
                     item.templateIsInternal === true ? "Internal" : "Client",
                     item.templateShowInClientPortal === false ? "Hidden From Portal" : "Portal Visible"
-                  ].join(" • ")),
+                  ].join(" â€¢ ")),
                   renderStatusPill(item.active ? "Active" : "Inactive", item.active ? "success" : "warning"),
                   renderFormTemplateAdminActions(item.id, {
                     legacy: legacyFormTemplateListPath,
@@ -15974,7 +16255,7 @@ return;
                   value: escapeHtml([
                     formTemplateItem.templateIsInternal === true ? "Internal" : "Client",
                     formTemplateItem.templateShowInClientPortal === false ? "Hidden From Portal" : "Portal Visible"
-                  ].join(" • "))
+                  ].join(" â€¢ "))
                 },
                 {
                   label: "Status",

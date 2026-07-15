@@ -105,8 +105,25 @@ export type AdminResourceReadDependencies = {
   findAdminBookingById(bookingId: string): Promise<Booking | null>;
   listAdminExpenses(): Promise<Expense[]>;
   findAdminExpenseById(expenseId: string): Promise<Expense | null>;
+  createAdminExpense(input: {
+    clientId: string | null;
+    category: string;
+    description: string;
+    amount: number;
+    expenseDate: string | null;
+    billable: boolean;
+    invoiced: boolean;
+    notes: string;
+  }): Promise<Expense>;
   listAdminInvoices(): Promise<Invoice[]>;
   findAdminInvoiceById(invoiceId: string): Promise<Invoice | null>;
+  createAdminInvoice(input: {
+    clientId: string;
+    totalAmount: number;
+    dueAt: string | null;
+    status: Invoice["status"];
+    notes: string;
+  }): Promise<Invoice>;
   listAdminQuotes(): Promise<Quote[]>;
   findAdminQuoteById(quoteId: string): Promise<Quote | null>;
   listAdminContracts(): Promise<Contract[]>;

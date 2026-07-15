@@ -3927,11 +3927,14 @@ expect(legacyContractView.headers.get("location")).toBe("/admin/contracts/contra
       expect(adminClientProfileHtml).toContain("Household Contacts");
       expect(adminClientProfileHtml).toContain("Pet Roster");
       expect(adminClientProfileHtml).toContain("Canine Good Citizen");
-      expect(adminClientProfileHtml).toContain("<h2>Edit Client</h2>");
-      expect(adminClientProfileHtml).toContain('<form class="form-grid" method="post" action="/admin/clients/client-portal-1/profile">');
-      expect(adminClientProfileHtml).toContain('/client/form_requests_create.php?form_type=client_form&client_id=client-portal-1');
-      expect(adminClientProfileHtml).toContain('/client/form_requests_create.php?form_type=survey_form&client_id=client-portal-1');
-      expect(adminClientContactsHtml).toContain("Primary Contact");
+    expect(adminClientProfileHtml).toContain("<h2>Edit Client</h2>");
+    expect(adminClientProfileHtml).toContain('<form class="form-grid" method="post" action="/admin/clients/client-portal-1/profile">');
+    expect(adminClientProfileHtml).toContain('/client/form_requests_create.php?form_type=client_form&client_id=client-portal-1');
+    expect(adminClientProfileHtml).toContain('/client/form_requests_create.php?form_type=survey_form&client_id=client-portal-1');
+    expect(adminClientProfileHtml).toContain('/admin/invoices?client_id=client-portal-1#create-invoice');
+    expect(adminClientProfileHtml).toContain('/admin/expenses?client_id=client-portal-1#create-expense');
+    expect(adminClientProfileHtml).toContain('/admin/clients/client-portal-1/achievements');
+    expect(adminClientContactsHtml).toContain("Primary Contact");
       expect(adminClientContactsHtml).toContain("<h2>Contact Directory</h2>");
       expect(adminClientContactDetailHtml).toContain("Primary Contact");
       expect(adminClientContactDetailHtml).toContain("<h2>Edit Contact</h2>");
@@ -4105,12 +4108,52 @@ expect(legacyContractView.headers.get("location")).toBe("/admin/contracts/contra
         })
       });
 
-      const cookie = login.headers.get("set-cookie");
-      expect(cookie).toContain("bdta_session=");
+    const cookie = login.headers.get("set-cookie");
+    expect(cookie).toContain("bdta_session=");
 
-  const bookings = await fetch(`${baseUrl}/admin/bookings`, { headers: { cookie: cookie ?? "" } });
-  const bookingDetail = await fetch(`${baseUrl}/admin/bookings/booking-1`, { headers: { cookie: cookie ?? "" } });
-  const expenses = await fetch(`${baseUrl}/admin/expenses`, { headers: { cookie: cookie ?? "" } });
+    const createExpense = await fetch(`${baseUrl}/admin/expenses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        cookie: cookie ?? ""
+      },
+      redirect: "manual",
+      body: new URLSearchParams({
+        clientId: "client-portal-1",
+        category: "Travel",
+        description: "Mileage reimbursement",
+        amount: "22.50",
+        expenseDate: "2026-05-30",
+        billable: "on",
+        notes: "Trip to private lesson."
+      })
+    });
+    const createInvoice = await fetch(`${baseUrl}/admin/invoices`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        cookie: cookie ?? ""
+      },
+      redirect: "manual",
+      body: new URLSearchParams({
+        clientId: "client-portal-1",
+        totalAmount: "180.00",
+        dueAt: "2026-06-10",
+        status: "sent",
+        notes: "Manual billing entry."
+      })
+    });
+
+    expect(createExpense.status).toBe(302);
+    expect(createExpense.headers.get("location")).toBe("/admin/expenses/expense-2");
+    expect(createInvoice.status).toBe(302);
+    expect(createInvoice.headers.get("location")).toBe("/admin/invoices/invoice-2");
+    expect(state.expenses[0]?.description).toBe("Mileage reimbursement");
+    expect(state.invoices[0]?.totalAmount).toBe(180);
+
+    const bookings = await fetch(`${baseUrl}/admin/bookings`, { headers: { cookie: cookie ?? "" } });
+    const bookingDetail = await fetch(`${baseUrl}/admin/bookings/booking-1`, { headers: { cookie: cookie ?? "" } });
+    const expenses = await fetch(`${baseUrl}/admin/expenses`, { headers: { cookie: cookie ?? "" } });
   const expenseDetail = await fetch(`${baseUrl}/admin/expenses/expense-1`, { headers: { cookie: cookie ?? "" } });
   const invoices = await fetch(`${baseUrl}/admin/invoices`, { headers: { cookie: cookie ?? "" } });
   const invoiceDetail = await fetch(`${baseUrl}/admin/invoices/invoice-1`, { headers: { cookie: cookie ?? "" } });
@@ -4163,18 +4206,24 @@ expect(legacyContractView.headers.get("location")).toBe("/admin/contracts/contra
       const formsHtml = await forms.text();
       const formDetailHtml = await formDetail.text();
 
-  expect(bookingsHtml).toContain('href="/admin/bookings/booking-1"');
-  expect(bookingDetailHtml).toContain("Booking Details");
-  expect(bookingDetailHtml).toContain("svc-private-lesson");
-  expect(bookingDetailHtml).toContain('/client/form_requests_create.php?form_type=follow_up_note&booking_id=booking-1');
-  expect(expensesHtml).toContain('href="/admin/expenses/expense-1"');
-  expect(expensesHtml).toContain("Training treats");
+    expect(bookingsHtml).toContain('href="/admin/bookings/booking-1"');
+    expect(bookingsHtml).toContain("client-portal-1");
+    expect(bookingsHtml).toContain("Search by client name, pet name, appointment type, or booking ID");
+    expect(bookingDetailHtml).toContain("Booking Details");
+    expect(bookingDetailHtml).toContain("client-portal-1");
+    expect(bookingDetailHtml).toContain('/client/form_requests_create.php?form_type=follow_up_note&booking_id=booking-1');
+    expect(expensesHtml).toContain('href="/admin/expenses/expense-1"');
+    expect(expensesHtml).toContain("Add Expense");
+    expect(expensesHtml).toContain("Mileage reimbursement");
+    expect(expensesHtml).toContain("Training treats");
   expect(expenseDetailHtml).toContain("Expense Details");
-  expect(expenseDetailHtml).toContain("expense-1-receipt.pdf");
-  expect(expenseDetailHtml).toContain("$48.75");
-  expect(invoicesHtml).toContain('href="/admin/invoices/invoice-1"');
-  expect(invoiceDetailHtml).toContain("Invoice Details");
-      expect(invoiceDetailHtml).toContain("$125.00");
+    expect(expenseDetailHtml).toContain("expense-1-receipt.pdf");
+    expect(expenseDetailHtml).toContain("$48.75");
+    expect(invoicesHtml).toContain('href="/admin/invoices/invoice-1"');
+    expect(invoicesHtml).toContain("Create Invoice");
+    expect(invoicesHtml).toContain("client-portal-1");
+    expect(invoiceDetailHtml).toContain("Invoice Details");
+    expect(invoiceDetailHtml).toContain("$125.00");
       expect(quotesHtml).toContain('href="/admin/quotes/quote-1"');
       expect(quoteDetailHtml).toContain("Quote Details");
       expect(quoteDetailHtml).toContain("$450.00");
@@ -4185,15 +4234,20 @@ expect(legacyContractView.headers.get("location")).toBe("/admin/contracts/contra
       expect(petDetailHtml).toContain("Pet Details");
       expect(petDetailHtml).toContain("Care Notes");
       expect(petDetailHtml).toContain("Stored Files");
-      expect(petDetailHtml).toContain("Owner Profile");
-      expect(petDetailHtml).toContain("Buddy");
-      expect(petDetailHtml).toContain('/client/form_requests_create.php?form_type=pet_form&pet_id=pet-1');
-      expect(packagesHtml).toContain('href="/admin/packages/package-1"');
-      expect(packageDetailHtml).toContain("Package Details");
-      expect(packageDetailHtml).toContain("Starter Package");
-      expect(creditsHtml).toContain('href="/admin/credits/credit-1"');
-      expect(creditDetailHtml).toContain("Credit Details");
-      expect(creditDetailHtml).toContain("4");
+    expect(petDetailHtml).toContain("Owner Profile");
+    expect(petDetailHtml).toContain("Buddy");
+    expect(petDetailHtml).toContain('/client/form_requests_create.php?form_type=pet_form&pet_id=pet-1');
+    expect(packagesHtml).toContain('href="/admin/packages/package-1"');
+    expect(packagesHtml).toContain("Included Credits");
+    expect(packageDetailHtml).toContain("Package Details");
+    expect(packageDetailHtml).toContain("Included Credits");
+    expect(packageDetailHtml).toContain("Starter Package");
+    expect(creditsHtml).toContain('href="/admin/credits/credit-1"');
+    expect(creditsHtml).toContain("Appointment Type");
+    expect(creditsHtml).toContain("client-portal-1");
+    expect(creditDetailHtml).toContain("Credit Details");
+    expect(creditDetailHtml).toContain("Appointment Type");
+    expect(creditDetailHtml).toContain("4");
       expect(formsHtml).toContain('href="/admin/forms/form-1"');
       expect(formDetailHtml).toContain("Review Status");
       expect(formDetailHtml).toContain("Follow-up Note");
