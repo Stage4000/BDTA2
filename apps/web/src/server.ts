@@ -1614,7 +1614,7 @@ function renderStatsGrid(items: Array<{
   metaHtml?: string;
   accent?: "primary" | "secondary" | "success" | "warning";
 }>): string {
-  return `<div class="summary-grid">${items.map((item) => [
+  return `<div class="summary-grid summary-grid--count-${items.length}">${items.map((item) => [
     `<section class="summary-card${item.accent != null ? ` is-${item.accent}` : ""}">`,
     `<div class="summary-card__value">${escapeHtml(String(item.value))}</div>`,
     `<div class="summary-card__label">${escapeHtml(item.label)}</div>`,
@@ -6662,12 +6662,14 @@ function renderLayout(input: {
     ".blog-list, .portal-list { display: grid; gap: 1rem; }",
     ".blog-card, .portal-card { background: var(--theme-surface); border: 1px solid var(--theme-border); border-radius: var(--theme-radius); padding: 1.25rem; box-shadow: var(--theme-shadow-sm); }",
     ".section-copy { max-width: 58rem; margin: 0 0 1.5rem; color: #475569; }",
-    ".summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin: 1.25rem 0 2rem; }",
+    ".summary-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; margin: 1.25rem 0 2rem; align-items: stretch; }",
     ".summary-card { padding: 1.15rem 1.2rem; border-radius: 1rem; background: #fff; border: 1px solid var(--theme-border); box-shadow: var(--theme-shadow-sm); }",
     ".summary-card.is-primary { background: linear-gradient(135deg, rgba(154, 0, 115, 0.96) 0%, rgba(122, 0, 90, 0.96) 100%); color: #fff; }",
     ".summary-card.is-secondary { background: linear-gradient(135deg, rgba(10, 154, 156, 0.95) 0%, rgba(8, 118, 119, 0.95) 100%); color: #fff; }",
     ".summary-card.is-success { background: linear-gradient(135deg, rgba(22, 163, 74, 0.95) 0%, rgba(21, 128, 61, 0.95) 100%); color: #fff; }",
     ".summary-card.is-warning { background: linear-gradient(135deg, rgba(245, 158, 11, 0.94) 0%, rgba(217, 119, 6, 0.94) 100%); color: #fff; }",
+    "@media (min-width: 640px) { .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }",
+    "@media (min-width: 960px) { .summary-grid--count-1 { grid-template-columns: minmax(0, min(20rem, 100%)); } .summary-grid--count-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); } .summary-grid--count-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); } .summary-grid--count-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); } .summary-grid--count-5, .summary-grid--count-6 { grid-template-columns: repeat(6, minmax(0, 1fr)); } .summary-grid--count-5 > .summary-card, .summary-grid--count-6 > .summary-card { grid-column: span 2; } .summary-grid--count-5 > .summary-card:nth-last-child(-n+2) { grid-column: span 3; } }",
     ".summary-card__value { font-family: 'Montserrat', sans-serif; font-size: 2rem; font-weight: 700; line-height: 1; }",
     ".summary-card__label { margin-top: 0.55rem; font-weight: 600; }",
     ".summary-card__meta { margin-top: 0.4rem; font-size: 0.9rem; opacity: 0.85; }",
