@@ -7168,6 +7168,20 @@ function renderLayout(input: {
 " let pageSize = pageSizeSelect instanceof HTMLSelectElement ? Number.parseInt(pageSizeSelect.value, 10) || 10 : 10;",
 " let sortColumn = -1;",
 " let sortDirection = 'ascending';",
+" const defaultDateColumn = (() => {",
+" const columnCount = indexedRows.reduce((max, entry) => Math.max(max, entry.sortValues.length), 0);",
+" for (let columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {",
+" const values = indexedRows.map((entry) => entry.sortValues[columnIndex]).filter((value) => value != null && value.kind !== 'empty');",
+" if (values.length > 0 && values.every((value) => value.kind === 'date')) {",
+" return columnIndex;",
+" }",
+" }",
+" return -1;",
+" })();",
+" if (defaultDateColumn >= 0) {",
+" sortColumn = defaultDateColumn;",
+" sortDirection = 'descending';",
+" }",
 " const updateSortIndicators = () => {",
 " for (const button of sortButtons) {",
 " if (!(button instanceof HTMLButtonElement)) {",
@@ -13613,10 +13627,10 @@ const adminNav = "";
                 description: `Signed in as ${actor.body.actor.role}. Review client activity, bookings, invoices, and operational work from one place.`
               }),
               renderStatsGrid([
-                { label: "pendingBookings", value: dashboard.body.metrics.pendingBookings, meta: "Awaiting confirmation", accent: "warning" },
-                { label: "todaysBookings", value: dashboard.body.metrics.todaysBookings, meta: "Scheduled today", accent: "secondary" },
-                { label: "overdueInvoices", value: dashboard.body.metrics.overdueInvoices, meta: "Needs follow-up", accent: "primary" },
-                { label: "activeClients", value: dashboard.body.metrics.activeClients, meta: "Accessible client records", accent: "success" }
+              { label: "Pending Bookings", value: dashboard.body.metrics.pendingBookings, meta: "Awaiting confirmation", accent: "warning" },
+              { label: "Today's Bookings", value: dashboard.body.metrics.todaysBookings, meta: "Scheduled today", accent: "secondary" },
+              { label: "Overdue Invoices", value: dashboard.body.metrics.overdueInvoices, meta: "Needs follow-up", accent: "primary" },
+              { label: "Active Clients", value: dashboard.body.metrics.activeClients, meta: "Accessible client records", accent: "success" }
               ]),
  renderQuickLinksGrid([
  { href: "/admin/clients", label: "Clients", description: "Profiles and contacts" },

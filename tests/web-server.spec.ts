@@ -3499,9 +3499,13 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
       const contractsHtml = await contracts.text();
       const formsHtml = await forms.text();
 
-      expect(dashboardHtml).toContain("Brook Admin");
-      expect(dashboardHtml).toContain("pendingBookings");
-      expect(dashboardHtml).toContain("booking-1");
+expect(dashboardHtml).toContain("Brook Admin");
+expect(dashboardHtml).toContain("Pending Bookings");
+expect(dashboardHtml).toContain("Today&#39;s Bookings");
+expect(dashboardHtml).toContain("Overdue Invoices");
+expect(dashboardHtml).toContain("Active Clients");
+expect(dashboardHtml).not.toContain("pendingBookings");
+expect(dashboardHtml).toContain("booking-1");
       expect(dashboardHtml).toContain("Dog Training Academy");
       expect(dashboardHtml).toContain("sidebar");
       expect(dashboardHtml).toContain("app-main-content");
@@ -3530,6 +3534,7 @@ expect(bookingsHtml).toContain("data-enhanced-table-sort");
 expect(bookingsHtml).toContain('aria-sort="none"');
 expect(bookingsHtml).toContain("Date.parse(");
 expect(bookingsHtml).toContain("data-localized-datetime");
+expect(bookingsHtml).toContain("defaultDateColumn");
 expect(bookingsHtml).toContain("data-enhanced-table-page-count");
 expect(bookingsHtml).toContain("Manage");
 expect(legacyBookingsList.headers.get("location")).toBe("/admin/bookings");
