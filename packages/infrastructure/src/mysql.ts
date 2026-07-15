@@ -1552,15 +1552,117 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
       || (typeof maybeMessage === "string" && (/unknown column/i.test(maybeMessage) || /doesn't exist/i.test(maybeMessage)));
   }
 
-  function buildBookingsSelectSql(input: { limit?: number; whereClause?: string; legacy?: boolean; }): string {
+  type LegacyBookingRow = {
+    id: number;
+    client_id?: number | null;
+    service_type: string;
+    appointment_date: string;
+    appointment_time: string;
+    duration_minutes: number;
+    status: string | null;
+    ical_token?: string | null;
+  };
+
+  type BookingSelectSqlFallback = {
+    legacyOrdering?: boolean;
+    omitClientId?: boolean;
+    tokenlessLegacy?: boolean;
+  };
+
+  function buildBookingsSelectSql(input: {
+    limit?: number;
+    whereClause?: string;
+    legacyOrdering?: boolean;
+    omitClientId?: boolean;
+    tokenlessLegacy?: boolean;
+  }): string {
     const limitClause = typeof input.limit === "number" ? `LIMIT ${Math.max(1, Math.trunc(input.limit))}` : "";
+    const clientIdSelect = input.omitClientId ? "NULL AS client_id" : "client_id";
+    const icalTokenSelect = input.tokenlessLegacy ? "NULL AS ical_token" : "ical_token";
     return [
-      `SELECT id, ${input.legacy ? "NULL AS client_id" : "client_id"}, service_type, appointment_date, appointment_time, duration_minutes, status, ical_token`,
+      `SELECT id, ${clientIdSelect}, service_type, appointment_date, appointment_time, duration_minutes, status, ${icalTokenSelect}`,
       "FROM bookings",
       input.whereClause ?? "",
-      input.legacy ? "ORDER BY appointment_date DESC, appointment_time DESC, id DESC" : "ORDER BY created_at DESC, id DESC",
+      input.legacyOrdering ? "ORDER BY appointment_date DESC, appointment_time DESC, id DESC" : "ORDER BY created_at DESC, id DESC",
       limitClause
     ].filter((part) => part.trim() !== "").join(" ");
+  }
+
+  function getNextBookingSelectFallback(
+    error: unknown,
+    current: BookingSelectSqlFallback
+  ): BookingSelectSqlFallback | null {
+    const message = typeof error === "object"
+      && error != null
+      && "message" in error
+      && typeof error.message === "string"
+      ? error.message.toLowerCase()
+      : "";
+    const next: BookingSelectSqlFallback = { ...current };
+
+    if (message.includes("created_at")) {
+      next.legacyOrdering = true;
+    }
+    if (message.includes("client_id")) {
+      next.omitClientId = true;
+    }
+    if (message.includes("ical_token")) {
+      next.tokenlessLegacy = true;
+    }
+
+    if (
+      next.legacyOrdering !== current.legacyOrdering
+      || next.omitClientId !== current.omitClientId
+      || next.tokenlessLegacy !== current.tokenlessLegacy
+    ) {
+      return next;
+    }
+
+    if (!current.legacyOrdering) {
+      return { ...current, legacyOrdering: true };
+    }
+    if (!current.tokenlessLegacy) {
+      return { ...current, tokenlessLegacy: true };
+    }
+    if (!current.omitClientId) {
+      return { ...current, omitClientId: true };
+    }
+
+    return null;
+  }
+
+  async function loadLegacyBookingRows(input: {
+    limit?: number;
+    whereClause?: string;
+    params?: unknown[];
+  }): Promise<LegacyBookingRow[]> {
+    let fallback: BookingSelectSqlFallback = {};
+
+    while (true) {
+      try {
+        const [rows] = await executor.execute<Array<LegacyBookingRow>>(
+          buildBookingsSelectSql({
+            limit: input.limit,
+            whereClause: input.whereClause,
+            legacyOrdering: fallback.legacyOrdering,
+            omitClientId: fallback.omitClientId,
+            tokenlessLegacy: fallback.tokenlessLegacy
+          }),
+          input.params ?? []
+        );
+        return rows;
+      } catch (error) {
+        if (!isMissingColumnError(error)) {
+          throw error;
+        }
+
+        const nextFallback = getNextBookingSelectFallback(error, fallback);
+        if (nextFallback == null) {
+          throw error;
+        }
+        fallback = nextFallback;
+      }
+    }
   }
 
   function buildInvoicesSelectSql(input: { limit?: number; whereClause?: string; legacy?: boolean; tolerateMissingPayments?: boolean; }): string {
@@ -3019,43 +3121,7 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
       return Number(rows[0]?.count ?? 0);
     },
     async listRecentBookings() {
-      let rows: Array<{
-        id: number;
-        client_id: number | null;
-        service_type: string;
-        appointment_date: string;
-        appointment_time: string;
-        duration_minutes: number;
-        status: "pending" | "confirmed" | "completed" | "cancelled";
-        ical_token: string | null;
-      }>;
-      try {
-        [rows] = await executor.execute<Array<{
-          id: number;
-          client_id: number | null;
-          service_type: string;
-          appointment_date: string;
-          appointment_time: string;
-          duration_minutes: number;
-          status: "pending" | "confirmed" | "completed" | "cancelled";
-          ical_token: string | null;
-        }>>(buildBookingsSelectSql({ limit: 5 }));
-      } catch (error) {
-        if (!isMissingColumnError(error)) {
-          throw error;
-        }
-        [rows] = await executor.execute<Array<{
-          id: number;
-          client_id: number | null;
-          service_type: string;
-          appointment_date: string;
-          appointment_time: string;
-          duration_minutes: number;
-          status: "pending" | "confirmed" | "completed" | "cancelled";
-          ical_token: string | null;
-        }>>(buildBookingsSelectSql({ limit: 5, legacy: true }));
-      }
-
+      const rows = await loadLegacyBookingRows({ limit: 5 });
       return rows.map((row) => fromLegacyBookingRow(row));
     }
   };
@@ -5550,82 +5616,11 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
       return deleted;
     },
     async listAdminBookings() {
-      let rows: Array<{
-        id: number;
-        client_id: number | null;
-        service_type: string;
-        appointment_date: string;
-        appointment_time: string;
-        duration_minutes: number;
-        status: "pending" | "confirmed" | "completed" | "cancelled";
-        ical_token: string | null;
-      }>;
-      try {
-        [rows] = await executor.execute<Array<{
-          id: number;
-          client_id: number | null;
-          service_type: string;
-          appointment_date: string;
-          appointment_time: string;
-          duration_minutes: number;
-          status: "pending" | "confirmed" | "completed" | "cancelled";
-          ical_token: string | null;
-        }>>(buildBookingsSelectSql({ limit: 50 }));
-      } catch (error) {
-        if (!isMissingColumnError(error)) {
-          throw error;
-        }
-        [rows] = await executor.execute<Array<{
-          id: number;
-          client_id: number | null;
-          service_type: string;
-          appointment_date: string;
-          appointment_time: string;
-          duration_minutes: number;
-          status: "pending" | "confirmed" | "completed" | "cancelled";
-          ical_token: string | null;
-        }>>(buildBookingsSelectSql({ limit: 50, legacy: true }));
-      }
+      const rows = await loadLegacyBookingRows({ limit: 50 });
       return rows.map((row) => fromLegacyBookingRow(row));
     },
     async findAdminBookingById(bookingId) {
-      let rows: Array<{
-        id: number;
-        client_id: number | null;
-        service_type: string;
-        appointment_date: string;
-        appointment_time: string;
-        duration_minutes: number;
-        status: "pending" | "confirmed" | "completed" | "cancelled";
-        ical_token: string | null;
-      }>;
-      try {
-        [rows] = await executor.execute<Array<{
-          id: number;
-          client_id: number | null;
-          service_type: string;
-          appointment_date: string;
-          appointment_time: string;
-          duration_minutes: number;
-          status: "pending" | "confirmed" | "completed" | "cancelled";
-          ical_token: string | null;
-        }>>(buildBookingsSelectSql({ whereClause: "WHERE id = ?", limit: 1 }), [bookingId]);
-      } catch (error) {
-        if (!isMissingColumnError(error)) {
-          throw error;
-        }
-        [rows] = await executor.execute<Array<{
-          id: number;
-          client_id: number | null;
-          service_type: string;
-          appointment_date: string;
-          appointment_time: string;
-          duration_minutes: number;
-          status: "pending" | "confirmed" | "completed" | "cancelled";
-          ical_token: string | null;
-        }>>(buildBookingsSelectSql({ whereClause: "WHERE id = ?", limit: 1, legacy: true }), [bookingId]);
-      }
-
+      const rows = await loadLegacyBookingRows({ whereClause: "WHERE id = ?", limit: 1, params: [bookingId] });
       const row = rows[0];
       return row == null ? null : fromLegacyBookingRow(row);
     },

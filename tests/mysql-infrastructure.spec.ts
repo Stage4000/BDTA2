@@ -475,10 +475,11 @@ it("normalizes legacy booking statuses and zero-date transactional timestamps", 
           access_token?: string | null;
         }>
     > = [
-      missingSchemaError("Unknown column 'created_at' in 'order clause'", "ER_BAD_FIELD_ERROR"),
-      [{
-        id: 42,
-        client_id: null,
+    missingSchemaError("Unknown column 'created_at' in 'order clause'", "ER_BAD_FIELD_ERROR"),
+    missingSchemaError("Unknown column 'client_id' in 'field list'", "ER_BAD_FIELD_ERROR"),
+    [{
+      id: 42,
+      client_id: null,
         service_type: "Private Lesson",
         appointment_date: "2026-06-02",
         appointment_time: "4:15 PM",
@@ -566,15 +567,97 @@ it("normalizes legacy booking statuses and zero-date transactional timestamps", 
     ]);
 
     expect(executor.calls[0]?.sql).toContain("ORDER BY created_at DESC, id DESC");
-    expect(executor.calls[1]?.sql).toContain("NULL AS client_id");
     expect(executor.calls[1]?.sql).toContain("ORDER BY appointment_date DESC, appointment_time DESC, id DESC");
-    expect(executor.calls[2]?.sql).toContain("i.outstanding_amount AS outstanding_amount");
-    expect(executor.calls[3]?.sql).toContain("i.due_date AS due_at");
-    expect(executor.calls[3]?.sql).toContain("FROM invoice_payments");
-    expect(executor.calls[4]?.sql).toContain("COALESCE(i.total_amount, 0) AS outstanding_amount");
-    expect(executor.calls[5]?.sql).toContain("q.total_amount AS total_amount");
-    expect(executor.calls[6]?.sql).toContain("q.amount AS total_amount");
-    expect(executor.calls[7]?.sql).toContain("NULL AS access_token");
+    expect(executor.calls[2]?.sql).toContain("NULL AS client_id");
+    expect(executor.calls[2]?.sql).toContain("ORDER BY appointment_date DESC, appointment_time DESC, id DESC");
+    expect(executor.calls[3]?.sql).toContain("i.outstanding_amount AS outstanding_amount");
+    expect(executor.calls[4]?.sql).toContain("i.due_date AS due_at");
+    expect(executor.calls[4]?.sql).toContain("FROM invoice_payments");
+    expect(executor.calls[5]?.sql).toContain("COALESCE(i.total_amount, 0) AS outstanding_amount");
+    expect(executor.calls[6]?.sql).toContain("q.total_amount AS total_amount");
+    expect(executor.calls[7]?.sql).toContain("q.amount AS total_amount");
+    expect(executor.calls[8]?.sql).toContain("NULL AS access_token");
+  });
+
+  it("keeps admin dashboard and booking handlers working when legacy bookings omit ical tokens", async () => {
+    const missingSchemaError = (message: string, code: string) => Object.assign(new Error(message), { code });
+    const calls: Array<{ sql: string; params: unknown[] }> = [];
+    const queue: Array<QueuedResult | Error> = [
+      rows([{ count: 4 }]),
+      rows([{ count: 2 }]),
+      rows([{ count: 1 }]),
+      rows([{ count: 38 }]),
+      missingSchemaError("Unknown column 'ical_token' in 'field list'", "ER_BAD_FIELD_ERROR"),
+      rows([{
+        id: 302,
+        client_id: 44,
+        service_type: "svc-board-train",
+        appointment_date: "2026-05-28",
+        appointment_time: "17:00:00",
+        duration_minutes: 60,
+        status: "pending"
+      }]),
+      missingSchemaError("Unknown column 'ical_token' in 'field list'", "ER_BAD_FIELD_ERROR"),
+      rows([{
+        id: 42,
+        client_id: 7,
+        service_type: "Private Lesson",
+        appointment_date: "2026-06-02",
+        appointment_time: "4:15 PM",
+        duration_minutes: 45,
+        status: "confirmed"
+      }])
+    ];
+    const executor: SqlExecutor & { calls: Array<{ sql: string; params: unknown[] }> } = {
+      calls,
+      async execute<T>(sql: string, params: unknown[] = []): Promise<[T, SqlResultHeader]> {
+        calls.push({ sql, params });
+        const next = queue.shift();
+        if (next == null) {
+          throw new Error(`No fake SQL result queued for: ${sql}`);
+        }
+        if (next instanceof Error) {
+          throw next;
+        }
+
+        return [next[0] as T, next[1] ?? {}];
+      }
+    };
+
+    const runtime = buildApiRuntime(createMySqlApiDependencies(executor, {
+      now: () => "2026-06-01T12:00:00.000Z",
+      portalBaseUrl: "https://portal.example.test/portal",
+      captchaVerifier: async () => true,
+      passwordVerifier: async () => true
+    }));
+
+    const session = {
+      actorId: "admin-1",
+      actorType: "admin_user" as const,
+      role: "owner" as const,
+      issuedAt: "2026-06-01T12:00:00.000Z",
+      expiresAt: "2026-06-01T13:00:00.000Z"
+    };
+
+    const dashboard = await runtime.handlers.handleAdminDashboard(session);
+    const bookings = await runtime.handlers.handleAdminBookings(session);
+
+    expect(dashboard.status).toBe(200);
+    if ("error" in dashboard.body) {
+      throw new Error("Expected successful admin dashboard response.");
+    }
+
+    expect(bookings.status).toBe(200);
+    if ("error" in bookings.body) {
+      throw new Error("Expected successful admin bookings response.");
+    }
+
+    expect(dashboard.body.recentBookings[0]?.icalAccess).toBeNull();
+    expect(bookings.body.items[0]?.icalAccess).toBeNull();
+    expect(executor.calls[4]?.sql).toContain("ical_token");
+    expect(executor.calls[5]?.sql).toContain("NULL AS ical_token");
+    expect(executor.calls[6]?.sql).toContain("ical_token");
+    expect(executor.calls[7]?.sql).toContain("NULL AS ical_token");
   });
 
   it("normalizes legacy string and invalid numeric values before listing admin transactions", async () => {
