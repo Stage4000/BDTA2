@@ -38,6 +38,28 @@ export class ContentError extends Error {
   }
 }
 
+export type AdminGoogleCalendarOAuthToken = {
+  adminUserId: string;
+  accessToken: string;
+  refreshToken: string | null;
+  tokenType: string;
+  expiresAt: string | null;
+  calendarId: string;
+  googleEmail: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AdminGoogleCalendarOAuthTokenUpsert = {
+  adminUserId: string;
+  accessToken: string;
+  refreshToken: string | null;
+  tokenType: string;
+  expiresAt: string | null;
+  calendarId: string;
+  googleEmail: string | null;
+};
+
 export type ContentManagementDependencies = {
   now(): string;
   listPublicBlogPosts(): Promise<BlogPost[]>;
@@ -63,6 +85,8 @@ export type ContentManagementDependencies = {
   listAdminSettings(): Promise<Setting[]>;
   findAdminSettingByKey(key: string): Promise<Setting | null>;
   updateAdminSetting(key: string, input: z.infer<typeof adminSettingUpdateRequestSchema>): Promise<Setting | null>;
+  findAdminGoogleCalendarOAuthToken(adminUserId: string): Promise<AdminGoogleCalendarOAuthToken | null>;
+  saveAdminGoogleCalendarOAuthToken(input: AdminGoogleCalendarOAuthTokenUpsert): Promise<AdminGoogleCalendarOAuthToken>;
   findAdminSettingsUserByActorId(actorId: string): Promise<z.infer<typeof adminSettingsUserSchema> | null>;
   listAdminSettingsUsers(): Promise<Array<z.infer<typeof adminSettingsUserSchema>>>;
   findAdminSettingsUserByUsername(username: string): Promise<z.infer<typeof adminSettingsUserSchema> | null>;

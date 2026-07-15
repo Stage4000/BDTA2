@@ -167,6 +167,18 @@ type SettingsConsoleViewModel = {
 
 type CalendarOAuthActionsViewModel = Pick<SettingsConsoleViewModel, "basePath" | "settings">;
 
+const adminGoogleCalendarOAuthConnectPath = "/admin/settings/calendar/google/connect";
+const adminGoogleCalendarOAuthCallbackPath = "/admin/settings/calendar/google/callback";
+const legacyGoogleCalendarOAuthInitiatePath = "/backend/public/google_oauth_initiate.php";
+const legacyGoogleCalendarOAuthCallbackPath = "/backend/public/google_oauth_callback.php";
+const googleCalendarOAuthStateCookieName = "bdta_google_oauth_state";
+const expiredGoogleCalendarOAuthStateCookie = `${googleCalendarOAuthStateCookieName}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
+const googleCalendarOAuthScopes = [
+  "https://www.googleapis.com/auth/calendar.events",
+  "openid",
+  "email"
+] as const;
+
 type RuntimeEnvironmentFieldDefinition = {
   key: string;
   label: string;
@@ -2309,6 +2321,12 @@ function resolveSettingsNotice(url: URL): SettingsConsoleViewModel["notice"] | u
   }
 
   switch (url.searchParams.get("notice")) {
+    case "google-calendar-connected":
+      return {
+        tone: "success",
+        title: "Google Calendar Connected",
+        message: "Google Calendar authorization completed and the latest token was saved."
+      };
     case "admin-user-created":
       return {
         tone: "success",
@@ -2358,17 +2376,17 @@ function renderCalendarOAuthActionPanel(model: CalendarOAuthActionsViewModel): s
     '<section class="surface-block">',
     '<p class="eyebrow">Calendar OAuth</p>',
     "<h2>Google Calendar Connection</h2>",
-    '<p class="section-copy">Use the legacy-compatible Google OAuth flow so the current admin console and the older PHP platform keep sharing the same calendar token storage.</p>',
-    `<div class="settings-badge-row">${renderStatusPill(oauthConfigured ? "OAuth Ready" : "OAuth Needs Setup", oauthConfigured ? "success" : "warning")}${renderStatusPill("Legacy-Compatible", "info")}</div>`,
+    '<p class="section-copy">Start Google Calendar authorization from the current admin console. The legacy callback path still works, so an existing Google redirect URI can stay in place.</p>',
+    `<div class="settings-badge-row">${renderStatusPill(oauthConfigured ? "OAuth Ready" : "OAuth Needs Setup", oauthConfigured ? "success" : "warning")}${renderStatusPill("Legacy Callback Supported", "info")}</div>`,
     '<div class="form-actions">',
-    `<a href="/backend/public/google_oauth_initiate.php">${oauthConfigured ? "Connect Google Calendar" : "Review Calendar OAuth Settings"}</a>`,
+    `<a href="${adminGoogleCalendarOAuthConnectPath}">${oauthConfigured ? "Connect Google Calendar" : "Review Calendar OAuth Settings"}</a>`,
     model.basePath === "/client/settings.php"
       ? ""
       : `<a href="${legacyCalendarHref}">Legacy Calendar Screen</a>`,
     "</div>",
     oauthConfigured
-      ? '<p class="meta">This button reuses the shared legacy OAuth endpoint instead of introducing a second token flow.</p>'
-      : `<p class="meta">Save the OAuth Client ID, Client Secret, and Redirect URI in <a href="${calendarSettingsHref}">Calendar settings</a>, then use the connect button.</p>`,
+      ? '<p class="meta">The connect button now runs through the Node admin route and saves into the existing Google OAuth token table.</p>'
+      : `<p class="meta">Save the OAuth Client ID and Client Secret in <a href="${calendarSettingsHref}">Calendar settings</a>. The redirect URI can continue using ${escapeHtml(legacyGoogleCalendarOAuthCallbackPath)}.</p>`,
     "</section>"
   ].join("");
 }
@@ -7337,7 +7355,7 @@ function redirect(
   response.end();
 }
 
-function readSessionIdFromCookie(request: IncomingMessage): string | null {
+function readCookieValue(request: IncomingMessage, cookieName: string): string | null {
   const cookieHeader = request.headers.cookie;
   if (cookieHeader == null || cookieHeader.trim() === "") {
     return null;
@@ -7345,13 +7363,17 @@ function readSessionIdFromCookie(request: IncomingMessage): string | null {
 
   for (const fragment of cookieHeader.split(";")) {
     const [name, ...valueParts] = fragment.trim().split("=");
-    if (name === "bdta_session") {
+    if (name === cookieName) {
       const value = valueParts.join("=").trim();
       return value === "" ? null : value;
     }
   }
 
   return null;
+}
+
+function readSessionIdFromCookie(request: IncomingMessage): string | null {
+  return readCookieValue(request, "bdta_session");
 }
 
 async function readRawBody(request: IncomingMessage): Promise<Buffer> {
@@ -8384,6 +8406,86 @@ function getRequestOrigin(request: IncomingMessage): string {
     : (forwardedProto ?? "http");
   const host = request.headers.host ?? "localhost";
   return `${protocol}://${host}`;
+}
+
+function readSettingValue(settings: Setting[], key: string): string {
+  const setting = settings.find((candidate) => candidate.key === key);
+  return setting?.value?.trim() ?? "";
+}
+
+function resolveGoogleCalendarOAuthRedirectUri(request: IncomingMessage, configuredRedirectUri: string): string {
+  const trimmed = configuredRedirectUri.trim();
+  if (trimmed === "") {
+    return `${getRequestOrigin(request)}${legacyGoogleCalendarOAuthCallbackPath}`;
+  }
+
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) {
+    return trimmed;
+  }
+
+  return trimmed.startsWith("/")
+    ? `${getRequestOrigin(request)}${trimmed}`
+    : `${getRequestOrigin(request)}/${trimmed.replace(/^\/+/, "")}`;
+}
+
+function buildGoogleCalendarOAuthStateCookie(stateToken: string): string {
+  return `${googleCalendarOAuthStateCookieName}=${stateToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600`;
+}
+
+function buildAdminCalendarSettingsLocation(params: {
+  notice?: string;
+  error?: string;
+} = {}): string {
+  const target = new URL(buildSettingsCategoryHref("/admin/settings", "calendar"), "http://localhost");
+  if (params.notice != null && params.notice.trim() !== "") {
+    target.searchParams.set("notice", params.notice.trim());
+  }
+  if (params.error != null && params.error.trim() !== "") {
+    target.searchParams.set("error", params.error.trim());
+  }
+  return `${target.pathname}${target.search}`;
+}
+
+async function readGoogleOAuthErrorMessage(response: Response): Promise<string> {
+  try {
+    const payload = await response.json() as Record<string, unknown>;
+    const errorPayload = payload.error;
+    if (errorPayload != null && typeof errorPayload === "object" && "message" in errorPayload && typeof errorPayload.message === "string") {
+      const message = errorPayload.message.trim();
+      if (message !== "") {
+        return message;
+      }
+    }
+    if (typeof payload.error_description === "string" && payload.error_description.trim() !== "") {
+      return payload.error_description.trim();
+    }
+    if (typeof payload.error === "string" && payload.error.trim() !== "") {
+      return payload.error.trim();
+    }
+  } catch {
+  }
+
+  return "Google OAuth exchange failed.";
+}
+
+async function readGoogleCalendarAuthorizedEmail(accessToken: string): Promise<string | null> {
+  try {
+    const response = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+      headers: {
+        Authorization: `Bearer ${accessToken}`
+      }
+    });
+    if (!response.ok) {
+      return null;
+    }
+
+    const payload = await response.json() as Record<string, unknown>;
+    return typeof payload.email === "string" && payload.email.trim() !== ""
+      ? payload.email.trim()
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function getRequestClientIp(request: IncomingMessage): string | null {
@@ -9601,6 +9703,14 @@ const portalBookingDetailMatch = /^\/portal\/bookings\/([^/]+)$/.exec(url.pathna
       const adminWorkflowDeleteMatch = /^\/admin\/workflows\/([^/]+)\/delete$/.exec(url.pathname);
       const adminWorkflowDetailMatch = /^\/admin\/workflows\/([^/]+)$/.exec(url.pathname);
       const legacySettingsPath = url.pathname === "/client/settings.php";
+      const googleCalendarOAuthInitiatePath = (
+        url.pathname === adminGoogleCalendarOAuthConnectPath
+        || url.pathname === legacyGoogleCalendarOAuthInitiatePath
+      );
+      const googleCalendarOAuthCallbackPath = (
+        url.pathname === adminGoogleCalendarOAuthCallbackPath
+        || url.pathname === legacyGoogleCalendarOAuthCallbackPath
+      );
       const adminSettingsUserPermissionsMatch = /^\/admin\/settings\/admin-users\/([^/]+)\/permissions$/.exec(url.pathname);
       const adminSettingsUserDeleteMatch = /^\/admin\/settings\/admin-users\/([^/]+)\/delete$/.exec(url.pathname);
       const adminSettingDetailMatch = /^\/admin\/settings\/([^/]+)$/.exec(url.pathname);
@@ -12996,13 +13106,15 @@ const adminNav = "";
           || adminClientAchievementCertificateDetailMatch != null
           || adminAchievementTypeDetailMatch != null
           || adminBlogPostDetailMatch != null
-          || adminSitePageDetailMatch != null
-          || adminSettingDetailMatch != null
-          || adminOperationJobDetailMatch != null
-          || adminOperationCallbackDetailMatch != null
-          || legacyClientListPath
-          || legacyClientDetailPath
-          || legacyClientEditPath
+        || adminSitePageDetailMatch != null
+        || adminSettingDetailMatch != null
+        || adminOperationJobDetailMatch != null
+        || adminOperationCallbackDetailMatch != null
+        || googleCalendarOAuthInitiatePath
+        || googleCalendarOAuthCallbackPath
+        || legacyClientListPath
+        || legacyClientDetailPath
+        || legacyClientEditPath
           || legacyPetListPath
           || legacyPetDetailPath
           || legacyPetEditPath
@@ -13031,6 +13143,173 @@ const adminNav = "";
         }
 
       const adminNav = "";
+
+      if (googleCalendarOAuthInitiatePath || googleCalendarOAuthCallbackPath) {
+        let settingsOverview;
+        try {
+          settingsOverview = await getAdminSettingsOverview(session as z.infer<typeof authSessionSchema>, resolved.content);
+        } catch (error) {
+          if (error instanceof SessionActorError) {
+            redirect(response, buildAdminLoginRedirectPath(request), await clearPersistedSession(resolved.sessionStore, request));
+            return;
+          }
+          throw error;
+        }
+
+        const clientId = readSettingValue(settingsOverview.items, "google_oauth_client_id");
+        const clientSecret = readSettingValue(settingsOverview.items, "google_oauth_client_secret");
+        const redirectUri = resolveGoogleCalendarOAuthRedirectUri(
+          request,
+          readSettingValue(settingsOverview.items, "google_oauth_redirect_uri")
+        );
+
+        if (googleCalendarOAuthInitiatePath) {
+          if (clientId === "" || clientSecret === "") {
+            redirect(response, buildAdminCalendarSettingsLocation({
+              error: "Save the Google OAuth client ID and client secret before connecting Calendar."
+            }));
+            return;
+          }
+
+          const stateToken = randomUUID();
+          const authorizationUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+          authorizationUrl.searchParams.set("client_id", clientId);
+          authorizationUrl.searchParams.set("redirect_uri", redirectUri);
+          authorizationUrl.searchParams.set("response_type", "code");
+          authorizationUrl.searchParams.set("access_type", "offline");
+          authorizationUrl.searchParams.set("include_granted_scopes", "true");
+          authorizationUrl.searchParams.set("prompt", "consent");
+          authorizationUrl.searchParams.set("scope", googleCalendarOAuthScopes.join(" "));
+          authorizationUrl.searchParams.set("state", stateToken);
+
+          redirect(response, authorizationUrl.toString(), {
+            "set-cookie": buildGoogleCalendarOAuthStateCookie(stateToken)
+          });
+          return;
+        }
+
+        const returnedError = url.searchParams.get("error")?.trim() ?? "";
+        if (returnedError !== "") {
+          redirect(response, buildAdminCalendarSettingsLocation({
+            error: "Google authorization was not completed."
+          }), {
+            "set-cookie": expiredGoogleCalendarOAuthStateCookie
+          });
+          return;
+        }
+
+        if (clientId === "" || clientSecret === "") {
+          redirect(response, buildAdminCalendarSettingsLocation({
+            error: "Save the Google OAuth client ID and client secret before completing Calendar authorization."
+          }), {
+            "set-cookie": expiredGoogleCalendarOAuthStateCookie
+          });
+          return;
+        }
+
+        const expectedState = readCookieValue(request, googleCalendarOAuthStateCookieName);
+        const returnedState = url.searchParams.get("state")?.trim() ?? "";
+        if (expectedState == null || returnedState === "" || expectedState !== returnedState) {
+          redirect(response, buildAdminCalendarSettingsLocation({
+            error: "Google OAuth state validation failed. Start the connection flow again."
+          }), {
+            "set-cookie": expiredGoogleCalendarOAuthStateCookie
+          });
+          return;
+        }
+
+        const authorizationCode = url.searchParams.get("code")?.trim() ?? "";
+        if (authorizationCode === "") {
+          redirect(response, buildAdminCalendarSettingsLocation({
+            error: "Google did not return an authorization code."
+          }), {
+            "set-cookie": expiredGoogleCalendarOAuthStateCookie
+          });
+          return;
+        }
+
+        try {
+          const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+            method: "POST",
+            headers: {
+              "content-type": "application/x-www-form-urlencoded"
+            },
+            body: new URLSearchParams({
+              code: authorizationCode,
+              client_id: clientId,
+              client_secret: clientSecret,
+              redirect_uri: redirectUri,
+              grant_type: "authorization_code"
+            })
+          });
+
+          if (!tokenResponse.ok) {
+            redirect(response, buildAdminCalendarSettingsLocation({
+              error: await readGoogleOAuthErrorMessage(tokenResponse)
+            }), {
+              "set-cookie": expiredGoogleCalendarOAuthStateCookie
+            });
+            return;
+          }
+
+          const tokenPayload = await tokenResponse.json() as Record<string, unknown>;
+          const accessToken = typeof tokenPayload.access_token === "string" ? tokenPayload.access_token.trim() : "";
+          if (accessToken === "") {
+            redirect(response, buildAdminCalendarSettingsLocation({
+              error: "Google OAuth exchange succeeded but no access token was returned."
+            }), {
+              "set-cookie": expiredGoogleCalendarOAuthStateCookie
+            });
+            return;
+          }
+
+          const existingToken = await resolved.content.findAdminGoogleCalendarOAuthToken(settingsOverview.currentAdmin.actorId);
+          const refreshTokenValue = typeof tokenPayload.refresh_token === "string" && tokenPayload.refresh_token.trim() !== ""
+            ? tokenPayload.refresh_token.trim()
+            : existingToken?.refreshToken ?? null;
+          const tokenType = typeof tokenPayload.token_type === "string" && tokenPayload.token_type.trim() !== ""
+            ? tokenPayload.token_type.trim()
+            : existingToken?.tokenType ?? "Bearer";
+          const expiresInSeconds = typeof tokenPayload.expires_in === "number"
+            ? tokenPayload.expires_in
+            : typeof tokenPayload.expires_in === "string"
+              ? Number.parseInt(tokenPayload.expires_in, 10)
+              : Number.NaN;
+          const expiresAt = Number.isFinite(expiresInSeconds) && expiresInSeconds > 0
+            ? new Date(Date.now() + expiresInSeconds * 1000).toISOString()
+            : null;
+          const googleEmail = await readGoogleCalendarAuthorizedEmail(accessToken) ?? existingToken?.googleEmail ?? null;
+          const calendarId = readSettingValue(settingsOverview.items, "google_calendar_id")
+            || existingToken?.calendarId
+            || "primary";
+
+          await resolved.content.saveAdminGoogleCalendarOAuthToken({
+            adminUserId: settingsOverview.currentAdmin.actorId,
+            accessToken,
+            refreshToken: refreshTokenValue,
+            tokenType,
+            expiresAt,
+            calendarId,
+            googleEmail
+          });
+
+          redirect(response, buildAdminCalendarSettingsLocation({
+            notice: "google-calendar-connected"
+          }), {
+            "set-cookie": expiredGoogleCalendarOAuthStateCookie
+          });
+          return;
+        } catch (error) {
+          redirect(response, buildAdminCalendarSettingsLocation({
+            error: error instanceof Error && error.message.trim() !== ""
+              ? error.message.trim()
+              : "Google Calendar authorization failed."
+          }), {
+            "set-cookie": expiredGoogleCalendarOAuthStateCookie
+          });
+          return;
+        }
+      }
 
       const legacyAdminRedirectPath = (() => {
         if (legacyClientListPath || legacyClientEditPath && (url.searchParams.get("id") ?? "").trim() === "") {

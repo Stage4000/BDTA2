@@ -7,6 +7,13 @@ import { createHttpWebServer } from "../apps/web/src/server.js";
 import { createManagedSettingsCatalog } from "../apps/release/src/settings-catalog.js";
 import { createInMemoryPlatformState } from "@bdta/infrastructure";
 
+function toCookieHeader(...cookies: Array<string | null>): string {
+  return cookies
+    .flatMap((cookie) => cookie == null ? [] : [cookie.split(";", 1)[0] ?? ""])
+    .filter((cookie) => cookie.trim() !== "")
+    .join("; ");
+}
+
 describe("web server", () => {
   it("renders homepage, site pages, and blog routes from content state", async () => {
     const state = createInMemoryPlatformState({
@@ -266,8 +273,170 @@ it("renders public content when migrated blog and page metadata uses blank strin
       server.close((error?: Error) => error ? reject(error) : resolve());
     });
   }
-});
+  });
+  it("starts google calendar oauth from admin settings and saves the token through the legacy callback alias", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const requestUrl = typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+      if (requestUrl === "https://oauth2.googleapis.com/token") {
+        return new Response(JSON.stringify({
+          access_token: "google-access-token",
+          refresh_token: "google-refresh-token",
+          token_type: "Bearer",
+          expires_in: 3600
+        }), {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        });
+      }
 
+      if (requestUrl === "https://www.googleapis.com/oauth2/v2/userinfo") {
+        return new Response(JSON.stringify({
+          email: "calendar-admin@example.com"
+        }), {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        });
+      }
+
+      return originalFetch(input, init);
+    }) as typeof fetch;
+
+    const state = createInMemoryPlatformState({
+      adminUsers: [{
+        actorId: "1",
+        username: "brook",
+        displayName: "Brook Admin",
+        email: "brook@example.com",
+        passwordHash: "admin-hash",
+        role: "owner",
+        accountType: "main",
+        canManageAdminUsers: true,
+        canManageApiKeys: true,
+        isMainAccount: true,
+        active: true
+      }],
+      settings: createManagedSettingsCatalog("2026-05-28T12:00:00.000Z").map((setting) => {
+        if (setting.key === "google_oauth_client_id") {
+          return {
+            ...setting,
+            value: "google-client-id.apps.googleusercontent.com"
+          };
+        }
+
+        if (setting.key === "google_oauth_client_secret") {
+          return {
+            ...setting,
+            value: "google-client-secret"
+          };
+        }
+
+        if (setting.key === "google_calendar_id") {
+          return {
+            ...setting,
+            value: "primary"
+          };
+        }
+
+        if (setting.key === "google_oauth_redirect_uri") {
+          return {
+            ...setting,
+            value: ""
+          };
+        }
+
+        return setting;
+      }),
+      passwordVerifier: async (password, hash) => password === "admin-password" && hash === "admin-hash"
+    });
+
+    const server = createHttpWebServer({ state });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (address == null || typeof address === "string") {
+      throw new Error("Expected TCP server address.");
+    }
+
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    try {
+      const login = await fetch(`${baseUrl}/admin/login`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded"
+        },
+        redirect: "manual",
+        body: new URLSearchParams({
+          username: "brook",
+          password: "admin-password"
+        })
+      });
+      const adminCookie = login.headers.get("set-cookie");
+      expect(login.status).toBe(302);
+
+      const settingsPage = await fetch(`${baseUrl}/admin/settings?category=calendar`, {
+        headers: {
+          cookie: toCookieHeader(adminCookie)
+        }
+      });
+      expect(settingsPage.status).toBe(200);
+      const settingsHtml = await settingsPage.text();
+      expect(settingsHtml).toContain('href="/admin/settings/calendar/google/connect"');
+      expect(settingsHtml).not.toContain("/backend/public/google_oauth_initiate.php");
+
+      const connect = await fetch(`${baseUrl}/admin/settings/calendar/google/connect`, {
+        headers: {
+          cookie: toCookieHeader(adminCookie)
+        },
+        redirect: "manual"
+      });
+      expect(connect.status).toBe(302);
+      const connectLocation = connect.headers.get("location");
+      const oauthCookie = connect.headers.get("set-cookie");
+      expect(oauthCookie).toContain("bdta_google_oauth_state=");
+
+      const googleAuthorizeUrl = new URL(connectLocation ?? "http://localhost");
+      expect(googleAuthorizeUrl.origin).toBe("https://accounts.google.com");
+      expect(googleAuthorizeUrl.searchParams.get("client_id")).toBe("google-client-id.apps.googleusercontent.com");
+      expect(googleAuthorizeUrl.searchParams.get("redirect_uri")).toBe(`${baseUrl}/backend/public/google_oauth_callback.php`);
+
+      const oauthState = googleAuthorizeUrl.searchParams.get("state");
+      expect(oauthState).toBeTruthy();
+
+      const callback = await fetch(`${baseUrl}/backend/public/google_oauth_callback.php?state=${encodeURIComponent(oauthState ?? "")}&code=google-code-1`, {
+        headers: {
+          cookie: toCookieHeader(adminCookie, oauthCookie)
+        },
+        redirect: "manual"
+      });
+      expect(callback.status).toBe(302);
+      expect(callback.headers.get("location")).toBe("/admin/settings?category=calendar&notice=google-calendar-connected");
+      expect(callback.headers.get("set-cookie")).toContain("bdta_google_oauth_state=;");
+      expect(state.googleOAuthTokens).toHaveLength(1);
+      expect(state.googleOAuthTokens[0]).toEqual(expect.objectContaining({
+        adminUserId: "1",
+        accessToken: "google-access-token",
+        refreshToken: "google-refresh-token",
+        tokenType: "Bearer",
+        calendarId: "primary",
+        googleEmail: "calendar-admin@example.com"
+      }));
+    } finally {
+      globalThis.fetch = originalFetch;
+      await new Promise<void>((resolve, reject) => {
+        server.close((error?: Error) => error ? reject(error) : resolve());
+      });
+    }
+  });
 it("renders newsletter and Tawk settings on eligible public pages and suppresses them when legacy rules require it", async () => {
     const state = createInMemoryPlatformState({
       adminUsers: [
@@ -863,12 +1032,24 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
         createAdminSitePage: async () => {
           throw new Error("not used");
         },
-        updateAdminSitePage: async () => null,
-        deleteAdminSitePage: async () => false,
-        listAdminSettings: async () => [],
-        findAdminSettingByKey: async () => null,
-        updateAdminSetting: async () => null,
-        findAdminSettingsUserByActorId: async () => null,
+      updateAdminSitePage: async () => null,
+      deleteAdminSitePage: async () => false,
+      listAdminSettings: async () => [],
+      findAdminSettingByKey: async () => null,
+      updateAdminSetting: async () => null,
+      findAdminGoogleCalendarOAuthToken: async () => null,
+      saveAdminGoogleCalendarOAuthToken: async (input) => ({
+        adminUserId: input.adminUserId,
+        accessToken: input.accessToken,
+        refreshToken: input.refreshToken,
+        tokenType: input.tokenType,
+        expiresAt: input.expiresAt,
+        calendarId: input.calendarId,
+        googleEmail: input.googleEmail,
+        createdAt: "2026-05-27T18:00:00.000Z",
+        updatedAt: "2026-05-27T18:00:00.000Z"
+      }),
+      findAdminSettingsUserByActorId: async () => null,
         listAdminSettingsUsers: async () => [],
         findAdminSettingsUserByUsername: async () => null,
         createAdminSettingsUser: async () => {
@@ -1004,12 +1185,24 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
         createAdminSitePage: async () => {
           throw new Error("not used");
         },
-        updateAdminSitePage: async () => null,
-        deleteAdminSitePage: async () => false,
-        listAdminSettings: async () => [],
-        findAdminSettingByKey: async () => null,
-        updateAdminSetting: async () => null,
-        findAdminSettingsUserByActorId: async () => null,
+      updateAdminSitePage: async () => null,
+      deleteAdminSitePage: async () => false,
+      listAdminSettings: async () => [],
+      findAdminSettingByKey: async () => null,
+      updateAdminSetting: async () => null,
+      findAdminGoogleCalendarOAuthToken: async () => null,
+      saveAdminGoogleCalendarOAuthToken: async (input) => ({
+        adminUserId: input.adminUserId,
+        accessToken: input.accessToken,
+        refreshToken: input.refreshToken,
+        tokenType: input.tokenType,
+        expiresAt: input.expiresAt,
+        calendarId: input.calendarId,
+        googleEmail: input.googleEmail,
+        createdAt: "2026-05-27T18:00:00.000Z",
+        updatedAt: "2026-05-27T18:00:00.000Z"
+      }),
+      findAdminSettingsUserByActorId: async () => null,
         listAdminSettingsUsers: async () => [],
         findAdminSettingsUserByUsername: async () => null,
         createAdminSettingsUser: async () => {
@@ -1066,12 +1259,24 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
         createAdminSitePage: async () => {
           throw new Error("not used");
         },
-        updateAdminSitePage: async () => null,
-        deleteAdminSitePage: async () => false,
-        listAdminSettings: async () => [],
-        findAdminSettingByKey: async () => null,
-        updateAdminSetting: async () => null,
-        findAdminSettingsUserByActorId: async () => null,
+      updateAdminSitePage: async () => null,
+      deleteAdminSitePage: async () => false,
+      listAdminSettings: async () => [],
+      findAdminSettingByKey: async () => null,
+      updateAdminSetting: async () => null,
+      findAdminGoogleCalendarOAuthToken: async () => null,
+      saveAdminGoogleCalendarOAuthToken: async (input) => ({
+        adminUserId: input.adminUserId,
+        accessToken: input.accessToken,
+        refreshToken: input.refreshToken,
+        tokenType: input.tokenType,
+        expiresAt: input.expiresAt,
+        calendarId: input.calendarId,
+        googleEmail: input.googleEmail,
+        createdAt: "2026-05-27T18:00:00.000Z",
+        updatedAt: "2026-05-27T18:00:00.000Z"
+      }),
+      findAdminSettingsUserByActorId: async () => null,
         listAdminSettingsUsers: async () => [],
         findAdminSettingsUserByUsername: async () => null,
         createAdminSettingsUser: async () => {
@@ -4850,8 +5055,8 @@ expect(settingsHtml).toContain("settings-summary-grid");
     expect(settingsHtml).toContain("settings-console-search");
     expect(settingsHtml).toContain("settings-category-section");
     expect(settingsHtml).toContain("Google Calendar Connection");
-    expect(settingsHtml).toContain('/backend/public/google_oauth_initiate.php');
-    expect(settingsHtml).toContain("Legacy-Compatible");
+    expect(settingsHtml).toContain('/admin/settings/calendar/google/connect');
+    expect(settingsHtml).toContain("Legacy Callback Supported");
     expect(settingsHtml).toContain("Site");
       expect(settingsHtml).toContain("Payments");
       expect(settingsHtml).toContain("Communications");

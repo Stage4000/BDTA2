@@ -558,6 +558,18 @@ function createContentManagementDependencies(
       secret: false,
       updatedAt: "2026-05-27T18:00:00.000Z"
     } : null,
+    findAdminGoogleCalendarOAuthToken: async () => null,
+    saveAdminGoogleCalendarOAuthToken: async (input) => ({
+      adminUserId: input.adminUserId,
+      accessToken: input.accessToken,
+      refreshToken: input.refreshToken,
+      tokenType: input.tokenType,
+      expiresAt: input.expiresAt,
+      calendarId: input.calendarId,
+      googleEmail: input.googleEmail,
+      createdAt: "2026-05-27T18:00:00.000Z",
+      updatedAt: "2026-05-27T18:00:00.000Z"
+    }),
     findAdminSettingsUserByActorId: async (actorId) => actorId === "admin-1" ? {
       actorId: "admin-1",
       username: "owner",

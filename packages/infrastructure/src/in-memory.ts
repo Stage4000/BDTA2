@@ -5,6 +5,8 @@ import type {
   AdminCalendarSyncDependencies,
   AdminActorProfileDependencies,
   AdminDashboardDependencies,
+  AdminGoogleCalendarOAuthToken,
+  AdminGoogleCalendarOAuthTokenUpsert,
   AdminIdentity,
   AdminOperationsDependencies,
   AchievementDependencies,
@@ -194,6 +196,7 @@ export type InMemoryPlatformState = {
     externalEventUrl: string | null;
     syncedAt: string;
   }>;
+  googleOAuthTokens: AdminGoogleCalendarOAuthToken[];
   jobHistory: Array<{
     job: JobEnvelope;
     status: "processed" | "failed";
@@ -210,7 +213,7 @@ export type InMemoryPlatformState = {
   passwordVerifier: (password: string, hash: string) => Promise<boolean>;
 };
 
-type InMemoryPlatformStateInput = Partial<Pick<InMemoryPlatformState, "portalUsers" | "adminUsers" | "blogPosts" | "sitePages" | "settings" | "expenses" | "invoices" | "quotes" | "bookings" | "contacts" | "pets" | "petFiles" | "petFileContents" | "achievementTypes" | "clientAchievements" | "contracts" | "packages" | "credits" | "publicPackagePurchases" | "pendingPublicPackagePurchases" | "publicPackagePaymentSessions" | "formTemplates" | "formSubmissions" | "notifications" | "workflows" | "workflowTriggers" | "workflowEnrollments" | "workflowSteps" | "workflowStepExecutions" | "contractTemplates" | "appointmentTypes" | "emailTemplates" | "scheduledTasks" | "queuedEmails" | "queuedJobs">> & {
+type InMemoryPlatformStateInput = Partial<Pick<InMemoryPlatformState, "portalUsers" | "adminUsers" | "blogPosts" | "sitePages" | "settings" | "expenses" | "invoices" | "quotes" | "bookings" | "contacts" | "pets" | "petFiles" | "petFileContents" | "achievementTypes" | "clientAchievements" | "contracts" | "packages" | "credits" | "publicPackagePurchases" | "pendingPublicPackagePurchases" | "publicPackagePaymentSessions" | "formTemplates" | "formSubmissions" | "notifications" | "workflows" | "workflowTriggers" | "workflowEnrollments" | "workflowSteps" | "workflowStepExecutions" | "contractTemplates" | "appointmentTypes" | "emailTemplates" | "scheduledTasks" | "queuedEmails" | "queuedJobs" | "googleOAuthTokens">> & {
   now?: () => string;
   captchaVerifier?: (token: string) => Promise<boolean>;
   availabilityChecker?: PublicBookingDependencies["isTimeSlotAvailable"];
@@ -260,6 +263,7 @@ export function createInMemoryPlatformState(input: InMemoryPlatformStateInput = 
     inboundEmails: [],
     unmatchedEmails: [],
     calendarSyncs: [],
+    googleOAuthTokens: input.googleOAuthTokens ?? [],
     jobHistory: [],
     processedJobResults: [],
     failedJobResults: [],
@@ -1770,6 +1774,45 @@ function createContentManagementDependencies(state: InMemoryPlatformState): Cont
       };
       state.settings[index] = updated;
       return updated;
+    },
+    findAdminGoogleCalendarOAuthToken: async (adminUserId) => {
+      for (let index = state.googleOAuthTokens.length - 1; index >= 0; index -= 1) {
+        const record = state.googleOAuthTokens[index];
+        if (record?.adminUserId === adminUserId) {
+          return record;
+        }
+      }
+      return null;
+    },
+    saveAdminGoogleCalendarOAuthToken: async (input: AdminGoogleCalendarOAuthTokenUpsert) => {
+      let existingIndex = -1;
+      for (let index = state.googleOAuthTokens.length - 1; index >= 0; index -= 1) {
+        if (state.googleOAuthTokens[index]?.adminUserId === input.adminUserId) {
+          existingIndex = index;
+          break;
+        }
+      }
+
+      const existing = existingIndex >= 0 ? state.googleOAuthTokens[existingIndex] : null;
+      const saved: AdminGoogleCalendarOAuthToken = {
+        adminUserId: input.adminUserId,
+        accessToken: input.accessToken,
+        refreshToken: input.refreshToken,
+        tokenType: input.tokenType,
+        expiresAt: input.expiresAt,
+        calendarId: input.calendarId,
+        googleEmail: input.googleEmail,
+        createdAt: existing?.createdAt ?? state.now(),
+        updatedAt: state.now()
+      };
+
+      if (existingIndex >= 0) {
+        state.googleOAuthTokens[existingIndex] = saved;
+      } else {
+        state.googleOAuthTokens.push(saved);
+      }
+
+      return saved;
     },
     findAdminSettingsUserByActorId: async (actorId) => {
       const item = state.adminUsers.find((candidate) => candidate.actorId === actorId);

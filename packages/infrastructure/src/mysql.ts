@@ -8,6 +8,8 @@ import type {
   AdminIdentity,
   AdminLoginDependencies,
   AdminOperationsDependencies,
+  AdminGoogleCalendarOAuthToken,
+  AdminGoogleCalendarOAuthTokenUpsert,
   AchievementDependencies,
   ApiDependencies,
   AdminActorProfileDependencies,
@@ -910,6 +912,30 @@ function toSettingRecord(row: {
     description: row.description ?? "",
     secret: Number(row.is_secret ?? 0) === 1,
     updatedAt
+  };
+}
+
+function toAdminGoogleCalendarOAuthTokenRecord(row: {
+  admin_user_id: string | number | bigint;
+  access_token: string | null;
+  refresh_token: string | null;
+  token_type: string | null;
+  expires_at: string | Date | null;
+  calendar_id: string | null;
+  google_email: string | null;
+  created_at: string | Date | null;
+  updated_at: string | Date | null;
+}): AdminGoogleCalendarOAuthToken {
+  return {
+    adminUserId: String(row.admin_user_id),
+    accessToken: toOptionalTrimmedString(row.access_token) ?? "",
+    refreshToken: toOptionalTrimmedString(row.refresh_token),
+    tokenType: toOptionalTrimmedString(row.token_type) ?? "Bearer",
+    expiresAt: toOptionalTrimmedString(row.expires_at),
+    calendarId: toOptionalTrimmedString(row.calendar_id) ?? "primary",
+    googleEmail: toOptionalTrimmedString(row.google_email),
+    createdAt: toOptionalTrimmedString(row.created_at) ?? "1970-01-01T00:00:00.000Z",
+    updatedAt: toOptionalTrimmedString(row.updated_at) ?? "1970-01-01T00:00:00.000Z"
   };
 }
 
@@ -4840,6 +4866,87 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         return null;
       }
       return content.findAdminSettingByKey(key);
+    },
+    async findAdminGoogleCalendarOAuthToken(adminUserId) {
+      const [rows] = await executor.execute<Array<{
+        admin_user_id: string | number | bigint;
+        access_token: string | null;
+        refresh_token: string | null;
+        token_type: string | null;
+        expires_at: string | Date | null;
+        calendar_id: string | null;
+        google_email: string | null;
+        created_at: string | Date | null;
+        updated_at: string | Date | null;
+      }>>(
+        [
+          "SELECT admin_user_id, access_token, refresh_token, token_type, expires_at, calendar_id, google_email, created_at, updated_at",
+          "FROM google_oauth_tokens",
+          "WHERE admin_user_id = ?",
+          "ORDER BY updated_at DESC, id DESC",
+          "LIMIT 1"
+        ].join(" "),
+        [adminUserId]
+      );
+
+      const row = rows[0];
+      return row == null ? null : toAdminGoogleCalendarOAuthTokenRecord(row);
+    },
+    async saveAdminGoogleCalendarOAuthToken(input: AdminGoogleCalendarOAuthTokenUpsert) {
+      const [existingRows] = await executor.execute<Array<{ id: number }>>(
+        [
+          "SELECT id",
+          "FROM google_oauth_tokens",
+          "WHERE admin_user_id = ?",
+          "ORDER BY updated_at DESC, id DESC",
+          "LIMIT 1"
+        ].join(" "),
+        [input.adminUserId]
+      );
+
+      const existingRow = existingRows[0];
+      if (existingRow == null) {
+        await executor.execute(
+          [
+            "INSERT INTO google_oauth_tokens",
+            "(admin_user_id, access_token, refresh_token, token_type, expires_at, calendar_id, google_email, created_at, updated_at)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+          ].join(" "),
+          [
+            input.adminUserId,
+            input.accessToken,
+            input.refreshToken,
+            input.tokenType,
+            input.expiresAt,
+            input.calendarId,
+            input.googleEmail
+          ]
+        );
+      } else {
+        await executor.execute(
+          [
+            "UPDATE google_oauth_tokens",
+            "SET access_token = ?, refresh_token = ?, token_type = ?, expires_at = ?, calendar_id = ?, google_email = ?, updated_at = CURRENT_TIMESTAMP",
+            "WHERE id = ?"
+          ].join(" "),
+          [
+            input.accessToken,
+            input.refreshToken,
+            input.tokenType,
+            input.expiresAt,
+            input.calendarId,
+            input.googleEmail,
+            existingRow.id
+          ]
+        );
+      }
+
+      const saved = await content.findAdminGoogleCalendarOAuthToken(input.adminUserId);
+      if (saved == null) {
+        throw new Error("Google OAuth token record was not saved.");
+      }
+
+      return saved;
     },
     async findAdminSettingsUserByActorId(actorId) {
       const rows = await loadLegacyAdminUserRows({
