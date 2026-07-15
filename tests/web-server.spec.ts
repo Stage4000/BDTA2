@@ -3529,6 +3529,7 @@ expect(bookingsHtml).toContain("data-enhanced-table-search");
 expect(bookingsHtml).toContain("data-enhanced-table-sort");
 expect(bookingsHtml).toContain('aria-sort="none"');
 expect(bookingsHtml).toContain("Date.parse(");
+expect(bookingsHtml).toContain("data-localized-datetime");
 expect(bookingsHtml).toContain("data-enhanced-table-page-count");
 expect(bookingsHtml).toContain("Manage");
 expect(legacyBookingsList.headers.get("location")).toBe("/admin/bookings");

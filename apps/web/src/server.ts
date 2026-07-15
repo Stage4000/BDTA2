@@ -1611,13 +1611,18 @@ function renderStatsGrid(items: Array<{
   label: string;
   value: string | number;
   meta?: string;
+  metaHtml?: string;
   accent?: "primary" | "secondary" | "success" | "warning";
 }>): string {
   return `<div class="summary-grid">${items.map((item) => [
     `<section class="summary-card${item.accent != null ? ` is-${item.accent}` : ""}">`,
     `<div class="summary-card__value">${escapeHtml(String(item.value))}</div>`,
     `<div class="summary-card__label">${escapeHtml(item.label)}</div>`,
-    item.meta == null || item.meta.trim() === "" ? "" : `<div class="summary-card__meta">${escapeHtml(item.meta)}</div>`,
+    item.metaHtml != null
+      ? `<div class="summary-card__meta">${item.metaHtml}</div>`
+      : item.meta == null || item.meta.trim() === ""
+        ? ""
+        : `<div class="summary-card__meta">${escapeHtml(item.meta)}</div>`,
     "</section>"
   ].join("")).join("")}</div>`;
 }
@@ -2075,7 +2080,7 @@ function renderBookingsPreviewTable(
     rows: bookings.map((booking) => [
       `<a href="${detailPath(booking)}">${escapeHtml(booking.id)}</a>`,
       renderBookingStatusPill(booking.status),
-      escapeHtml(formatAdminDateTime(booking.startsAt)),
+      renderLocalizedDateTime(booking.startsAt),
       escapeHtml(formatCountLabel(booking.petIds.length, "pet")),
       `<div class="table-actions"><a href="${detailPath(booking)}">Open</a></div>`
     ]),
@@ -2092,7 +2097,7 @@ function renderFormsPreviewTable(
     rows: forms.map((form) => [
       `<a href="${detailPath(form)}">${escapeHtml(getAdminFormSubmissionTitle(form))}</a>`,
       renderAdminFormSubmissionStatusPill(form),
-      escapeHtml(formatAdminDateTime(form.submittedAt)),
+      renderLocalizedDateTime(form.submittedAt),
       escapeHtml(form.petName ?? "Not linked"),
       `<div class="table-actions"><a href="${detailPath(form)}">Open</a></div>`
     ]),
@@ -2126,7 +2131,7 @@ function renderPetFilesPreviewTable(
     rows: files.map((file) => [
       `<a href="${contentPath(file)}">${escapeHtml(file.originalName)}</a>`,
       renderStatusPill(toTitleCase(file.fileType), file.fileType === "photo" ? "info" : "default"),
-      escapeHtml(formatAdminDateTime(file.uploadedAt)),
+      renderLocalizedDateTime(file.uploadedAt),
       escapeHtml(truncateText(file.description, 64)),
       `<div class="table-actions"><a href="${contentPath(file)}">Open</a></div>`
     ]),
@@ -3960,6 +3965,21 @@ function formatAdminDateTime(value: string | null | undefined): string {
   })} UTC`;
 }
 
+function renderLocalizedDateTime(value: string | null | undefined): string {
+  const normalized = value?.trim() ?? "";
+  if (normalized === "") {
+    return "Not available";
+  }
+
+  const parsed = new Date(normalized);
+  if (Number.isNaN(parsed.getTime())) {
+    return escapeHtml(normalized);
+  }
+
+  const iso = parsed.toISOString();
+  return `<time datetime="${escapeAttribute(iso)}" data-localized-datetime data-sort-value="${escapeAttribute(iso)}">${escapeHtml(formatAdminDateTime(normalized))}</time>`;
+}
+
 function normalizeAdminFormSubmissionStatus(submission: FormSubmission): string {
   const normalized = submission.status?.trim().toLowerCase() ?? "";
   if (normalized !== "") {
@@ -4268,7 +4288,7 @@ function renderAdminSurveyFieldSummary(field: AdminSurveyFieldSummary): string {
           : `<div class="content-stack">${field.recentResponses.map((response) => [
             '<section class="detail-card">',
             `<div class="detail-card__value">${escapeHtml(response.value)}</div>`,
-            `<div class="meta">${escapeHtml(response.clientName ?? "Unknown client")} - ${escapeHtml(formatAdminDateTime(response.submittedAt))}</div>`,
+      `<div class="meta">${escapeHtml(response.clientName ?? "Unknown client")} - ${renderLocalizedDateTime(response.submittedAt)}</div>`,
             "</section>"
           ].join("")).join("")}</div>`
       ),
@@ -7044,6 +7064,23 @@ function renderLayout(input: {
     "    media.addListener(syncLayout);",
     "  }",
 " const enhanceDynamicContent = (root = document) => {",
+" const localDateTimeFormatter = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });",
+" const localDateTimeTitleFormatter = new Intl.DateTimeFormat(undefined, { dateStyle: 'full', timeStyle: 'long' });",
+" const localizeDateTimes = () => {",
+" for (const element of root.querySelectorAll('[data-localized-datetime]')) {",
+" if (!(element instanceof HTMLTimeElement)) {",
+" continue;",
+" }",
+" const iso = element.dataset.sortValue ?? element.getAttribute('datetime') ?? '';",
+" const parsed = new Date(iso);",
+" if (Number.isNaN(parsed.getTime())) {",
+" continue;",
+" }",
+" element.textContent = localDateTimeFormatter.format(parsed);",
+" element.title = localDateTimeTitleFormatter.format(parsed);",
+" }",
+" };",
+" localizeDateTimes();",
 " const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');",
 " const revealElements = Array.from(root.querySelectorAll('.surface-block, .summary-card, .quick-link-card, .detail-card, .data-table, .portal-card, .blog-card')).filter((element) => element instanceof HTMLElement && element.closest('[data-no-reveal]') == null);",
 " if (prefersReducedMotion.matches || !('IntersectionObserver' in window)) {",
@@ -7124,7 +7161,7 @@ function renderLayout(input: {
 " row,",
 " originalIndex: index,",
 " text: Array.from(row.cells).map((cell) => (cell.textContent ?? '').replace(/\\s+/g, ' ').trim().toLowerCase()).join(' '),",
-" sortValues: Array.from(row.cells).map((cell) => parseSortableValue(cell.dataset.sortValue ?? cell.textContent ?? ''))",
+" sortValues: Array.from(row.cells).map((cell) => parseSortableValue(cell.querySelector('[data-sort-value]')?.getAttribute('data-sort-value') ?? cell.dataset.sortValue ?? cell.textContent ?? ''))",
 " }));",
 " let query = '';",
 " let currentPage = 1;",
@@ -11566,7 +11603,7 @@ return;
                 rows: summary.body.upcomingBookings.map((booking) => [
                   escapeHtml(booking.id),
                   escapeHtml(booking.serviceId),
-                  escapeHtml(booking.startsAt),
+                  renderLocalizedDateTime(booking.startsAt),
                   escapeHtml(booking.status)
                 ]),
                 emptyMessage: "No upcoming bookings."
@@ -11677,7 +11714,7 @@ portalNav,
 renderStatsGrid([
 { label: "Pets", value: pets.length, meta: formatCountLabel(activePets.length, "active profile"), accent: "primary" },
 { label: "Contacts", value: contacts.length, meta: primaryContact == null ? "No primary contact saved yet" : `Primary: ${primaryContact.name}`, accent: "secondary" },
-{ label: "Upcoming Visits", value: upcomingBookings.length, meta: nextBooking == null ? "Nothing on the calendar yet" : formatAdminDateTime(nextBooking.startsAt), accent: "success" },
+{ label: "Upcoming Visits", value: upcomingBookings.length, meta: nextBooking == null ? "Nothing on the calendar yet" : undefined, metaHtml: nextBooking == null ? undefined : renderLocalizedDateTime(nextBooking.startsAt), accent: "success" },
 { label: "Open Balance", value: formatCurrency(outstandingBalance), meta: `${formatCountLabel(openInvoices.length, "invoice")} still open`, accent: "warning" }
 ]),
 '<section class="surface-block">',
@@ -11697,7 +11734,7 @@ value: primaryContact == null
 label: "Next Appointment",
 value: nextBooking == null
 ? "No active appointments"
-: `<a href="/portal/appointments/${encodeURIComponent(nextBooking.id)}">${escapeHtml(formatAdminDateTime(nextBooking.startsAt))}</a>`
+: `<a href="/portal/appointments/${encodeURIComponent(nextBooking.id)}">${renderLocalizedDateTime(nextBooking.startsAt)}</a>`
 },
 {
 label: "Forms Pending Review",
@@ -11838,7 +11875,7 @@ writeHtml(response, 200, renderLayout({
                 rows: bookings.body.items.map((booking) => [
                   `<a href="/portal/bookings/${encodeURIComponent(booking.id)}">${escapeHtml(booking.id)}</a>`,
                   escapeHtml(booking.serviceId),
-                  escapeHtml(booking.startsAt),
+                  renderLocalizedDateTime(booking.startsAt),
                   renderStatusPill(booking.status, booking.status === "confirmed" ? "success" : "info")
                 ]),
                 emptyMessage: "No appointments."
@@ -11873,8 +11910,8 @@ writeHtml(response, 200, renderLayout({
               renderDetailGrid([
                 { label: "Booking ID", value: escapeHtml(booking.body.item.id) },
                 { label: "Service", value: escapeHtml(booking.body.item.serviceId) },
-                { label: "Starts", value: escapeHtml(booking.body.item.startsAt) },
-                { label: "Ends", value: escapeHtml(booking.body.item.endsAt) },
+                { label: "Starts", value: renderLocalizedDateTime(booking.body.item.startsAt) },
+                { label: "Ends", value: renderLocalizedDateTime(booking.body.item.endsAt) },
                 {
                   label: "Status",
                   value: renderStatusPill(booking.body.item.status, booking.body.item.status === "confirmed" ? "success" : "info")
@@ -12160,7 +12197,7 @@ description: "Review care notes, shared files, appointments, and completed paper
 portalNav,
 renderStatsGrid([
 { label: "Files", value: files.length, meta: latestFile == null ? "No uploads yet" : latestFile.originalName, accent: "primary" },
-{ label: "Appointments", value: upcomingBookings.length, meta: nextBooking == null ? "No active appointments" : formatAdminDateTime(nextBooking.startsAt), accent: "success" },
+{ label: "Appointments", value: upcomingBookings.length, meta: nextBooking == null ? "No active appointments" : undefined, metaHtml: nextBooking == null ? undefined : renderLocalizedDateTime(nextBooking.startsAt), accent: "success" },
 { label: "Forms", value: petForms.length, meta: latestForm == null ? "No linked forms yet" : getAdminFormSubmissionTitle(latestForm), accent: "secondary" },
 { label: "Achievements", value: petAchievements.length, meta: petAchievements.length === 0 ? "No pet-specific awards yet" : "Training milestones linked", accent: "warning" }
 ]),
@@ -12185,7 +12222,7 @@ value: profile == null ? "Profile unavailable" : `<a href="/portal/profile">${es
 label: "Next Appointment",
 value: nextBooking == null
 ? "No active appointments"
-: `<a href="/portal/appointments/${encodeURIComponent(nextBooking.id)}">${escapeHtml(formatAdminDateTime(nextBooking.startsAt))}</a>`
+: `<a href="/portal/appointments/${encodeURIComponent(nextBooking.id)}">${renderLocalizedDateTime(nextBooking.startsAt)}</a>`
 },
 {
 label: "Latest Form",
@@ -12880,7 +12917,7 @@ return;
                     ? escapeHtml(notification.subject)
                     : `${escapeHtml(notification.subject)} ${renderStatusPill("Unread", "info")}`,
                   escapeHtml(notification.message),
-                  escapeHtml(notification.createdAt),
+                renderLocalizedDateTime(notification.createdAt),
                   `<a href="${escapeHtml(notification.url)}">Open</a>`
                 ]),
                 emptyMessage: "No notifications."
@@ -13115,9 +13152,9 @@ const adminNav = "";
           petId: pet?.id ?? (petId === "" ? null : petId),
           appointmentTypeId: appointmentType?.id ?? (appointmentTypeId === "" ? null : appointmentTypeId)
         });
-        const bookingSummary = booking == null
-          ? "Not linked"
-          : `${appointmentType?.name ?? booking.serviceId} - ${formatAdminDateTime(booking.startsAt)}`;
+              const bookingSummary = booking == null
+                ? "Not linked"
+                : `${escapeHtml(appointmentType?.name ?? booking.serviceId)} - ${renderLocalizedDateTime(booking.startsAt)}`;
 
         writeHtml(response, 200, renderLayout({
           title: "Generate Form Link",
@@ -13140,7 +13177,7 @@ const adminNav = "";
               { label: "Request Type", value: escapeHtml(formatFormTemplateTypeLabel(formType)) },
               { label: "Client", value: escapeHtml(clientProfile?.name ?? "Not linked") },
               { label: "Appointment Type", value: escapeHtml(appointmentType?.name ?? "Not linked") },
-              { label: "Booking", value: escapeHtml(bookingSummary) },
+              { label: "Booking", value: bookingSummary },
               { label: "Pet", value: escapeHtml(pet?.name ?? "Not linked") }
             ]),
             '<section class="surface-block">',
@@ -13602,7 +13639,7 @@ const adminNav = "";
                 rows: dashboard.body.recentBookings.map((booking) => [
                   `<a href="/admin/bookings">${escapeHtml(booking.id)}</a>`,
                   escapeHtml(booking.serviceId),
-                  escapeHtml(booking.startsAt),
+                  renderLocalizedDateTime(booking.startsAt),
                   escapeHtml(booking.status)
                 ]),
                 emptyMessage: "No recent bookings."
@@ -13725,7 +13762,7 @@ adminNav,
 renderStatsGrid([
 { label: "Pets", value: pets.length, meta: formatCountLabel(activePets.length, "active record"), accent: "primary" },
 { label: "Contacts", value: contacts.length, meta: primaryContact == null ? "No primary contact on file" : `Primary: ${primaryContact.name}`, accent: "secondary" },
-{ label: "Upcoming Visits", value: upcomingBookings.length, meta: nextBooking == null ? "Nothing scheduled yet" : formatAdminDateTime(nextBooking.startsAt), accent: "success" },
+{ label: "Upcoming Visits", value: upcomingBookings.length, meta: nextBooking == null ? "Nothing scheduled yet" : undefined, metaHtml: nextBooking == null ? undefined : renderLocalizedDateTime(nextBooking.startsAt), accent: "success" },
 { label: "Open Balance", value: formatCurrency(outstandingBalance), meta: `${formatCountLabel(openInvoices.length, "invoice")} awaiting action`, accent: "warning" }
 ]),
 '<section class="surface-block">',
@@ -13749,7 +13786,7 @@ value: primaryContact == null
 label: "Next Appointment",
 value: nextBooking == null
 ? "No active appointments"
-: `<a href="/admin/bookings/${encodeURIComponent(nextBooking.id)}">${escapeHtml(formatAdminDateTime(nextBooking.startsAt))}</a>`
+: `<a href="/admin/bookings/${encodeURIComponent(nextBooking.id)}">${renderLocalizedDateTime(nextBooking.startsAt)}</a>`
 },
 {
 label: "Latest Achievement",
@@ -14098,18 +14135,20 @@ return;
               const clientLabel = client == null ? booking.clientId : renderAdminClientDisplayName(client);
               const petLabel = linkedPets.length === 0 ? "Unassigned" : linkedPets.map((pet) => pet.name).join(", ");
               const serviceLabel = appointmentType?.name ?? booking.serviceId;
-              const startsLabel = formatAdminDateTime(booking.startsAt);
-              return {
-                booking,
-                client,
-                linkedPets,
-                clientLabel,
-                petLabel,
-                serviceLabel,
-                startsLabel,
-                statusLabel: booking.status
-              };
-            })
+                const startsLabel = renderLocalizedDateTime(booking.startsAt);
+                const startsSearchLabel = formatAdminDateTime(booking.startsAt);
+                return {
+                  booking,
+                  client,
+                  linkedPets,
+                  clientLabel,
+                  petLabel,
+                  serviceLabel,
+                  startsLabel,
+                  startsSearchLabel,
+                  statusLabel: booking.status
+                };
+              })
             .filter((item) => matchesSearchQuery(
               bookingQuery,
               item.booking.id,
@@ -14148,7 +14187,7 @@ return;
                     ? "Unassigned"
                     : item.linkedPets.map((pet) => `<a href="/admin/pets/${encodeURIComponent(pet.id)}">${escapeHtml(pet.name)}</a>`).join(", "),
                   escapeHtml(item.serviceLabel),
-                  escapeHtml(item.startsLabel),
+                  item.startsSearchLabel,
                   renderBookingStatusPill(item.booking.status),
                   renderTableActionLinks([
                     { href: `/admin/bookings/${encodeURIComponent(item.booking.id)}`, label: "Manage" },
@@ -14205,8 +14244,8 @@ return;
                 { label: "Booking ID", value: escapeHtml(booking.body.item.id) },
                 { label: "Client", value: clientValue },
                 { label: "Service", value: serviceValue },
-                { label: "Starts", value: escapeHtml(formatAdminDateTime(booking.body.item.startsAt)) },
-                { label: "Ends", value: escapeHtml(formatAdminDateTime(booking.body.item.endsAt)) },
+                { label: "Starts", value: renderLocalizedDateTime(booking.body.item.startsAt) },
+                { label: "Ends", value: renderLocalizedDateTime(booking.body.item.endsAt) },
                 { label: "Status", value: renderBookingStatusPill(booking.body.item.status) },
                 { label: "Pets", value: petsValue },
                 { label: "Calendar Access Token", value: escapeHtml(booking.body.item.icalAccess?.token ?? "Unavailable") }
@@ -14373,7 +14412,7 @@ if (method === "POST" && handlers != null && resolved.api != null && url.pathnam
                 { label: "Expense Date", value: escapeHtml(formatAdminDate(expense.body.item.expenseDate)) },
                 { label: "Status", value: renderExpenseStatusPill(expense.body.item) },
                 { label: "Receipt", value: receiptLink },
-                { label: "Created", value: escapeHtml(formatAdminDateTime(expense.body.item.createdAt)) }
+                { label: "Created", value: renderLocalizedDateTime(expense.body.item.createdAt) }
               ]),
               '</section>',
               '<section class="surface-block">',
@@ -14877,7 +14916,7 @@ description: "Review ownership, care notes, linked files, appointments, and pet-
 adminNav,
 renderStatsGrid([
 { label: "Files", value: files.length, meta: latestFile == null ? "No uploads yet" : latestFile.originalName, accent: "primary" },
-{ label: "Appointments", value: upcomingBookings.length, meta: nextBooking == null ? "No active bookings" : formatAdminDateTime(nextBooking.startsAt), accent: "success" },
+{ label: "Appointments", value: upcomingBookings.length, meta: nextBooking == null ? "No active bookings" : undefined, metaHtml: nextBooking == null ? undefined : renderLocalizedDateTime(nextBooking.startsAt), accent: "success" },
 { label: "Forms", value: petForms.length, meta: latestForm == null ? "No linked forms yet" : getAdminFormSubmissionTitle(latestForm), accent: "secondary" },
 { label: "Achievements", value: petAchievements.length, meta: petAchievements.length === 0 ? "No pet-specific awards yet" : "Training milestones linked", accent: "warning" }
 ]),
@@ -14904,7 +14943,7 @@ value: primaryContact == null
 label: "Next Appointment",
 value: nextBooking == null
 ? "No active appointments"
-: `<a href="/admin/bookings/${encodeURIComponent(nextBooking.id)}">${escapeHtml(formatAdminDateTime(nextBooking.startsAt))}</a>`
+: `<a href="/admin/bookings/${encodeURIComponent(nextBooking.id)}">${renderLocalizedDateTime(nextBooking.startsAt)}</a>`
 },
 {
 label: "Latest Form",
@@ -16769,7 +16808,7 @@ return;
                 { label: "Template", value: escapeHtml(template.name) },
                 { label: "Total Submissions", value: escapeHtml(String(report.totalSubmissions)) },
                 { label: "Visualized Questions", value: escapeHtml(String(report.visualizedFieldCount)) },
-                { label: "Latest Submission", value: escapeHtml(formatAdminDateTime(report.latestSubmissionAt)) }
+                { label: "Latest Submission", value: renderLocalizedDateTime(report.latestSubmissionAt) }
               ]),
               report.totalSubmissions === 0
                 ? '<section class="surface-block"><p class="section-copy">No survey submissions have been collected yet.</p></section>'
@@ -16847,7 +16886,7 @@ return;
                     ? `<a href="/client/form_submissions_view.php?id=${encodeURIComponent(form.id)}">${escapeHtml(getAdminFormSubmissionClientLabel(form))}</a>`
                     : `<a href="/admin/forms/${encodeURIComponent(form.id)}">${escapeHtml(getAdminFormSubmissionClientLabel(form))}</a>`,
                   escapeHtml(formatFormTemplateTypeLabel(form.formType)),
-                  escapeHtml(formatAdminDateTime(form.submittedAt)),
+                  renderLocalizedDateTime(form.submittedAt),
                   renderAdminFormSubmissionStatusPill(form),
                   escapeHtml(form.reviewedByName ?? "Not reviewed"),
                   renderAdminFormSubmissionActions(form, { legacy: legacyFormSubmissionsListPath })
@@ -16911,12 +16950,12 @@ return;
                 { label: "Client", value: escapeHtml(getAdminFormSubmissionClientLabel(form.body.item)) },
                 { label: "Form Type", value: escapeHtml(formatFormTemplateTypeLabel(form.body.item.formType)) },
                 { label: "Status", value: renderAdminFormSubmissionStatusPill(form.body.item) },
-                { label: "Submitted", value: escapeHtml(formatAdminDateTime(form.body.item.submittedAt)) },
+                { label: "Submitted", value: renderLocalizedDateTime(form.body.item.submittedAt) },
                 { label: "Pet", value: escapeHtml(form.body.item.petName ?? "Not linked") },
                 { label: "Booking", value: escapeHtml(form.body.item.bookingSummary ?? "Not linked") },
                 { label: "Submitted By", value: escapeHtml(form.body.item.submittedByName ?? "Client / public access") },
                 { label: "Reviewed By", value: escapeHtml(form.body.item.reviewedByName ?? "Not reviewed") },
-                { label: "Reviewed At", value: escapeHtml(formatAdminDateTime(form.body.item.reviewedAt)) },
+                { label: "Reviewed At", value: renderLocalizedDateTime(form.body.item.reviewedAt) },
                 {
                   label: "Portal Access",
                   value: form.body.item.publicAccess == null
