@@ -860,27 +860,45 @@ function toSitePageRecord(row: {
   };
 }
 
+function toOptionalTrimmedString(value: unknown): string | null {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed === "" ? null : trimmed;
+  }
+
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value.toISOString();
+  }
+
+  return null;
+}
+
 function toSettingRecord(row: {
   id: string | number;
   setting_key: string;
   setting_value: string | null;
-  setting_type?: string | null;
-  category?: string | null;
-  label?: string | null;
+  setting_type?: string | Date | null;
+  category?: string | Date | null;
+  label?: string | Date | null;
   description?: string | null;
   is_secret?: number | null;
-  updated_at?: string | null;
+  updated_at?: string | Date | null;
 }): Setting {
+  const settingType = toOptionalTrimmedString(row.setting_type) ?? "text";
+  const category = toOptionalTrimmedString(row.category) ?? "general";
+  const label = toOptionalTrimmedString(row.label) ?? row.setting_key;
+  const updatedAt = toOptionalTrimmedString(row.updated_at) ?? "1970-01-01T00:00:00.000Z";
+
   return {
     id: String(row.id),
     key: row.setting_key,
     value: row.setting_value ?? "",
-    type: row.setting_type?.trim() ? row.setting_type : "text",
-    category: row.category?.trim() ? row.category : "general",
-    label: row.label?.trim() ? row.label : row.setting_key,
+    type: settingType,
+    category,
+    label,
     description: row.description ?? "",
     secret: Number(row.is_secret ?? 0) === 1,
-    updatedAt: row.updated_at?.trim() ? row.updated_at : "1970-01-01T00:00:00.000Z"
+    updatedAt
   };
 }
 

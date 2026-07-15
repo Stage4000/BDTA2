@@ -247,6 +247,31 @@ it("falls back to legacy admin and settings columns for admin reads", async () =
   expect(executor.calls[8]?.sql).toContain("NULL AS account_type");
 });
 
+it("normalizes Date-backed admin setting timestamps", async () => {
+  const dependencies = createMySqlApiDependencies(new FakeSqlExecutor([
+    rows([{
+      id: "base_url",
+      setting_key: "base_url",
+      setting_value: "https://example.test",
+      setting_type: "text",
+      category: "general",
+      label: "Base URL",
+      description: "Public site URL",
+      is_secret: 0,
+      updated_at: new Date("2026-07-15T18:30:00.000Z") as unknown as string
+    }])
+  ]), {
+    now: () => "2026-05-27T18:00:00.000Z"
+  });
+
+  await expect(dependencies.content.listAdminSettings()).resolves.toEqual([
+    expect.objectContaining({
+      key: "base_url",
+      updatedAt: "2026-07-15T18:30:00.000Z"
+    })
+  ]);
+});
+
 it("creates public-booking dependencies against legacy-aligned MySQL tables", async () => {
   const executor = new FakeSqlExecutor([
       rows([{ overlapCount: 0 }]),
