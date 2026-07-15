@@ -3205,20 +3205,91 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
           cookie: cookie ?? ""
         }
       });
+      const legacyClientsList = await fetch(`${baseUrl}/client/clients_list.php`, {
+        headers: {
+          cookie: cookie ?? ""
+        },
+        redirect: "manual"
+      });
+      const legacyClientView = await fetch(`${baseUrl}/client/clients_view.php?id=client-portal-1`, {
+        headers: {
+          cookie: cookie ?? ""
+        },
+        redirect: "manual"
+      });
+      const legacyClientEdit = await fetch(`${baseUrl}/client/clients_edit.php?id=client-portal-1`, {
+        headers: {
+          cookie: cookie ?? ""
+        },
+        redirect: "manual"
+      });
+      const legacyBookingsList = await fetch(`${baseUrl}/client/bookings_list.php`, {
+        headers: {
+          cookie: cookie ?? ""
+        },
+        redirect: "manual"
+      });
+      const legacyExpenseView = await fetch(`${baseUrl}/client/expenses_edit.php?id=expense-1`, {
+        headers: {
+          cookie: cookie ?? ""
+        },
+        redirect: "manual"
+      });
+      const legacyInvoiceView = await fetch(`${baseUrl}/client/invoices_view.php?id=invoice-1`, {
+        headers: {
+          cookie: cookie ?? ""
+        },
+        redirect: "manual"
+      });
+      const legacyQuotesList = await fetch(`${baseUrl}/client/quotes_list.php`, {
+        headers: {
+          cookie: cookie ?? ""
+        },
+        redirect: "manual"
+      });
+      const legacyQuoteView = await fetch(`${baseUrl}/client/quotes_view.php?id=quote-1`, {
+        headers: {
+          cookie: cookie ?? ""
+        },
+        redirect: "manual"
+      });
+      const legacyContractsList = await fetch(`${baseUrl}/client/contracts_list.php`, {
+        headers: {
+          cookie: cookie ?? ""
+        },
+        redirect: "manual"
+      });
+      const legacyContractView = await fetch(`${baseUrl}/client/contracts_view.php?id=contract-1`, {
+        headers: {
+          cookie: cookie ?? ""
+        },
+        redirect: "manual"
+      });
 
-  expect(dashboard.status).toBe(200);
-  expect(clients.status).toBe(200);
-  expect(bookings.status).toBe(200);
-  expect(expenses.status).toBe(200);
-  expect(invoices.status).toBe(200);
-  expect(quotes.status).toBe(200);
-  expect(contracts.status).toBe(200);
+      expect(dashboard.status).toBe(200);
+      expect(clients.status).toBe(200);
+      expect(bookings.status).toBe(200);
+      expect(expenses.status).toBe(200);
+      expect(invoices.status).toBe(200);
+      expect(quotes.status).toBe(200);
+      expect(contracts.status).toBe(200);
       expect(forms.status).toBe(200);
+      expect(legacyClientsList.status).toBe(302);
+      expect(legacyClientView.status).toBe(302);
+      expect(legacyClientEdit.status).toBe(302);
+      expect(legacyBookingsList.status).toBe(302);
+      expect(legacyExpenseView.status).toBe(302);
+      expect(legacyInvoiceView.status).toBe(302);
+      expect(legacyQuotesList.status).toBe(302);
+      expect(legacyQuoteView.status).toBe(302);
+      expect(legacyContractsList.status).toBe(302);
+      expect(legacyContractView.status).toBe(302);
 
       const dashboardHtml = await dashboard.text();
       const clientsHtml = await clients.text();
-      const bookingsHtml = await bookings.text();
-      const invoicesHtml = await invoices.text();
+    const bookingsHtml = await bookings.text();
+    const expensesHtml = await expenses.text();
+    const invoicesHtml = await invoices.text();
       const quotesHtml = await quotes.text();
       const contractsHtml = await contracts.text();
       const formsHtml = await forms.text();
@@ -3238,25 +3309,40 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
     expect(clientsHtml).toContain("New Client");
     expect(clientsHtml).toContain('id="admin-client-create-dialog"');
     expect(clientsHtml).toContain('/admin/clients/client-portal-1/profile');
-    expect(clientsHtml).toContain('/admin/clients/client-portal-1/contacts');
-    expect(clientsHtml).toContain('/admin/clients/client-portal-1/achievements');
-    expect(clientsHtml).toContain("Manage");
-    expect(clientsHtml).toContain("<table");
-      expect(bookingsHtml).toContain("booking-1");
+      expect(clientsHtml).toContain('/admin/clients/client-portal-1/contacts');
+      expect(clientsHtml).toContain('/admin/clients/client-portal-1/achievements');
+expect(clientsHtml).toContain("Manage");
+expect(clientsHtml).toContain("<table");
+expect(legacyClientsList.headers.get("location")).toBe("/admin/clients");
+expect(legacyClientView.headers.get("location")).toBe("/admin/clients/client-portal-1/profile");
+expect(legacyClientEdit.headers.get("location")).toBe("/admin/clients/client-portal-1/profile");
+expect(bookingsHtml).toContain("booking-1");
       expect(bookingsHtml).toContain("<h2>Booking Ledger</h2>");
       expect(bookingsHtml).toContain('<div class="data-table">');
       expect(bookingsHtml).toContain("data-enhanced-table");
       expect(bookingsHtml).toContain("data-enhanced-table-search");
-      expect(bookingsHtml).toContain("data-enhanced-table-page-count");
-      expect(invoicesHtml).toContain("invoice-1");
+expect(bookingsHtml).toContain("data-enhanced-table-page-count");
+expect(bookingsHtml).toContain("Manage");
+expect(legacyBookingsList.headers.get("location")).toBe("/admin/bookings");
+expect(legacyExpenseView.headers.get("location")).toBe("/admin/expenses/expense-1");
+expect(invoicesHtml).toContain("invoice-1");
       expect(invoicesHtml).toContain("<h2>Invoice Ledger</h2>");
       expect(invoicesHtml).toContain('<div class="data-table">');
+      expect(invoicesHtml).toContain("Manage");
+      expect(legacyInvoiceView.headers.get("location")).toBe("/admin/invoices/invoice-1");
       expect(quotesHtml).toContain("quote-1");
-      expect(quotesHtml).toContain("<h2>Quote Pipeline</h2>");
-      expect(quotesHtml).toContain('<div class="data-table">');
-      expect(contractsHtml).toContain("contract-1");
-      expect(contractsHtml).toContain("<h2>Contract Status</h2>");
-      expect(contractsHtml).toContain('<div class="data-table">');
+expect(quotesHtml).toContain("<h2>Quote Pipeline</h2>");
+expect(quotesHtml).toContain('<div class="data-table">');
+expect(quotesHtml).toContain("Manage");
+expect(legacyQuotesList.headers.get("location")).toBe("/admin/quotes");
+expect(legacyQuoteView.headers.get("location")).toBe("/admin/quotes/quote-1");
+expect(contractsHtml).toContain("contract-1");
+expect(contractsHtml).toContain("<h2>Contract Status</h2>");
+expect(contractsHtml).toContain('<div class="data-table">');
+expect(contractsHtml).toContain("Manage");
+expect(legacyContractsList.headers.get("location")).toBe("/admin/contracts");
+expect(legacyContractView.headers.get("location")).toBe("/admin/contracts/contract-1");
+      expect(expensesHtml).toContain("Expense Ledger");
       expect(formsHtml).toContain("form-1");
     } finally {
       await new Promise<void>((resolve, reject) => {
@@ -3531,15 +3617,51 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
           cookie: adminCookie ?? ""
         }
       });
+      const legacyPetsList = await fetch(`${baseUrl}/client/pets_list.php`, {
+        headers: {
+          cookie: adminCookie ?? ""
+        },
+        redirect: "manual"
+      });
+      const legacyPetView = await fetch(`${baseUrl}/client/pets_view.php?id=pet-1`, {
+        headers: {
+          cookie: adminCookie ?? ""
+        },
+        redirect: "manual"
+      });
+      const legacyPetEdit = await fetch(`${baseUrl}/client/pets_edit.php?id=pet-1`, {
+        headers: {
+          cookie: adminCookie ?? ""
+        },
+        redirect: "manual"
+      });
       const adminPackages = await fetch(`${baseUrl}/admin/packages`, {
         headers: {
           cookie: adminCookie ?? ""
         }
       });
+      const legacyPackagesList = await fetch(`${baseUrl}/client/packages_list.php`, {
+        headers: {
+          cookie: adminCookie ?? ""
+        },
+        redirect: "manual"
+      });
+      const legacyPackageEdit = await fetch(`${baseUrl}/client/packages_edit.php?id=package-1`, {
+        headers: {
+          cookie: adminCookie ?? ""
+        },
+        redirect: "manual"
+      });
       const adminCredits = await fetch(`${baseUrl}/admin/credits`, {
         headers: {
           cookie: adminCookie ?? ""
         }
+      });
+      const legacyCreditsManage = await fetch(`${baseUrl}/client/credits_manage.php`, {
+        headers: {
+          cookie: adminCookie ?? ""
+        },
+        redirect: "manual"
       });
       const adminAchievementTypes = await fetch(`${baseUrl}/admin/achievement-types`, {
         headers: {
@@ -3571,8 +3693,14 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
       expect(adminClientContacts.status).toBe(200);
       expect(adminClientContactDetail.status).toBe(200);
       expect(adminPets.status).toBe(200);
+      expect(legacyPetsList.status).toBe(302);
+      expect(legacyPetView.status).toBe(302);
+      expect(legacyPetEdit.status).toBe(302);
       expect(adminPackages.status).toBe(200);
+      expect(legacyPackagesList.status).toBe(302);
+      expect(legacyPackageEdit.status).toBe(302);
       expect(adminCredits.status).toBe(200);
+      expect(legacyCreditsManage.status).toBe(302);
       expect(adminAchievementTypes.status).toBe(200);
       expect(adminAchievementTypeDetail.status).toBe(200);
       expect(adminClientAchievements.status).toBe(200);
@@ -3602,9 +3730,19 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
       expect(adminClientContactsHtml).toContain("<h2>Contact Directory</h2>");
       expect(adminClientContactDetailHtml).toContain("Primary Contact");
       expect(adminClientContactDetailHtml).toContain("<h2>Edit Contact</h2>");
+      expect(adminPetsHtml).toContain("Manage");
+      expect(adminPetsHtml).toContain("Files");
+      expect(adminPetsHtml).toContain('/admin/clients/client-portal-1/profile');
+      expect(legacyPetsList.headers.get("location")).toBe("/admin/pets");
+      expect(legacyPetView.headers.get("location")).toBe("/admin/pets/pet-1");
+      expect(legacyPetEdit.headers.get("location")).toBe("/admin/pets/pet-1");
+      expect(adminPackagesHtml).toContain("Manage");
+      expect(legacyPackagesList.headers.get("location")).toBe("/admin/packages");
+      expect(legacyPackageEdit.headers.get("location")).toBe("/admin/packages/package-1");
+      expect(adminCreditsHtml).toContain("Manage");
+      expect(legacyCreditsManage.headers.get("location")).toBe("/admin/credits");
       expect(adminPetsHtml).toContain("Buddy");
       expect(adminPetsHtml).toContain("<h2>Pet Directory</h2>");
-      expect(adminPetsHtml).toContain("Use the side gate and towel paws before re-entry.");
       expect(adminPackagesHtml).toContain("Starter Package");
       expect(adminPackagesHtml).toContain("<h2>Package Catalog</h2>");
       expect(adminCreditsHtml).toContain("credit-1");
@@ -4699,6 +4837,7 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
       expect(settingsHtml).toContain("Google Calendar Sync Enabled");
       expect(settingsHtml).toContain("Launch-Critical Settings");
       expect(settingsHtml).toContain("Configuration Areas");
+      expect(settingsHtml).toContain('class="settings-shell" data-no-reveal');
       expect(settingsHtml).toContain('href="/admin/settings" aria-current="page"');
       expect(settingsHtml).toContain("settings-sidebar__panel");
       expect(settingsHtml).toContain("API-Key Access");

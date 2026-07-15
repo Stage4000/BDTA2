@@ -1880,6 +1880,10 @@ function renderAdminClientDisplayName(client: Client): string {
   return fullName === "" ? client.email : fullName;
 }
 
+function renderTableActionLinks(actions: Array<{ href: string; label: string }>): string {
+  return `<div class="table-actions">${actions.map((action) => `<a href="${action.href}">${escapeHtml(action.label)}</a>`).join("")}</div>`;
+}
+
 function renderAdminClientCreateModal(): string {
   return [
     "<style>",
@@ -1937,7 +1941,11 @@ function renderAdminClientDirectoryTable(clients: Client[]): string {
       `<a href="/admin/clients/${encodeURIComponent(client.id)}/profile">${escapeHtml(renderAdminClientDisplayName(client))}</a>`,
       escapeHtml(client.email),
       renderStatusPill(client.archived ? "Archived" : "Active", client.archived ? "warning" : "success"),
-      `<div class="table-actions"><a href="/admin/clients/${encodeURIComponent(client.id)}/profile">Manage</a><a href="/admin/clients/${encodeURIComponent(client.id)}/contacts">Contacts</a><a href="/admin/clients/${encodeURIComponent(client.id)}/achievements">Achievements</a></div>`
+      renderTableActionLinks([
+        { href: `/admin/clients/${encodeURIComponent(client.id)}/profile`, label: "Manage" },
+        { href: `/admin/clients/${encodeURIComponent(client.id)}/contacts`, label: "Contacts" },
+        { href: `/admin/clients/${encodeURIComponent(client.id)}/achievements`, label: "Achievements" }
+      ])
     ]),
     emptyMessage: "No clients."
   });
@@ -2867,7 +2875,7 @@ function renderSettingsConsole(model: SettingsConsoleViewModel): string {
     : model.settings.filter((setting) => normalizeSettingsCategory(setting.category) === resolvedCategory);
 
   return [
-    '<div class="settings-shell">',
+    '<div class="settings-shell" data-no-reveal>',
     renderAdminSettingsSidebar({
       ...model,
       currentCategory: resolvedCategory
@@ -6943,7 +6951,7 @@ function renderLayout(input: {
     "  }",
     "  const enhanceDynamicContent = (root = document) => {",
     "  const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');",
-    "  const revealElements = Array.from(root.querySelectorAll('.surface-block, .summary-card, .quick-link-card, .detail-card, .data-table, .portal-card, .blog-card')).filter((element) => element instanceof HTMLElement);",
+    "  const revealElements = Array.from(root.querySelectorAll('.surface-block, .summary-card, .quick-link-card, .detail-card, .data-table, .portal-card, .blog-card')).filter((element) => element instanceof HTMLElement && element.closest('[data-no-reveal]') == null);",
     "  if (prefersReducedMotion.matches || !('IntersectionObserver' in window)) {",
     "    for (const [index, element] of revealElements.entries()) {",
     "      element.classList.add('is-visible');",
@@ -9512,12 +9520,28 @@ return;
         return;
       }
 
-      const adminClientProfileMatch = /^\/admin\/clients\/([^/]+)\/profile$/.exec(url.pathname);
-      const adminClientContactsMatch = /^\/admin\/clients\/([^/]+)\/contacts$/.exec(url.pathname);
-      const adminClientAchievementsMatch = /^\/admin\/clients\/([^/]+)\/achievements$/.exec(url.pathname);
-      const adminClientAchievementDetailMatch = /^\/admin\/clients\/([^/]+)\/achievements\/([^/]+)$/.exec(url.pathname);
-      const adminClientAchievementCertificateDetailMatch = /^\/admin\/clients\/([^/]+)\/achievements\/([^/]+)\/certificate$/.exec(url.pathname);
-      const portalBookingDetailMatch = /^\/portal\/bookings\/([^/]+)$/.exec(url.pathname);
+const adminClientProfileMatch = /^\/admin\/clients\/([^/]+)\/profile$/.exec(url.pathname);
+const adminClientContactsMatch = /^\/admin\/clients\/([^/]+)\/contacts$/.exec(url.pathname);
+const adminClientAchievementsMatch = /^\/admin\/clients\/([^/]+)\/achievements$/.exec(url.pathname);
+const adminClientAchievementDetailMatch = /^\/admin\/clients\/([^/]+)\/achievements\/([^/]+)$/.exec(url.pathname);
+const adminClientAchievementCertificateDetailMatch = /^\/admin\/clients\/([^/]+)\/achievements\/([^/]+)\/certificate$/.exec(url.pathname);
+const legacyClientListPath = url.pathname === "/client/clients_list.php";
+const legacyClientDetailPath = url.pathname === "/client/clients_view.php";
+const legacyClientEditPath = url.pathname === "/client/clients_edit.php";
+const legacyPetListPath = url.pathname === "/client/pets_list.php";
+const legacyPetDetailPath = url.pathname === "/client/pets_view.php";
+const legacyPetEditPath = url.pathname === "/client/pets_edit.php";
+const legacyBookingListPath = url.pathname === "/client/bookings_list.php";
+const legacyExpenseDetailPath = url.pathname === "/client/expenses_edit.php";
+const legacyInvoiceDetailPath = url.pathname === "/client/invoices_view.php";
+const legacyQuoteListPath = url.pathname === "/client/quotes_list.php";
+const legacyQuoteDetailPath = url.pathname === "/client/quotes_view.php";
+const legacyContractListPath = url.pathname === "/client/contracts_list.php";
+const legacyContractDetailPath = url.pathname === "/client/contracts_view.php";
+const legacyPackageListPath = url.pathname === "/client/packages_list.php";
+const legacyPackageEditPath = url.pathname === "/client/packages_edit.php";
+const legacyCreditsManagePath = url.pathname === "/client/credits_manage.php";
+const portalBookingDetailMatch = /^\/portal\/bookings\/([^/]+)$/.exec(url.pathname);
       const portalContactDetailMatch = /^\/portal\/contacts\/([^/]+)$/.exec(url.pathname);
       const portalContactDeleteMatch = /^\/portal\/contacts\/([^/]+)\/delete$/.exec(url.pathname);
       const portalPetDetailMatch = /^\/portal\/pets\/([^/]+)$/.exec(url.pathname);
@@ -12976,6 +13000,22 @@ const adminNav = "";
           || adminSettingDetailMatch != null
           || adminOperationJobDetailMatch != null
           || adminOperationCallbackDetailMatch != null
+          || legacyClientListPath
+          || legacyClientDetailPath
+          || legacyClientEditPath
+          || legacyPetListPath
+          || legacyPetDetailPath
+          || legacyPetEditPath
+          || legacyBookingListPath
+          || legacyExpenseDetailPath
+          || legacyInvoiceDetailPath
+          || legacyQuoteListPath
+          || legacyQuoteDetailPath
+          || legacyContractListPath
+          || legacyContractDetailPath
+          || legacyPackageListPath
+          || legacyPackageEditPath
+          || legacyCreditsManagePath
         )
       ) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
@@ -12990,9 +13030,81 @@ const adminNav = "";
           return;
         }
 
-const adminNav = "";
+      const adminNav = "";
 
-    if (url.pathname === "/admin" || url.pathname === "/admin/dashboard" || url.pathname === "/client/index.php") {
+      const legacyAdminRedirectPath = (() => {
+        if (legacyClientListPath || legacyClientEditPath && (url.searchParams.get("id") ?? "").trim() === "") {
+          return "/admin/clients";
+        }
+
+        if (legacyClientDetailPath || legacyClientEditPath) {
+          const clientId = (url.searchParams.get("id") ?? "").trim();
+          return clientId === "" ? "/admin/clients" : `/admin/clients/${encodeURIComponent(clientId)}/profile`;
+        }
+
+        if (legacyPetListPath || legacyPetEditPath && (url.searchParams.get("id") ?? "").trim() === "") {
+          return "/admin/pets";
+        }
+
+        if (legacyPetDetailPath || legacyPetEditPath) {
+          const petId = (url.searchParams.get("id") ?? "").trim();
+          return petId === "" ? "/admin/pets" : `/admin/pets/${encodeURIComponent(petId)}`;
+        }
+
+        if (legacyBookingListPath) {
+          return "/admin/bookings";
+        }
+
+        if (legacyExpenseDetailPath) {
+          const expenseId = (url.searchParams.get("id") ?? "").trim();
+          return expenseId === "" ? "/admin/expenses" : `/admin/expenses/${encodeURIComponent(expenseId)}`;
+        }
+
+        if (legacyInvoiceDetailPath) {
+          const invoiceId = (url.searchParams.get("id") ?? "").trim();
+          return invoiceId === "" ? "/admin/invoices" : `/admin/invoices/${encodeURIComponent(invoiceId)}`;
+        }
+
+        if (legacyQuoteListPath) {
+          return "/admin/quotes";
+        }
+
+        if (legacyQuoteDetailPath) {
+          const quoteId = (url.searchParams.get("id") ?? "").trim();
+          return quoteId === "" ? "/admin/quotes" : `/admin/quotes/${encodeURIComponent(quoteId)}`;
+        }
+
+        if (legacyContractListPath) {
+          return "/admin/contracts";
+        }
+
+        if (legacyContractDetailPath) {
+          const contractId = (url.searchParams.get("id") ?? "").trim();
+          return contractId === "" ? "/admin/contracts" : `/admin/contracts/${encodeURIComponent(contractId)}`;
+        }
+
+        if (legacyPackageListPath || legacyPackageEditPath && (url.searchParams.get("id") ?? "").trim() === "") {
+          return "/admin/packages";
+        }
+
+        if (legacyPackageEditPath) {
+          const packageId = (url.searchParams.get("id") ?? "").trim();
+          return packageId === "" ? "/admin/packages" : `/admin/packages/${encodeURIComponent(packageId)}`;
+        }
+
+        if (legacyCreditsManagePath) {
+          return "/admin/credits";
+        }
+
+        return null;
+      })();
+
+      if (legacyAdminRedirectPath != null) {
+        redirect(response, legacyAdminRedirectPath);
+        return;
+      }
+
+      if (url.pathname === "/admin" || url.pathname === "/admin/dashboard" || url.pathname === "/client/index.php") {
       const dashboard = await handlers.handleAdminDashboard(session);
       if ("error" in dashboard.body) {
         await handleProtectedRouteFailure({
@@ -13534,11 +13646,14 @@ return;
               '<section class="surface-block">',
               "<h2>Booking Ledger</h2>",
               renderDataTable({
-                headers: ["Booking ID", "Service", "Status"],
+                headers: ["Booking ID", "Service", "Status", "Actions"],
                 rows: bookings.body.items.map((booking) => [
                   `<a href="/admin/bookings/${encodeURIComponent(booking.id)}">${escapeHtml(booking.id)}</a>`,
                   escapeHtml(booking.serviceId),
-                  renderStatusPill(booking.status, booking.status === "confirmed" ? "success" : "info")
+                  renderStatusPill(booking.status, booking.status === "confirmed" ? "success" : "info"),
+                  renderTableActionLinks([
+                    { href: `/admin/bookings/${encodeURIComponent(booking.id)}`, label: "Manage" }
+                  ])
                 ]),
                 emptyMessage: "No bookings."
               }),
@@ -13647,7 +13762,7 @@ return;
  '<section class="surface-block">',
  "<h2>Expense Ledger</h2>",
  renderDataTable({
- headers: ["Expense ID", "Date", "Category", "Description", "Client", "Amount", "Status"],
+ headers: ["Expense ID", "Date", "Category", "Description", "Client", "Amount", "Status", "Actions"],
  rows: expenses.body.items.map((expense) => [
  `<a href="/admin/expenses/${encodeURIComponent(expense.id)}">${escapeHtml(expense.id)}</a>`,
  escapeHtml(formatAdminDate(expense.expenseDate)),
@@ -13657,7 +13772,10 @@ return;
  ? "General"
  : `<a href="/admin/clients/${encodeURIComponent(expense.clientId)}">${escapeHtml(expense.clientName ?? expense.clientId)}</a>`,
  escapeHtml(formatCurrency(expense.amount)),
- renderExpenseStatusPill(expense)
+ renderExpenseStatusPill(expense),
+ renderTableActionLinks([
+ { href: `/admin/expenses/${encodeURIComponent(expense.id)}`, label: "Manage" }
+ ])
  ]),
  emptyMessage: "No expenses."
  }),
@@ -13747,14 +13865,17 @@ return;
               '<section class="surface-block">',
               "<h2>Invoice Ledger</h2>",
               renderDataTable({
-                headers: ["Invoice ID", "Outstanding", "Status"],
+                headers: ["Invoice ID", "Outstanding", "Status", "Actions"],
                 rows: invoices.body.items.map((invoice) => [
                   `<a href="/admin/invoices/${encodeURIComponent(invoice.id)}">${escapeHtml(invoice.id)}</a>`,
                   escapeHtml(formatCurrency(invoice.outstandingAmount)),
                   renderStatusPill(
                     invoice.status,
                     invoice.status === "paid" ? "success" : invoice.status === "void" ? "danger" : "warning"
-                  )
+                  ),
+                  renderTableActionLinks([
+                    { href: `/admin/invoices/${encodeURIComponent(invoice.id)}`, label: "Manage" }
+                  ])
                 ]),
                 emptyMessage: "No invoices."
               }),
@@ -13834,11 +13955,14 @@ return;
               '<section class="surface-block">',
               "<h2>Quote Pipeline</h2>",
               renderDataTable({
-                headers: ["Quote ID", "Total", "Status"],
+                headers: ["Quote ID", "Total", "Status", "Actions"],
                 rows: quotes.body.items.map((quote) => [
                   `<a href="/admin/quotes/${encodeURIComponent(quote.id)}">${escapeHtml(quote.id)}</a>`,
                   escapeHtml(formatCurrency(quote.totalAmount)),
-                  renderStatusPill(quote.status, quote.status === "accepted" ? "success" : "warning")
+                  renderStatusPill(quote.status, quote.status === "accepted" ? "success" : "warning"),
+                  renderTableActionLinks([
+                    { href: `/admin/quotes/${encodeURIComponent(quote.id)}`, label: "Manage" }
+                  ])
                 ]),
                 emptyMessage: "No quotes."
               }),
@@ -13917,10 +14041,13 @@ return;
               '<section class="surface-block">',
               "<h2>Contract Status</h2>",
               renderDataTable({
-                headers: ["Contract ID", "Status"],
+                headers: ["Contract ID", "Status", "Actions"],
                 rows: contracts.body.items.map((contract) => [
                   `<a href="/admin/contracts/${encodeURIComponent(contract.id)}">${escapeHtml(contract.id)}</a>`,
-                  renderStatusPill(contract.status, contract.status === "signed" ? "success" : "warning")
+                  renderStatusPill(contract.status, contract.status === "signed" ? "success" : "warning"),
+                  renderTableActionLinks([
+                    { href: `/admin/contracts/${encodeURIComponent(contract.id)}`, label: "Manage" }
+                  ])
                 ]),
                 emptyMessage: "No contracts."
               }),
@@ -14073,13 +14200,18 @@ return;
               '<section class="surface-block">',
               "<h2>Pet Directory</h2>",
               renderDataTable({
-                headers: ["Pet ID", "Name", "Species", "Pet Sitting Notes", "Files"],
+                headers: ["Pet ID", "Name", "Species", "Owner", "Status", "Actions"],
                 rows: pets.body.items.map((pet) => [
                   `<a href="/admin/pets/${encodeURIComponent(pet.id)}">${escapeHtml(pet.id)}</a>`,
-                  escapeHtml(pet.name),
+                  `<a href="/admin/pets/${encodeURIComponent(pet.id)}">${escapeHtml(pet.name)}</a>`,
                   escapeHtml(pet.species),
-                  escapeHtml(pet.petSittingNotes),
-                  `<a href="/admin/pets/${encodeURIComponent(pet.id)}/files">Manage files</a>`
+                  `<a href="/admin/clients/${encodeURIComponent(pet.clientId)}/profile">${escapeHtml(pet.clientId)}</a>`,
+                  renderStatusPill(pet.archived ? "Archived" : "Active", pet.archived ? "warning" : "success"),
+                  renderTableActionLinks([
+                    { href: `/admin/pets/${encodeURIComponent(pet.id)}`, label: "Manage" },
+                    { href: `/admin/pets/${encodeURIComponent(pet.id)}/files`, label: "Files" },
+                    { href: `/admin/clients/${encodeURIComponent(pet.clientId)}/profile`, label: "Owner" }
+                  ])
                 ]),
                 emptyMessage: "No pets."
               }),
@@ -14270,12 +14402,15 @@ writeHtml(response, 200, renderLayout({
               '<section class="surface-block">',
               "<h2>Package Catalog</h2>",
               renderDataTable({
-                headers: ["Package ID", "Name", "Price", "Status"],
+                headers: ["Package ID", "Name", "Price", "Status", "Actions"],
                 rows: packages.body.items.map((item) => [
                   `<a href="/admin/packages/${encodeURIComponent(item.id)}">${escapeHtml(item.id)}</a>`,
                   escapeHtml(item.name),
                   escapeHtml(formatCurrency(item.price)),
-                  renderStatusPill(item.active ? "Active" : "Inactive", item.active ? "success" : "default")
+                  renderStatusPill(item.active ? "Active" : "Inactive", item.active ? "success" : "default"),
+                  renderTableActionLinks([
+                    { href: `/admin/packages/${encodeURIComponent(item.id)}`, label: "Manage" }
+                  ])
                 ]),
                 emptyMessage: "No packages."
               }),
@@ -14350,12 +14485,15 @@ writeHtml(response, 200, renderLayout({
               '<section class="surface-block">',
               "<h2>Credit Balances</h2>",
               renderDataTable({
-                headers: ["Credit ID", "Remaining Units", "Package", "Status"],
+                headers: ["Credit ID", "Remaining Units", "Package", "Status", "Actions"],
                 rows: credits.body.items.map((credit) => [
                   `<a href="/admin/credits/${encodeURIComponent(credit.id)}">${escapeHtml(credit.id)}</a>`,
                   escapeHtml(String(credit.remainingUnits)),
                   escapeHtml(credit.packageId ?? "Unassigned"),
-                  renderStatusPill(credit.remainingUnits > 0 ? "Available" : "Used", credit.remainingUnits > 0 ? "success" : "warning")
+                  renderStatusPill(credit.remainingUnits > 0 ? "Available" : "Used", credit.remainingUnits > 0 ? "success" : "warning"),
+                  renderTableActionLinks([
+                    { href: `/admin/credits/${encodeURIComponent(credit.id)}`, label: "Manage" }
+                  ])
                 ]),
                 emptyMessage: "No credits."
               }),
