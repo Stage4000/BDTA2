@@ -628,17 +628,22 @@ function fromLegacyBookingRow(row: {
   duration_minutes: number;
   status: string | null;
   ical_token?: string | null;
+  pet_ids?: string | null;
 }): Booking {
   const startsAt = toTimestamp(row.appointment_date, row.appointment_time);
   const durationMinutes = normalizeLegacyFiniteNumber(row.duration_minutes, 60) > 0
     ? normalizeLegacyFiniteNumber(row.duration_minutes, 60)
     : 60;
   const endsAt = new Date(Date.parse(startsAt) + durationMinutes * 60_000).toISOString();
+  const petIds = (row.pet_ids ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value, index, values) => value !== "" && values.indexOf(value) === index);
 
   return {
     id: String(row.id),
     clientId: normalizeLegacyReferenceId(row.client_id, `legacy-client-${row.id}`),
-    petIds: [],
+    petIds,
     serviceId: normalizeLegacyReferenceId(row.service_type, `legacy-service-${row.id}`),
     startsAt,
     endsAt,
@@ -1906,6 +1911,7 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
     duration_minutes: number;
     status: string | null;
     ical_token?: string | null;
+    pet_ids?: string | null;
   };
 
   type BookingSelectSqlFallback = {
@@ -1922,13 +1928,22 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
     tokenlessLegacy?: boolean;
   }): string {
     const limitClause = typeof input.limit === "number" ? `LIMIT ${Math.max(1, Math.trunc(input.limit))}` : "";
-    const clientIdSelect = input.omitClientId ? "NULL AS client_id" : "client_id";
-    const icalTokenSelect = input.tokenlessLegacy ? "NULL AS ical_token" : "ical_token";
+    const clientIdSelect = input.omitClientId
+      ? "MAX(fs.client_id) AS client_id"
+      : "COALESCE(b.client_id, MAX(fs.client_id)) AS client_id";
+    const icalTokenSelect = input.tokenlessLegacy ? "NULL AS ical_token" : "b.ical_token";
+    const groupByClientId = input.omitClientId ? "" : ", b.client_id";
+    const groupByIcalToken = input.tokenlessLegacy ? "" : ", b.ical_token";
+    const orderByClause = input.legacyOrdering
+      ? "ORDER BY b.appointment_date DESC, b.appointment_time DESC, b.id DESC"
+      : "ORDER BY MAX(b.created_at) DESC, b.id DESC";
     return [
-      `SELECT id, ${clientIdSelect}, service_type, appointment_date, appointment_time, duration_minutes, status, ${icalTokenSelect}`,
-      "FROM bookings",
+      `SELECT b.id, ${clientIdSelect}, b.service_type, b.appointment_date, b.appointment_time, b.duration_minutes, b.status, ${icalTokenSelect}, GROUP_CONCAT(DISTINCT fs.pet_id ORDER BY fs.pet_id SEPARATOR ',') AS pet_ids`,
+      "FROM bookings b",
+      "LEFT JOIN form_submissions fs ON fs.booking_id = b.id AND fs.pet_id IS NOT NULL",
       input.whereClause ?? "",
-      input.legacyOrdering ? "ORDER BY appointment_date DESC, appointment_time DESC, id DESC" : "ORDER BY created_at DESC, id DESC",
+      `GROUP BY b.id, b.service_type, b.appointment_date, b.appointment_time, b.duration_minutes, b.status${groupByClientId}${groupByIcalToken}`,
+      orderByClause,
       limitClause
     ].filter((part) => part.trim() !== "").join(" ");
   }
@@ -5250,7 +5265,7 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
       return "/portal/achievements";
     },
     buildAdminCertificateBackPath(clientId) {
-      return `/client/client_achievements.php?client_id=${encodeURIComponent(clientId)}`;
+      return `/admin/clients/${encodeURIComponent(clientId)}/achievements`;
     }
   };
 

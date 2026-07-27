@@ -1884,7 +1884,7 @@ function createAchievementDependencies(state: InMemoryPlatformState): Achievemen
     ),
     buildAchievementCertificateHtml: async (achievement, options) => renderAchievementCertificateHtml(achievement, options),
     buildPortalCertificateBackPath: () => "/portal/achievements",
-    buildAdminCertificateBackPath: (clientId) => `/client/client_achievements.php?client_id=${encodeURIComponent(clientId)}`
+    buildAdminCertificateBackPath: (clientId) => `/admin/clients/${encodeURIComponent(clientId)}/achievements`
   };
 }
 

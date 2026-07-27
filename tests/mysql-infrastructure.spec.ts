@@ -315,16 +315,17 @@ it("creates public-booking dependencies against legacy-aligned MySQL tables", as
 
 it("normalizes legacy booking timestamps before listing admin bookings", async () => {
   const executor = new FakeSqlExecutor([
-    rows([{
-      id: 42,
-      client_id: 7,
-      service_type: "svc-group-class",
-      appointment_date: "2026-06-02",
-      appointment_time: "4:15 PM",
-      duration_minutes: 45,
-      status: "confirmed",
-      ical_token: null
-    }])
+ rows([{
+ id: 42,
+ client_id: 7,
+ service_type: "svc-group-class",
+ appointment_date: "2026-06-02",
+ appointment_time: "4:15 PM",
+ duration_minutes: 45,
+ status: "confirmed",
+ ical_token: null,
+ pet_ids: "pet-1,pet-2,pet-1"
+ }])
   ]);
 
   const bookings = await createMySqlApiDependencies(executor, {
@@ -335,7 +336,7 @@ it("normalizes legacy booking timestamps before listing admin bookings", async (
     {
       id: "42",
       clientId: "7",
-      petIds: [],
+ petIds: ["pet-1", "pet-2"],
       serviceId: "svc-group-class",
       startsAt: "2026-06-02T16:15:00.000Z",
       endsAt: "2026-06-02T17:00:00.000Z",
@@ -343,7 +344,8 @@ it("normalizes legacy booking timestamps before listing admin bookings", async (
       icalAccess: null
     }
   ]);
-  expect(executor.calls[0]?.sql).toContain("FROM bookings");
+ expect(executor.calls[0]?.sql).toContain("FROM bookings b");
+ expect(executor.calls[0]?.sql).toContain("LEFT JOIN form_submissions fs ON fs.booking_id = b.id AND fs.pet_id IS NOT NULL");
 });
 
 it("normalizes Date-backed legacy booking rows before listing recent bookings", async () => {
@@ -709,10 +711,10 @@ it("normalizes legacy booking statuses and zero-date transactional timestamps", 
       }
     ]);
 
-    expect(executor.calls[0]?.sql).toContain("ORDER BY created_at DESC, id DESC");
-    expect(executor.calls[1]?.sql).toContain("ORDER BY appointment_date DESC, appointment_time DESC, id DESC");
-    expect(executor.calls[2]?.sql).toContain("NULL AS client_id");
-    expect(executor.calls[2]?.sql).toContain("ORDER BY appointment_date DESC, appointment_time DESC, id DESC");
+expect(executor.calls[0]?.sql).toContain("ORDER BY MAX(b.created_at) DESC, b.id DESC");
+expect(executor.calls[1]?.sql).toContain("ORDER BY b.appointment_date DESC, b.appointment_time DESC, b.id DESC");
+expect(executor.calls[2]?.sql).toContain("MAX(fs.client_id) AS client_id");
+expect(executor.calls[2]?.sql).toContain("ORDER BY b.appointment_date DESC, b.appointment_time DESC, b.id DESC");
     expect(executor.calls[3]?.sql).toContain("i.outstanding_amount AS outstanding_amount");
     expect(executor.calls[4]?.sql).toContain("i.due_date AS due_at");
     expect(executor.calls[4]?.sql).toContain("FROM invoice_payments");
@@ -1683,7 +1685,7 @@ it("auto-enrolls MySQL workflow clients from appointment booking triggers", asyn
     expect(executor.calls[4]?.sql).toContain("COUNT(*) AS count FROM bookings WHERE appointment_date = ?");
     expect(executor.calls[5]?.sql).toContain("COUNT(*) AS count FROM invoices WHERE status = 'overdue'");
     expect(executor.calls[6]?.sql).toContain("COUNT(*) AS count FROM clients WHERE COALESCE(is_archived, 0) = 0");
-    expect(executor.calls[7]?.sql).toContain("ORDER BY created_at DESC");
+expect(executor.calls[7]?.sql).toContain("ORDER BY MAX(b.created_at) DESC, b.id DESC");
   });
 
   it("creates admin operations reads against job queue and integration callback tables", async () => {

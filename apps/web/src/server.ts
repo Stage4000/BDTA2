@@ -1874,9 +1874,76 @@ function sortByTimeDesc<T>(items: T[], getValue: (item: T) => string | null | un
 }
 
 function isBookingUpcoming(booking: Booking, referenceTime = new Date().toISOString()): boolean {
+  const bookingTime = toSortableTime(booking.startsAt);
+  const referenceValue = toSortableTime(referenceTime);
   return booking.status !== "completed"
     && booking.status !== "cancelled"
-    && toSortableTime(booking.startsAt) >= toSortableTime(referenceTime);
+    && Number.isFinite(bookingTime)
+    && Number.isFinite(referenceValue)
+    && bookingTime >= referenceValue;
+}
+
+function isBookingPast(booking: Booking, referenceTime = new Date().toISOString()): boolean {
+  const bookingTime = toSortableTime(booking.startsAt);
+  const referenceValue = toSortableTime(referenceTime);
+  return Number.isFinite(bookingTime)
+    && Number.isFinite(referenceValue)
+    && bookingTime < referenceValue;
+}
+
+function isBookingOnDate(booking: Booking, referenceDate: string): boolean {
+  const normalized = booking.startsAt?.trim() ?? "";
+  if (normalized === "") {
+    return false;
+  }
+
+  const parsed = new Date(normalized);
+  if (Number.isNaN(parsed.getTime())) {
+    return false;
+  }
+
+  return parsed.toISOString().slice(0, 10) === referenceDate;
+}
+
+function matchesAdminBookingTimeframeFilter(
+  booking: Booking,
+  timeframe: string,
+  referenceTime = new Date().toISOString()
+): boolean {
+  const normalized = timeframe.trim().toLowerCase();
+  if (normalized === "" || normalized === "all") {
+    return true;
+  }
+
+  if (normalized === "upcoming") {
+    return isBookingUpcoming(booking, referenceTime);
+  }
+
+  if (normalized === "today") {
+    return isBookingOnDate(booking, referenceTime.slice(0, 10));
+  }
+
+  if (normalized === "past") {
+    return isBookingPast(booking, referenceTime);
+  }
+
+  return true;
+}
+
+function sortAdminBookingLedger(left: Booking, right: Booking, referenceTime = new Date().toISOString()): number {
+  const leftUpcoming = isBookingUpcoming(left, referenceTime);
+  const rightUpcoming = isBookingUpcoming(right, referenceTime);
+  if (leftUpcoming !== rightUpcoming) {
+    return leftUpcoming ? -1 : 1;
+  }
+
+  const leftTime = toSortableTime(left.startsAt);
+  const rightTime = toSortableTime(right.startsAt);
+  if (leftUpcoming && rightUpcoming) {
+    return leftTime - rightTime;
+  }
+
+  return rightTime - leftTime;
 }
 
 function normalizeSearchQuery(value: string | null | undefined): string {
@@ -1891,11 +1958,31 @@ function matchesSearchQuery(query: string, ...values: Array<string | null | unde
   return values.some((value) => normalizeSearchQuery(value).includes(query));
 }
 
-function buildAdminBookingsPath(filters: { q?: string | null } = {}): string {
+function buildAdminBookingsPath(filters: { q?: string | null; clientId?: string | null; petId?: string | null; status?: string | null; timeframe?: string | null } = {}): string {
   const params = new URLSearchParams();
   const q = filters.q?.trim() ?? "";
   if (q !== "") {
     params.set("q", q);
+  }
+
+  const clientId = filters.clientId?.trim() ?? "";
+  if (clientId !== "") {
+    params.set("client_id", clientId);
+  }
+
+  const petId = filters.petId?.trim() ?? "";
+  if (petId !== "") {
+    params.set("pet_id", petId);
+  }
+
+  const status = filters.status?.trim() ?? "";
+  if (status !== "") {
+    params.set("status", status);
+  }
+
+  const timeframe = filters.timeframe?.trim() ?? "";
+  if (timeframe !== "") {
+    params.set("timeframe", timeframe);
   }
 
   const query = params.toString();
@@ -9839,6 +9926,7 @@ const adminClientContactsMatch = /^\/admin\/clients\/([^/]+)\/contacts$/.exec(ur
 const adminClientAchievementsMatch = /^\/admin\/clients\/([^/]+)\/achievements$/.exec(url.pathname);
 const adminClientAchievementDetailMatch = /^\/admin\/clients\/([^/]+)\/achievements\/([^/]+)$/.exec(url.pathname);
 const adminClientAchievementCertificateDetailMatch = /^\/admin\/clients\/([^/]+)\/achievements\/([^/]+)\/certificate$/.exec(url.pathname);
+const legacyClientAchievementsPath = url.pathname === "/client/client_achievements.php";
 const legacyClientListPath = url.pathname === "/client/clients_list.php";
 const legacyClientDetailPath = url.pathname === "/client/clients_view.php";
 const legacyClientEditPath = url.pathname === "/client/clients_edit.php";
@@ -13315,6 +13403,7 @@ const adminNav = "";
           || adminClientProfileMatch != null
           || adminClientContactsMatch != null
           || adminClientAchievementsMatch != null
+          || legacyClientAchievementsPath
           || adminClientContactDetailMatch != null
           || adminClientAchievementDetailMatch != null
           || adminClientAchievementCertificateDetailMatch != null
@@ -13543,6 +13632,11 @@ const adminNav = "";
         if (legacyClientDetailPath || legacyClientEditPath) {
           const clientId = (url.searchParams.get("id") ?? "").trim();
           return clientId === "" ? "/admin/clients" : `/admin/clients/${encodeURIComponent(clientId)}/profile`;
+        }
+
+        if (legacyClientAchievementsPath) {
+          const clientId = (url.searchParams.get("client_id") ?? "").trim();
+          return clientId === "" ? "/admin/clients" : `/admin/clients/${encodeURIComponent(clientId)}/achievements`;
         }
 
         if (legacyPetListPath || legacyPetEditPath && (url.searchParams.get("id") ?? "").trim() === "") {
@@ -13818,7 +13912,7 @@ value: latestAchievement == null
 "<h2>Client Actions</h2>",
 `<div class="form-actions"><a href="/client/form_requests_create.php?form_type=client_form&client_id=${encodeURIComponent(clientId)}">Request Client Form</a><a href="/client/form_requests_create.php?form_type=survey_form&client_id=${encodeURIComponent(clientId)}">Request Survey</a><a href="${buildAdminInvoicesPath({ clientId })}#create-invoice">Create Invoice</a><a href="${buildAdminExpensesPath({ clientId })}#create-expense">Add Expense</a><a href="/admin/clients/${encodeURIComponent(clientId)}/contacts">Manage Contacts</a><a href="/admin/clients/${encodeURIComponent(clientId)}/achievements">View Achievements</a></div>`,
 renderQuickLinksGrid([
-{ href: buildAdminBookingsPath({ q: clientId }), label: "Appointments", description: upcomingBookings.length === 0 ? "No active appointments linked right now." : `${formatCountLabel(upcomingBookings.length, "upcoming appointment")} scheduled.` },
+{ href: buildAdminBookingsPath({ clientId }), label: "Appointments", description: upcomingBookings.length === 0 ? "No active appointments linked right now." : `${formatCountLabel(upcomingBookings.length, "upcoming appointment")} scheduled.` },
 { href: `${buildAdminInvoicesPath({ clientId })}#create-invoice`, label: "Invoices", description: openInvoices.length === 0 ? "No outstanding invoices." : `${formatCurrency(outstandingBalance)} still due across ${formatCountLabel(openInvoices.length, "invoice")}.` },
 { href: "/admin/quotes", label: "Quotes", description: activeQuotes.length === 0 ? "No open quotes awaiting response." : `${formatCountLabel(activeQuotes.length, "quote")} still active.` },
 { href: "/admin/contracts", label: "Contracts", description: pendingContracts.length === 0 ? "No unsigned contracts pending." : `${formatCountLabel(pendingContracts.length, "contract")} still needs action.` },
@@ -14143,8 +14237,38 @@ return;
 
           const clientById = new Map(clients.map((client) => [client.id, client]));
           const petById = new Map(pets.map((pet) => [pet.id, pet]));
-          const appointmentTypeById = new Map(appointmentTypes.map((appointmentType) => [appointmentType.id, appointmentType]));
-          const bookingQuery = normalizeSearchQuery(url.searchParams.get("q"));
+const appointmentTypeById = new Map(appointmentTypes.map((appointmentType) => [appointmentType.id, appointmentType]));
+const bookingReferenceTime = new Date().toISOString();
+const selectedClientId = (url.searchParams.get("client_id") ?? "").trim();
+const selectedPetId = (url.searchParams.get("pet_id") ?? "").trim();
+const selectedStatus = normalizeSearchQuery(url.searchParams.get("status"));
+const selectedTimeframe = normalizeSearchQuery(url.searchParams.get("timeframe"));
+const clientOptions = [...clients]
+  .sort((left, right) => renderAdminClientDisplayName(left).localeCompare(renderAdminClientDisplayName(right)))
+  .map((client) => ({
+    id: client.id,
+    label: renderAdminClientDisplayName(client)
+  }));
+const petOptions = [...pets]
+  .sort((left, right) => left.name.localeCompare(right.name))
+  .map((pet) => ({
+    id: pet.id,
+    label: pet.name.trim() === "" ? pet.id : `${pet.name} (${pet.id})`
+  }));
+const bookingStatusOptions = [
+  { value: "", label: "All Statuses" },
+  { value: "pending", label: "Pending" },
+  { value: "confirmed", label: "Confirmed" },
+  { value: "completed", label: "Completed" },
+  { value: "cancelled", label: "Cancelled" }
+] as const;
+const bookingTimeframeOptions = [
+  { value: "", label: "All Time" },
+  { value: "upcoming", label: "Upcoming" },
+  { value: "today", label: "Today" },
+  { value: "past", label: "Past" }
+] as const;
+const bookingQuery = normalizeSearchQuery(url.searchParams.get("q"));
           const bookingRows = bookings.body.items
             .map((booking) => {
               const client = clientById.get(booking.clientId) ?? null;
@@ -14153,19 +14277,21 @@ return;
               const clientLabel = client == null ? booking.clientId : renderAdminClientDisplayName(client);
               const petLabel = linkedPets.length === 0 ? "Unassigned" : linkedPets.map((pet) => pet.name).join(", ");
               const serviceLabel = appointmentType?.name ?? booking.serviceId;
-                const startsLabel = renderLocalizedDateTime(booking.startsAt);
-                const startsSearchLabel = formatAdminDateTime(booking.startsAt);
-                return {
-                  booking,
-                  client,
-                  linkedPets,
-                  clientLabel,
-                  petLabel,
-                  serviceLabel,
-                  startsLabel,
-                  startsSearchLabel,
-                  statusLabel: booking.status
-                };
+const startsLabel = renderLocalizedDateTime(booking.startsAt);
+const startsSearchLabel = formatAdminDateTime(booking.startsAt);
+const endsSearchLabel = formatAdminDateTime(booking.endsAt);
+return {
+booking,
+client,
+linkedPets,
+clientLabel,
+petLabel,
+serviceLabel,
+startsLabel,
+startsSearchLabel,
+endsSearchLabel,
+statusLabel: booking.status
+};
               })
             .filter((item) => matchesSearchQuery(
               bookingQuery,
@@ -14175,8 +14301,31 @@ return;
               item.petLabel,
               item.serviceLabel,
               item.startsLabel,
+              item.endsSearchLabel,
               item.statusLabel
             ));
+const filteredBookingRows = bookingRows
+  .filter((item) => {
+    if (selectedClientId !== "" && item.booking.clientId !== selectedClientId) {
+      return false;
+    }
+
+    if (selectedPetId !== "" && !item.booking.petIds.includes(selectedPetId)) {
+      return false;
+    }
+
+    if (selectedStatus !== "" && item.booking.status !== selectedStatus) {
+      return false;
+    }
+
+    return matchesAdminBookingTimeframeFilter(item.booking, selectedTimeframe, bookingReferenceTime);
+  })
+  .sort((left, right) => sortAdminBookingLedger(left.booking, right.booking, bookingReferenceTime));
+const hasBookingFilters = bookingQuery !== ""
+  || selectedClientId !== ""
+  || selectedPetId !== ""
+  || selectedStatus !== ""
+  || selectedTimeframe !== "";
 
           writeHtml(response, 200, renderLayout({
             title: "Admin Bookings",
@@ -14190,13 +14339,24 @@ return;
               adminNav,
               '<section class="surface-block">',
               '<h2>Find Bookings</h2>',
-              `<form class="form-grid" method="get" action="/admin/bookings"><label>Client, pet, service, or booking ID<input type="search" name="q" value="${escapeAttribute(url.searchParams.get("q") ?? "")}" placeholder="Search by client name, pet name, appointment type, or booking ID"></label><div class="form-actions"><button type="submit">Filter Bookings</button><a href="/admin/bookings">Clear</a></div></form>`,
+              [
+                '<form class="form-grid" method="get" action="/admin/bookings">',
+                '<div class="form-grid form-grid--two">',
+                `<label>Client<select name="client_id"><option value="">All Clients</option>${clientOptions.map((client) => `<option value="${escapeAttribute(client.id)}"${selectedClientId === client.id ? " selected" : ""}>${escapeHtml(client.label)}</option>`).join("")}</select></label>`,
+                `<label>Pet<select name="pet_id"><option value="">All Pets</option>${petOptions.map((pet) => `<option value="${escapeAttribute(pet.id)}"${selectedPetId === pet.id ? " selected" : ""}>${escapeHtml(pet.label)}</option>`).join("")}</select></label>`,
+                `<label>Status<select name="status">${bookingStatusOptions.map((option) => `<option value="${escapeAttribute(option.value)}"${selectedStatus === option.value ? " selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}</select></label>`,
+                `<label>Timeframe<select name="timeframe">${bookingTimeframeOptions.map((option) => `<option value="${escapeAttribute(option.value)}"${selectedTimeframe === option.value ? " selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}</select></label>`,
+                "</div>",
+                `<label>Search<input type="search" name="q" value="${escapeAttribute(url.searchParams.get("q") ?? "")}" placeholder="Search by client name, pet name, appointment type, or booking ID"></label>`,
+                '<div class="form-actions"><button type="submit">Apply Filters</button><a href="/admin/bookings">Clear</a></div>',
+                "</form>"
+              ].join(""),
               '</section>',
               '<section class="surface-block">',
               '<h2>Booking Ledger</h2>',
               renderDataTable({
-                headers: ["Booking", "Client", "Pets", "Service", "Starts", "Status", "Actions"],
-                rows: bookingRows.map((item) => [
+                headers: ["Booking", "Client", "Pets", "Service", "Starts", "Ends", "Status", "Actions"],
+                rows: filteredBookingRows.map((item) => [
                   `<a href="/admin/bookings/${encodeURIComponent(item.booking.id)}">${escapeHtml(item.booking.id)}</a>`,
                   item.client == null
                     ? escapeHtml(item.clientLabel)
@@ -14206,13 +14366,14 @@ return;
                     : item.linkedPets.map((pet) => `<a href="/admin/pets/${encodeURIComponent(pet.id)}">${escapeHtml(pet.name)}</a>`).join(", "),
                   escapeHtml(item.serviceLabel),
                   item.startsSearchLabel,
+                  item.endsSearchLabel,
                   renderBookingStatusPill(item.booking.status),
                   renderTableActionLinks([
                     { href: `/admin/bookings/${encodeURIComponent(item.booking.id)}`, label: "Manage" },
-                    { href: buildAdminBookingsPath({ q: item.booking.clientId }), label: "Client Bookings" }
+                    { href: buildAdminBookingsPath({ clientId: item.booking.clientId }), label: "Client Bookings" }
                   ])
                 ]),
-                emptyMessage: bookingQuery === "" ? "No bookings." : "No bookings match this filter."
+                emptyMessage: hasBookingFilters ? "No bookings match these filters." : "No bookings."
               }),
               '</section>',
               '</article>'
@@ -14242,18 +14403,25 @@ return;
           const petsValue = linkedPets.length === 0
             ? "No pets linked"
             : linkedPets.map((pet) => `<a href="/admin/pets/${encodeURIComponent(pet.id)}">${escapeHtml(pet.name)}</a>`).join(", ");
-          const serviceValue = appointmentType == null
-            ? escapeHtml(booking.body.item.serviceId)
-            : `<a href="/admin/appointment-types/${encodeURIComponent(appointmentType.id)}">${escapeHtml(appointmentType.name)}</a>`;
+const serviceValue = appointmentType == null
+? escapeHtml(booking.body.item.serviceId)
+: `<a href="/admin/appointment-types/${encodeURIComponent(appointmentType.id)}">${escapeHtml(appointmentType.name)}</a>`;
+const durationMinutes = Math.round((Date.parse(booking.body.item.endsAt) - Date.parse(booking.body.item.startsAt)) / 60_000);
+const durationValue = Number.isFinite(durationMinutes) && durationMinutes > 0 ? `${durationMinutes} min` : "Unavailable";
+const timingValue = isBookingUpcoming(booking.body.item)
+? "Upcoming"
+: isBookingPast(booking.body.item)
+? "Past"
+: "Unscheduled";
 
-          writeHtml(response, 200, renderLayout({
+writeHtml(response, 200, renderLayout({
             title: "Admin Booking Detail",
             body: [
               '<article class="content-stack">',
               renderSectionIntro({
                 eyebrow: "Bookings",
                 title: booking.body.item.id,
-                description: "Review the schedule, service assignment, client, and calendar-access details for this booking."
+                description: "Review the schedule, service assignment, client, pets, and timing details for this booking."
               }),
               adminNav,
               '<section class="surface-block">',
@@ -14264,6 +14432,8 @@ return;
                 { label: "Service", value: serviceValue },
                 { label: "Starts", value: renderLocalizedDateTime(booking.body.item.startsAt) },
                 { label: "Ends", value: renderLocalizedDateTime(booking.body.item.endsAt) },
+                { label: "Duration", value: escapeHtml(durationValue) },
+                { label: "Timing", value: escapeHtml(timingValue) },
                 { label: "Status", value: renderBookingStatusPill(booking.body.item.status) },
                 { label: "Pets", value: petsValue },
                 { label: "Calendar Access Token", value: escapeHtml(booking.body.item.icalAccess?.token ?? "Unavailable") }
@@ -14271,7 +14441,7 @@ return;
               '</section>',
               '<section class="surface-block">',
               '<h2>Linked Records</h2>',
-              `<div class="form-actions"><a href="/client/form_requests_create.php?form_type=follow_up_note&booking_id=${encodeURIComponent(booking.body.item.id)}">Create Follow-up Note</a><a href="${buildAdminBookingsPath({ q: booking.body.item.clientId })}">View Client Bookings</a><a href="/admin/bookings">Back to Bookings</a></div>`,
+              `<div class="form-actions"><a href="/client/form_requests_create.php?form_type=follow_up_note&booking_id=${encodeURIComponent(booking.body.item.id)}">Create Follow-up Note</a><a href="${buildAdminBookingsPath({ clientId: booking.body.item.clientId })}">View Client Bookings</a><a href="/admin/bookings">Back to Bookings</a></div>`,
               '</section>',
               '</article>'
             ].join("")
@@ -14981,7 +15151,7 @@ renderLongTextBlock(adminPetItem.petSittingNotes, "No care notes have been recor
 renderQuickLinksGrid([
 { href: `/admin/pets/${encodeURIComponent(adminPetItem.id)}/files`, label: "Files", description: files.length === 0 ? "Upload intake, vaccine, or image records." : `${formatCountLabel(files.length, "stored file")} linked to this pet.` },
 { href: `/admin/clients/${encodeURIComponent(adminPetItem.clientId)}/profile`, label: "Owner", description: ownerProfile == null ? "Open the linked client profile." : ownerProfile.name },
-{ href: buildAdminBookingsPath({ q: adminPetItem.id }), label: "Appointments", description: upcomingBookings.length === 0 ? "No upcoming bookings linked to this pet." : `${formatCountLabel(upcomingBookings.length, "upcoming visit")} linked here.` },
+{ href: buildAdminBookingsPath({ petId: adminPetItem.id }), label: "Appointments", description: upcomingBookings.length === 0 ? "No upcoming bookings linked to this pet." : `${formatCountLabel(upcomingBookings.length, "upcoming visit")} linked here.` },
 { href: "/admin/forms", label: "Forms", description: petForms.length === 0 ? "No pet-specific forms submitted yet." : `${formatCountLabel(petForms.length, "linked form")} visible from this profile.` },
 { href: `/admin/clients/${encodeURIComponent(adminPetItem.clientId)}/achievements`, label: "Achievements", description: petAchievements.length === 0 ? "No awards linked to this pet yet." : `${formatCountLabel(petAchievements.length, "achievement")} recorded for this pet.` },
 { href: `/admin/clients/${encodeURIComponent(adminPetItem.clientId)}/contacts`, label: "Contacts", description: contacts.length === 0 ? "No household contacts available." : `${formatCountLabel(contacts.length, "contact")} available for follow-up.` }

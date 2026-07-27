@@ -3422,13 +3422,19 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
         },
         redirect: "manual"
       });
-      const legacyClientEdit = await fetch(`${baseUrl}/client/clients_edit.php?id=client-portal-1`, {
-        headers: {
-          cookie: cookie ?? ""
-        },
-        redirect: "manual"
-      });
-      const legacyBookingsList = await fetch(`${baseUrl}/client/bookings_list.php`, {
+ const legacyClientEdit = await fetch(`${baseUrl}/client/clients_edit.php?id=client-portal-1`, {
+ headers: {
+ cookie: cookie ?? ""
+ },
+ redirect: "manual"
+ });
+ const legacyClientAchievements = await fetch(`${baseUrl}/client/client_achievements.php?client_id=client-portal-1`, {
+ headers: {
+ cookie: cookie ?? ""
+ },
+ redirect: "manual"
+ });
+ const legacyBookingsList = await fetch(`${baseUrl}/client/bookings_list.php`, {
         headers: {
           cookie: cookie ?? ""
         },
@@ -3479,10 +3485,11 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
       expect(quotes.status).toBe(200);
       expect(contracts.status).toBe(200);
       expect(forms.status).toBe(200);
-      expect(legacyClientsList.status).toBe(302);
-      expect(legacyClientView.status).toBe(302);
-      expect(legacyClientEdit.status).toBe(302);
-      expect(legacyBookingsList.status).toBe(302);
+ expect(legacyClientsList.status).toBe(302);
+ expect(legacyClientView.status).toBe(302);
+ expect(legacyClientEdit.status).toBe(302);
+ expect(legacyClientAchievements.status).toBe(302);
+ expect(legacyBookingsList.status).toBe(302);
       expect(legacyExpenseView.status).toBe(302);
       expect(legacyInvoiceView.status).toBe(302);
       expect(legacyQuotesList.status).toBe(302);
@@ -3527,6 +3534,7 @@ expect(clientsHtml).toContain("<table");
 expect(legacyClientsList.headers.get("location")).toBe("/admin/clients");
 expect(legacyClientView.headers.get("location")).toBe("/admin/clients/client-portal-1/profile");
 expect(legacyClientEdit.headers.get("location")).toBe("/admin/clients/client-portal-1/profile");
+expect(legacyClientAchievements.headers.get("location")).toBe("/admin/clients/client-portal-1/achievements");
 expect(bookingsHtml).toContain("booking-1");
 expect(bookingsHtml).toContain("<h2>Booking Ledger</h2>");
 expect(bookingsHtml).toContain('<div class="data-table">');
@@ -3940,11 +3948,12 @@ expect(legacyContractView.headers.get("location")).toBe("/admin/contracts/contra
       expect(adminClientProfileHtml).toContain("Canine Good Citizen");
     expect(adminClientProfileHtml).toContain("<h2>Edit Client</h2>");
     expect(adminClientProfileHtml).toContain('<form class="form-grid" method="post" action="/admin/clients/client-portal-1/profile">');
-    expect(adminClientProfileHtml).toContain('/client/form_requests_create.php?form_type=client_form&client_id=client-portal-1');
-    expect(adminClientProfileHtml).toContain('/client/form_requests_create.php?form_type=survey_form&client_id=client-portal-1');
-    expect(adminClientProfileHtml).toContain('/admin/invoices?client_id=client-portal-1#create-invoice');
-    expect(adminClientProfileHtml).toContain('/admin/expenses?client_id=client-portal-1#create-expense');
-    expect(adminClientProfileHtml).toContain('/admin/clients/client-portal-1/achievements');
+ expect(adminClientProfileHtml).toContain('/client/form_requests_create.php?form_type=client_form&client_id=client-portal-1');
+ expect(adminClientProfileHtml).toContain('/client/form_requests_create.php?form_type=survey_form&client_id=client-portal-1');
+ expect(adminClientProfileHtml).toContain('/admin/bookings?client_id=client-portal-1');
+ expect(adminClientProfileHtml).toContain('/admin/invoices?client_id=client-portal-1#create-invoice');
+ expect(adminClientProfileHtml).toContain('/admin/expenses?client_id=client-portal-1#create-expense');
+ expect(adminClientProfileHtml).toContain('/admin/clients/client-portal-1/achievements');
     expect(adminClientContactsHtml).toContain("Primary Contact");
       expect(adminClientContactsHtml).toContain("<h2>Contact Directory</h2>");
       expect(adminClientContactDetailHtml).toContain("Primary Contact");
@@ -4217,12 +4226,21 @@ expect(legacyContractView.headers.get("location")).toBe("/admin/contracts/contra
       const formsHtml = await forms.text();
       const formDetailHtml = await formDetail.text();
 
-    expect(bookingsHtml).toContain('href="/admin/bookings/booking-1"');
-    expect(bookingsHtml).toContain("client-portal-1");
-    expect(bookingsHtml).toContain("Search by client name, pet name, appointment type, or booking ID");
-    expect(bookingDetailHtml).toContain("Booking Details");
-    expect(bookingDetailHtml).toContain("client-portal-1");
-    expect(bookingDetailHtml).toContain('/client/form_requests_create.php?form_type=follow_up_note&booking_id=booking-1');
+ expect(bookingsHtml).toContain('href="/admin/bookings/booking-1"');
+ expect(bookingsHtml).toContain("client-portal-1");
+ expect(bookingsHtml).toContain('name="client_id"');
+ expect(bookingsHtml).toContain('name="pet_id"');
+ expect(bookingsHtml).toContain('name="status"');
+ expect(bookingsHtml).toContain('name="timeframe"');
+ expect(bookingsHtml).toContain("Apply Filters");
+ expect(bookingsHtml).toContain('/admin/bookings?client_id=client-portal-1');
+ expect(bookingsHtml).toContain("Search by client name, pet name, appointment type, or booking ID");
+ expect(bookingDetailHtml).toContain("Booking Details");
+ expect(bookingDetailHtml).toContain("client-portal-1");
+ expect(bookingDetailHtml).toContain("Duration");
+ expect(bookingDetailHtml).toContain("Timing");
+ expect(bookingDetailHtml).toContain('/admin/bookings?client_id=client-portal-1');
+ expect(bookingDetailHtml).toContain('/client/form_requests_create.php?form_type=follow_up_note&booking_id=booking-1');
     expect(expensesHtml).toContain('href="/admin/expenses/expense-1"');
     expect(expensesHtml).toContain("Add Expense");
     expect(expensesHtml).toContain("Mileage reimbursement");
@@ -4244,10 +4262,11 @@ expect(legacyContractView.headers.get("location")).toBe("/admin/contracts/contra
       expect(petsHtml).toContain('href="/admin/pets/pet-1"');
       expect(petDetailHtml).toContain("Pet Details");
       expect(petDetailHtml).toContain("Care Notes");
-      expect(petDetailHtml).toContain("Stored Files");
-    expect(petDetailHtml).toContain("Owner Profile");
-    expect(petDetailHtml).toContain("Buddy");
-    expect(petDetailHtml).toContain('/client/form_requests_create.php?form_type=pet_form&pet_id=pet-1');
+ expect(petDetailHtml).toContain("Stored Files");
+ expect(petDetailHtml).toContain("Owner Profile");
+ expect(petDetailHtml).toContain("Buddy");
+ expect(petDetailHtml).toContain('/admin/bookings?pet_id=pet-1');
+ expect(petDetailHtml).toContain('/client/form_requests_create.php?form_type=pet_form&pet_id=pet-1');
     expect(packagesHtml).toContain('href="/admin/packages/package-1"');
     expect(packagesHtml).toContain("Included Credits");
     expect(packageDetailHtml).toContain("Package Details");
