@@ -93,6 +93,21 @@ export type AdminResourceReadDependencies = {
   findAdminClientById(clientId: string): Promise<Client | null>;
   listAdminPets(): Promise<Pet[]>;
   findAdminPetById(petId: string): Promise<Pet | null>;
+  createAdminPet(input: {
+    clientId: string;
+    name: string;
+    species: string;
+    petSittingNotes: string;
+    archived: boolean;
+  }): Promise<Pet>;
+  updateAdminPet(petId: string, input: {
+    clientId: string;
+    name: string;
+    species: string;
+    petSittingNotes: string;
+    archived: boolean;
+  }): Promise<Pet | null>;
+  deleteAdminPet(petId: string): Promise<boolean>;
   listAdminPetFiles(petId: string): Promise<PetFile[]>;
   findAdminPetFileById(petId: string, fileId: string): Promise<PetFile | null>;
   loadAdminPetFileContent(
@@ -126,6 +141,21 @@ export type AdminResourceReadDependencies = {
   }): Promise<Invoice>;
   listAdminQuotes(): Promise<Quote[]>;
   findAdminQuoteById(quoteId: string): Promise<Quote | null>;
+  createAdminQuote(input: {
+    clientId: string;
+    status: Quote["status"];
+    title: string | null;
+    description: string;
+    expiresAt: string | null;
+    items: Array<{
+      description: string;
+      quantity: number;
+      unitPrice: number;
+      amount: number;
+      itemType?: string | null;
+      referenceId?: string | null;
+    }>;
+  }): Promise<Quote>;
   listAdminContracts(): Promise<Contract[]>;
   findAdminContractById(contractId: string): Promise<Contract | null>;
   listAdminForms(): Promise<FormSubmission[]>;

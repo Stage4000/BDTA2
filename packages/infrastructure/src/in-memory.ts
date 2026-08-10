@@ -2310,6 +2310,49 @@ function createAdminResourceReadDependencies(state: InMemoryPlatformState): Admi
     },
     listAdminPets: async () => state.pets,
     findAdminPetById: async (petId) => state.pets.find((pet) => pet.id === petId) ?? null,
+    createAdminPet: async (input) => {
+      const item: Pet = {
+        id: `pet-${state.pets.length + 1}`,
+        clientId: input.clientId,
+        name: input.name,
+        species: input.species,
+        petSittingNotes: input.petSittingNotes,
+        archived: input.archived
+      };
+      state.pets.unshift(item);
+      return item;
+    },
+    updateAdminPet: async (petId, input) => {
+      const current = state.pets.find((pet) => pet.id === petId) ?? null;
+      if (current == null) {
+        return null;
+      }
+
+      const item: Pet = {
+        ...current,
+        clientId: input.clientId,
+        name: input.name,
+        species: input.species,
+        petSittingNotes: input.petSittingNotes,
+        archived: input.archived
+      };
+      state.pets = state.pets.map((pet) => pet.id === petId ? item : pet);
+      return item;
+    },
+    deleteAdminPet: async (petId) => {
+      const matchingFiles = state.petFiles.filter((file) => file.petId === petId);
+      const nextPets = state.pets.filter((pet) => pet.id !== petId);
+      if (nextPets.length === state.pets.length) {
+        return false;
+      }
+
+      state.pets = nextPets;
+      state.petFiles = state.petFiles.filter((file) => file.petId !== petId);
+      for (const file of matchingFiles) {
+        delete state.petFileContents[file.id];
+      }
+      return true;
+    },
     listAdminPetFiles: async (petId) => state.petFiles.filter((file) => file.petId === petId),
     findAdminPetFileById: async (petId, fileId) => state.petFiles.find((file) => file.petId === petId && file.id === fileId) ?? null,
     loadAdminPetFileContent: async (petId, fileId, download) => {
@@ -2380,6 +2423,40 @@ function createAdminResourceReadDependencies(state: InMemoryPlatformState): Admi
     },
     listAdminQuotes: async () => state.quotes,
     findAdminQuoteById: async (quoteId) => state.quotes.find((quote) => quote.id === quoteId) ?? null,
+    createAdminQuote: async (input) => {
+      const expiresAt = input.expiresAt == null || input.expiresAt.trim() === ""
+        ? null
+        : new Date(input.expiresAt).toISOString();
+      const now = state.now();
+      const item: Quote = {
+        id: `quote-${state.quotes.length + 1}`,
+        clientId: input.clientId,
+        status: input.status,
+        totalAmount: input.items.reduce((total, lineItem) => total + lineItem.amount, 0),
+        quoteNumber: `QT-${String(state.quotes.length + 1).padStart(4, "0")}`,
+        title: input.title ?? undefined,
+        description: input.description,
+        expiresAt,
+        acceptedAt: input.status === "accepted" ? now : undefined,
+        declinedAt: input.status === "declined" ? now : undefined,
+        items: input.items.map((lineItem) => ({
+          description: lineItem.description,
+          quantity: lineItem.quantity,
+          unitPrice: lineItem.unitPrice,
+          amount: lineItem.amount,
+          itemType: lineItem.itemType ?? undefined,
+          referenceId: lineItem.referenceId ?? null
+        })),
+        publicAccess: {
+          token: `quote-access-token-${String(state.quotes.length + 1).padStart(4, "0")}`,
+          issuedAt: now,
+          expiresAt,
+          legacySourceId: null
+        }
+      };
+      state.quotes.unshift(item);
+      return item;
+    },
     listAdminContracts: async () => state.contracts,
     findAdminContractById: async (contractId) => state.contracts.find((contract) => contract.id === contractId) ?? null,
     listAdminForms: async () => state.formSubmissions

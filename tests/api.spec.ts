@@ -853,6 +853,23 @@ function createAdminResourceReadDependencies(
       petSittingNotes: "Use the side gate and towel paws before re-entry.",
       archived: false
     } : null,
+    createAdminPet: async (input) => ({
+      id: "pet-created-1",
+      clientId: input.clientId,
+      name: input.name,
+      species: input.species,
+      petSittingNotes: input.petSittingNotes,
+      archived: input.archived
+    }),
+    updateAdminPet: async (petId, input) => ({
+      id: petId,
+      clientId: input.clientId,
+      name: input.name,
+      species: input.species,
+      petSittingNotes: input.petSittingNotes,
+      archived: input.archived
+    }),
+    deleteAdminPet: async (petId) => petId === "pet-1",
     listAdminPetFiles: async (petId) => petId === "pet-1" ? [{
       id: "pet-file-1",
       petId: "pet-1",
@@ -1002,6 +1019,24 @@ function createAdminResourceReadDependencies(
       totalAmount: 450,
       publicAccess: null
     } : null,
+    createAdminQuote: async (input) => ({
+      id: "quote-created-1",
+      clientId: input.clientId,
+      status: input.status,
+      totalAmount: input.items.reduce((total, item) => total + item.amount, 0),
+      title: input.title ?? undefined,
+      description: input.description,
+      expiresAt: input.expiresAt ?? null,
+      items: input.items.map((item) => ({
+        description: item.description,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        amount: item.amount,
+        itemType: item.itemType ?? undefined,
+        referenceId: item.referenceId ?? null
+      })),
+      publicAccess: null
+    }),
     listAdminContracts: async () => [{
       id: "contract-1",
       clientId: "client-1",

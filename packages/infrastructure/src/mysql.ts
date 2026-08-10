@@ -2049,15 +2049,15 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
     ].filter((part) => part.trim() !== "").join(" ");
   }
 
-  function buildQuotesSelectSql(input: { limit?: number; whereClause?: string; legacy?: boolean; tokenlessLegacy?: boolean; }): string {
-    const limitClause = typeof input.limit === "number" ? `LIMIT ${Math.max(1, Math.trunc(input.limit))}` : "";
-    return [
-      `SELECT q.id, q.client_id, q.status, ${input.legacy ? "q.amount" : "q.total_amount"} AS total_amount, ${input.tokenlessLegacy ? "NULL" : "q.access_token"} AS access_token`,
-      "FROM quotes q",
-      input.whereClause ?? "",
-      "ORDER BY q.id DESC",
-      limitClause
-    ].filter((part) => part.trim() !== "").join(" ");
+function buildQuotesSelectSql(input: { limit?: number; whereClause?: string; legacy?: boolean; tokenlessLegacy?: boolean; }): string {
+  const limitClause = typeof input.limit === "number" ? `LIMIT ${Math.max(1, Math.trunc(input.limit))}` : "";
+  return [
+    `SELECT q.id, q.client_id, q.status, ${input.legacy ? "q.amount" : "q.total_amount"} AS total_amount, ${input.tokenlessLegacy ? "NULL" : "q.access_token"} AS access_token, ${input.legacy ? "NULL" : "q.quote_number"} AS quote_number, ${input.legacy ? "NULL" : "q.title"} AS title, ${input.legacy ? "NULL" : "q.description"} AS description, ${input.legacy ? "NULL" : "q.expiration_date"} AS expiration_date, ${input.legacy ? "NULL" : "q.accepted_at"} AS accepted_at, ${input.legacy ? "NULL" : "q.declined_at"} AS declined_at`,
+    "FROM quotes q",
+    input.whereClause ?? "",
+    "ORDER BY q.id DESC",
+    limitClause
+  ].filter((part) => part.trim() !== "").join(" ");
   }
 
   async function loadSettingsByKey(keys: string[]): Promise<Record<string, string>> {
@@ -5853,6 +5853,79 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
       const row = rows[0];
       return row == null ? null : toPetRecord(row);
     },
+    async createAdminPet(input) {
+      const [, result] = await executor.execute(
+        [
+          "INSERT INTO pets (client_id, name, species, pet_sitting_notes, is_active)",
+          "VALUES (?, ?, ?, ?, ?)"
+        ].join(" "),
+        [
+          input.clientId,
+          input.name,
+          input.species,
+          input.petSittingNotes,
+          input.archived ? 0 : 1
+        ]
+      );
+
+      return (await adminResources.findAdminPetById(String(result.insertId ?? 0))) ?? {
+        id: String(result.insertId ?? 0),
+        clientId: input.clientId,
+        name: input.name,
+        species: input.species,
+        petSittingNotes: input.petSittingNotes,
+        archived: input.archived
+      };
+    },
+    async updateAdminPet(petId, input) {
+      const [, result] = await executor.execute(
+        [
+          "UPDATE pets",
+          "SET client_id = ?, name = ?, species = ?, pet_sitting_notes = ?, is_active = ?",
+          "WHERE id = ?",
+          "LIMIT 1"
+        ].join(" "),
+        [
+          input.clientId,
+          input.name,
+          input.species,
+          input.petSittingNotes,
+          input.archived ? 0 : 1,
+          petId
+        ]
+      );
+
+      if (Number(result.affectedRows ?? 0) === 0) {
+        return null;
+      }
+
+      return (await adminResources.findAdminPetById(petId)) ?? {
+        id: petId,
+        clientId: input.clientId,
+        name: input.name,
+        species: input.species,
+        petSittingNotes: input.petSittingNotes,
+        archived: input.archived
+      };
+    },
+    async deleteAdminPet(petId) {
+      const [fileRows] = await executor.execute<Array<{ id: number; file_name: string }>>(
+        [
+          "SELECT id, file_name",
+          "FROM pet_files",
+          "WHERE pet_id = ?"
+        ].join(" "),
+        [petId]
+      );
+
+      for (const row of fileRows) {
+        await petFileContentDeleter(petId, row.file_name);
+      }
+
+      await executor.execute("DELETE FROM pet_files WHERE pet_id = ?", [petId]);
+      const [, result] = await executor.execute("DELETE FROM pets WHERE id = ? LIMIT 1", [petId]);
+      return Number(result.affectedRows ?? 0) > 0;
+    },
     async listAdminPetFiles(petId) {
       const [rows] = await executor.execute<Array<{
         id: number;
@@ -6205,6 +6278,12 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         status: string | null;
         total_amount: number;
         access_token: string | null;
+        quote_number: string | null;
+        title: string | null;
+        description: string | null;
+        expiration_date: string | Date | null;
+        accepted_at: string | Date | null;
+        declined_at: string | Date | null;
       }>;
       try {
         [rows] = await executor.execute<Array<{
@@ -6213,6 +6292,12 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
           status: string | null;
           total_amount: number;
           access_token: string | null;
+          quote_number: string | null;
+          title: string | null;
+          description: string | null;
+          expiration_date: string | Date | null;
+          accepted_at: string | Date | null;
+          declined_at: string | Date | null;
         }>>(buildQuotesSelectSql({ limit: 50 }));
       } catch (error) {
         if (!isMissingColumnError(error)) {
@@ -6225,20 +6310,32 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
             status: string | null;
             total_amount: number;
             access_token: string | null;
+            quote_number: string | null;
+            title: string | null;
+            description: string | null;
+            expiration_date: string | Date | null;
+            accepted_at: string | Date | null;
+            declined_at: string | Date | null;
           }>>(buildQuotesSelectSql({ limit: 50, legacy: true }));
         } catch (legacyError) {
           if (!isMissingColumnError(legacyError)) {
             throw legacyError;
           }
-          [rows] = await executor.execute<Array<{
-            id: number;
-            client_id: number | null;
-            status: string | null;
-            total_amount: number;
-            access_token: string | null;
-          }>>(buildQuotesSelectSql({ limit: 50, legacy: true, tokenlessLegacy: true }));
+            [rows] = await executor.execute<Array<{
+              id: number;
+              client_id: number | null;
+              status: string | null;
+              total_amount: number;
+              access_token: string | null;
+              quote_number: string | null;
+              title: string | null;
+              description: string | null;
+              expiration_date: string | Date | null;
+              accepted_at: string | Date | null;
+              declined_at: string | Date | null;
+            }>>(buildQuotesSelectSql({ limit: 50, legacy: true, tokenlessLegacy: true }));
+          }
         }
-      }
 
       return rows.map((row) => toQuoteRecord(row));
     },
@@ -6249,6 +6346,12 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
         status: string | null;
         total_amount: number;
         access_token: string | null;
+        quote_number: string | null;
+        title: string | null;
+        description: string | null;
+        expiration_date: string | Date | null;
+        accepted_at: string | Date | null;
+        declined_at: string | Date | null;
       }>;
       try {
         [rows] = await executor.execute<Array<{
@@ -6257,6 +6360,12 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
           status: string | null;
           total_amount: number;
           access_token: string | null;
+          quote_number: string | null;
+          title: string | null;
+          description: string | null;
+          expiration_date: string | Date | null;
+          accepted_at: string | Date | null;
+          declined_at: string | Date | null;
         }>>(buildQuotesSelectSql({ whereClause: "WHERE q.id = ?", limit: 1 }), [quoteId]);
       } catch (error) {
         if (!isMissingColumnError(error)) {
@@ -6269,23 +6378,158 @@ export function createMySqlApiDependencies(executor: SqlExecutor, options: MySql
             status: string | null;
             total_amount: number;
             access_token: string | null;
+            quote_number: string | null;
+            title: string | null;
+            description: string | null;
+            expiration_date: string | Date | null;
+            accepted_at: string | Date | null;
+            declined_at: string | Date | null;
           }>>(buildQuotesSelectSql({ whereClause: "WHERE q.id = ?", limit: 1, legacy: true }), [quoteId]);
         } catch (legacyError) {
           if (!isMissingColumnError(legacyError)) {
             throw legacyError;
           }
-          [rows] = await executor.execute<Array<{
-            id: number;
-            client_id: number | null;
-            status: string | null;
-            total_amount: number;
-            access_token: string | null;
-          }>>(buildQuotesSelectSql({ whereClause: "WHERE q.id = ?", limit: 1, legacy: true, tokenlessLegacy: true }), [quoteId]);
+            [rows] = await executor.execute<Array<{
+              id: number;
+              client_id: number | null;
+              status: string | null;
+              total_amount: number;
+              access_token: string | null;
+              quote_number: string | null;
+              title: string | null;
+              description: string | null;
+              expiration_date: string | Date | null;
+              accepted_at: string | Date | null;
+              declined_at: string | Date | null;
+            }>>(buildQuotesSelectSql({ whereClause: "WHERE q.id = ?", limit: 1, legacy: true, tokenlessLegacy: true }), [quoteId]);
+          }
+        }
+
+      const row = rows[0];
+      return row == null ? null : toQuoteRecord({
+        ...row,
+        items: await loadPublicQuoteItems(String(row.id))
+      });
+    },
+    async createAdminQuote(input) {
+      const normalizedItems = input.items.map((item) => {
+        const quantity = Number(item.quantity);
+        const unitPrice = Number(item.unitPrice);
+        const amount = Number.isFinite(item.amount) && item.amount > 0 ? Number(item.amount) : quantity * unitPrice;
+        return {
+          description: item.description,
+          quantity,
+          unitPrice,
+          amount,
+          itemType: item.itemType?.trim() === "" ? null : item.itemType ?? null,
+          referenceId: item.referenceId?.trim() === "" ? null : item.referenceId ?? null
+        };
+      });
+      const totalAmount = normalizedItems.reduce((total, item) => total + item.amount, 0);
+      const accessToken = randomUUID().replace(/-/g, "");
+      const normalizedTitle = input.title?.trim() === "" ? null : input.title ?? null;
+      const normalizedDescription = input.description;
+      const normalizedExpiresAt = normalizeLegacyDateValue(input.expiresAt);
+
+      let result: { insertId?: number | string | bigint | null };
+      try {
+        [, result] = await executor.execute(
+          [
+            "INSERT INTO quotes (",
+            "client_id, status, total_amount, access_token, quote_number, title, description, expiration_date, accepted_at, declined_at",
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)"
+          ].join(" "),
+          [
+            input.clientId,
+            input.status,
+            totalAmount,
+            accessToken,
+            `QT-${String(Date.now()).slice(-8)}`,
+            normalizedTitle,
+            normalizedDescription,
+            normalizedExpiresAt
+          ]
+        );
+      } catch (error) {
+        if (!isMissingColumnError(error)) {
+          throw error;
+        }
+
+        [, result] = await executor.execute(
+          [
+            "INSERT INTO quotes (client_id, status, amount, access_token)",
+            "VALUES (?, ?, ?, ?)"
+          ].join(" "),
+          [
+            input.clientId,
+            input.status,
+            totalAmount,
+            accessToken
+          ]
+        );
+      }
+
+      const quoteId = String(result.insertId ?? 0);
+      for (const item of normalizedItems) {
+        try {
+          await executor.execute(
+            [
+              "INSERT INTO quote_items (",
+              "quote_id, description, quantity, unit_price, amount, item_type, reference_id",
+              ") VALUES (?, ?, ?, ?, ?, ?, ?)"
+            ].join(" "),
+            [
+              quoteId,
+              item.description,
+              item.quantity,
+              item.unitPrice,
+              item.amount,
+              item.itemType,
+              item.referenceId
+            ]
+          );
+        } catch (error) {
+          if (!isMissingColumnError(error)) {
+            throw error;
+          }
+
+          await executor.execute(
+            [
+              "INSERT INTO quote_items (quote_id, description, quantity, unit_price, amount)",
+              "VALUES (?, ?, ?, ?, ?)"
+            ].join(" "),
+            [
+              quoteId,
+              item.description,
+              item.quantity,
+              item.unitPrice,
+              item.amount
+            ]
+          );
         }
       }
 
-    const row = rows[0];
-    return row == null ? null : toQuoteRecord(row);
+      return (await adminResources.findAdminQuoteById(quoteId)) ?? toQuoteRecord({
+        id: Number.parseInt(quoteId, 10) || 0,
+        client_id: Number.parseInt(input.clientId, 10) || null,
+        status: input.status,
+        total_amount: totalAmount,
+        access_token: accessToken,
+        quote_number: null,
+        title: normalizedTitle,
+        description: normalizedDescription,
+        expiration_date: normalizedExpiresAt,
+        accepted_at: null,
+        declined_at: null,
+        items: normalizedItems.map((item) => ({
+          description: item.description,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+          amount: item.amount,
+          itemType: item.itemType ?? undefined,
+          referenceId: item.referenceId
+        }))
+      });
     },
     async listAdminContracts() {
       const [rows] = await executor.execute<Array<{

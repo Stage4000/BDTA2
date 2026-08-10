@@ -2011,6 +2011,28 @@ function buildAdminInvoicesPath(filters: { clientId?: string | null } = {}): str
   return query === "" ? "/admin/invoices" : `/admin/invoices?${query}`;
 }
 
+function buildAdminQuotesPath(filters: { clientId?: string | null } = {}): string {
+  const params = new URLSearchParams();
+  const clientId = filters.clientId?.trim() ?? "";
+  if (clientId !== "") {
+    params.set("client_id", clientId);
+  }
+
+  const query = params.toString();
+  return query === "" ? "/admin/quotes" : `/admin/quotes?${query}`;
+}
+
+function buildAdminPetsPath(filters: { clientId?: string | null } = {}): string {
+  const params = new URLSearchParams();
+  const clientId = filters.clientId?.trim() ?? "";
+  if (clientId !== "") {
+    params.set("client_id", clientId);
+  }
+
+  const query = params.toString();
+  return query === "" ? "/admin/pets" : `/admin/pets?${query}`;
+}
+
 function summarizePackageItems(items: Package["items"] | undefined): string {
   if ((items ?? []).length === 0) {
     return "No appointment credits configured";
@@ -2048,6 +2070,55 @@ function formatCountLabel(count: number, singular: string, plural = `${singular}
 function renderAdminClientDisplayName(client: Client): string {
   const fullName = `${client.firstName} ${client.lastName}`.trim();
   return fullName === "" ? client.email : fullName;
+}
+
+type AdminClientPickerOption = {
+  id: string;
+  label: string;
+};
+
+function formatAdminClientPickerLabel(input: { id: string; name: string; email: string }): string {
+  const name = input.name.trim();
+  const email = input.email.trim();
+  const base = name === "" ? (email === "" ? input.id : email) : email === "" ? name : `${name} (${email})`;
+  return `${base} [${input.id}]`;
+}
+
+function buildAdminClientPickerOptions(clients: readonly Client[]): AdminClientPickerOption[] {
+  return clients
+    .map((client) => ({
+      id: client.id,
+      label: formatAdminClientPickerLabel({
+        id: client.id,
+        name: renderAdminClientDisplayName(client),
+        email: client.email
+      })
+    }))
+    .sort((left, right) => left.label.localeCompare(right.label));
+}
+
+function renderAdminClientPickerField(input: {
+  label: string;
+  name: string;
+  options: readonly AdminClientPickerOption[];
+  selectedId?: string | null;
+  placeholder?: string;
+  required?: boolean;
+  helpText?: string;
+  id?: string;
+}): string {
+  const fieldId = input.id ?? `client-picker-${input.name.replace(/[^a-z0-9_-]+/gi, "-").toLowerCase()}`;
+  const listId = `${fieldId}-list`;
+  const selectedValue = input.options.find((option) => option.id === (input.selectedId ?? ""))?.label
+    ?? (input.selectedId?.trim() ?? "");
+
+  return [
+    '<div class="form-stack">',
+    `<label for="${escapeAttribute(fieldId)}">${escapeHtml(input.label)}<input type="search" id="${escapeAttribute(fieldId)}" name="${escapeAttribute(input.name)}" value="${escapeAttribute(selectedValue)}" list="${escapeAttribute(listId)}"${input.placeholder == null ? "" : ` placeholder="${escapeAttribute(input.placeholder)}"`}${input.required ? " required" : ""} autocomplete="off" inputmode="search"></label>`,
+    `<datalist id="${escapeAttribute(listId)}">${input.options.map((option) => `<option value="${escapeAttribute(option.label)}" label="${escapeAttribute(option.id)}"></option>`).join("")}</datalist>`,
+    input.helpText == null || input.helpText.trim() === "" ? "" : `<p class="meta">${escapeHtml(input.helpText)}</p>`,
+    "</div>"
+  ].join("");
 }
 
 function renderTableActionLinks(actions: Array<{ href: string; label: string }>): string {
@@ -7738,9 +7809,32 @@ function readRequiredFormValue(form: URLSearchParams, key: string): string {
   return form.get(key)?.trim() ?? "";
 }
 
+function parseAdminClientPickerValue(value: string | null | undefined): string | null {
+  const trimmed = value?.trim() ?? "";
+  if (trimmed === "") {
+    return null;
+  }
+
+  const bracketMatch = /\[([^\]]+)\]\s*$/.exec(trimmed);
+  if (bracketMatch != null) {
+    const clientId = bracketMatch[1]?.trim() ?? "";
+    return clientId === "" ? null : clientId;
+  }
+
+  return trimmed;
+}
+
 function readOptionalFormValue(form: URLSearchParams, key: string): string | null {
   const value = form.get(key)?.trim() ?? "";
   return value === "" ? null : value;
+}
+
+function readAdminClientPickerFormValue(form: URLSearchParams, key: string): string | null {
+  return parseAdminClientPickerValue(readOptionalFormValue(form, key));
+}
+
+function readAdminClientPickerQueryValue(params: URLSearchParams, key: string): string | null {
+  return parseAdminClientPickerValue(params.get(key));
 }
 
 function readOptionalTimestampFormValue(form: URLSearchParams, key: string): string | null {
@@ -9959,11 +10053,12 @@ const portalBookingDetailMatch = /^\/portal\/bookings\/([^/]+)$/.exec(url.pathna
  const adminInvoiceDetailMatch = /^\/admin\/invoices\/([^/]+)$/.exec(url.pathname);
  const adminQuoteDetailMatch = /^\/admin\/quotes\/([^/]+)$/.exec(url.pathname);
       const adminContractDetailMatch = /^\/admin\/contracts\/([^/]+)$/.exec(url.pathname);
-      const adminPetDetailMatch = /^\/admin\/pets\/([^/]+)$/.exec(url.pathname);
-      const adminPetFilesMatch = /^\/admin\/pets\/([^/]+)\/files$/.exec(url.pathname);
-      const adminPetFileContentMatch = /^\/admin\/pets\/([^/]+)\/files\/([^/]+)\/content$/.exec(url.pathname);
-      const adminPetFileDeleteMatch = /^\/admin\/pets\/([^/]+)\/files\/([^/]+)\/delete$/.exec(url.pathname);
-      const adminPackageDetailMatch = /^\/admin\/packages\/([^/]+)$/.exec(url.pathname);
+const adminPetDetailMatch = /^\/admin\/pets\/([^/]+)$/.exec(url.pathname);
+const adminPetFilesMatch = /^\/admin\/pets\/([^/]+)\/files$/.exec(url.pathname);
+const adminPetFileContentMatch = /^\/admin\/pets\/([^/]+)\/files\/([^/]+)\/content$/.exec(url.pathname);
+const adminPetFileDeleteMatch = /^\/admin\/pets\/([^/]+)\/files\/([^/]+)\/delete$/.exec(url.pathname);
+const adminPetDeleteMatch = /^\/admin\/pets\/([^/]+)\/delete$/.exec(url.pathname);
+const adminPackageDetailMatch = /^\/admin\/packages\/([^/]+)$/.exec(url.pathname);
       const adminCreditDetailMatch = /^\/admin\/credits\/([^/]+)$/.exec(url.pathname);
       const adminFormDetailMatch = /^\/admin\/forms\/([^/]+)$/.exec(url.pathname);
       const adminFormReviewMatch = /^\/admin\/forms\/([^/]+)\/review$/.exec(url.pathname);
@@ -11482,11 +11577,11 @@ const portalBookingDetailMatch = /^\/portal\/bookings\/([^/]+)$/.exec(url.pathna
         return;
       }
 
-      if (method === "POST" && handlers != null && adminClientContactDeleteMatch != null) {
-        const session = await loadPersistedSession(resolved.sessionStore, request);
-        if (session == null) {
-          redirect(response, buildAdminLoginRedirectPath(request));
-          return;
+if (method === "POST" && handlers != null && adminClientContactDeleteMatch != null) {
+  const session = await loadPersistedSession(resolved.sessionStore, request);
+  if (session == null) {
+    redirect(response, buildAdminLoginRedirectPath(request));
+    return;
         }
 
         const clientId = decodeURIComponent(adminClientContactDeleteMatch[1] ?? "");
@@ -11501,14 +11596,105 @@ const portalBookingDetailMatch = /^\/portal\/bookings\/([^/]+)$/.exec(url.pathna
           return;
         }
 
-        redirect(response, `/admin/clients/${encodeURIComponent(clientId)}/contacts`);
-        return;
-      }
+  redirect(response, `/admin/clients/${encodeURIComponent(clientId)}/contacts`);
+  return;
+}
 
-      if (method === "POST" && handlers != null && portalPetFilesMatch != null) {
-        const session = await loadPersistedSession(resolved.sessionStore, request);
-        if (session == null) {
-          redirect(response, buildPortalLoginRedirectPath(request));
+if (method === "POST" && handlers != null && resolved.api != null && url.pathname === "/admin/pets") {
+  const session = await loadPersistedSession(resolved.sessionStore, request);
+  if (session == null) {
+    redirect(response, buildAdminLoginRedirectPath(request));
+    return;
+  }
+
+  try {
+    const form = await readFormBody(request);
+    const clientId = readAdminClientPickerFormValue(form, "clientId");
+    if (clientId == null) {
+      throw new Error("Select a client for this pet.");
+    }
+
+    const createdPet = await resolved.api.adminResources.createAdminPet({
+      clientId,
+      name: readRequiredFormValue(form, "name"),
+      species: readRequiredFormValue(form, "species"),
+      petSittingNotes: form.get("petSittingNotes")?.trim() ?? "",
+      archived: readCheckedFormValue(form, "archived")
+    });
+    redirect(response, `/admin/pets/${encodeURIComponent(createdPet.id)}`);
+  } catch (error) {
+    writeHtml(response, 400, renderLayout({
+      title: "Admin Pets",
+      body: `<article><h1>Admin Pets</h1><p>${escapeHtml(error instanceof Error ? error.message : "Unable to create pet.")}</p></article>`
+    }));
+  }
+  return;
+}
+
+if (method === "POST" && handlers != null && resolved.api != null && adminPetDetailMatch != null) {
+  const session = await loadPersistedSession(resolved.sessionStore, request);
+  if (session == null) {
+    redirect(response, buildAdminLoginRedirectPath(request));
+    return;
+  }
+
+  const petId = decodeURIComponent(adminPetDetailMatch[1] ?? "");
+  try {
+    const form = await readFormBody(request);
+    const clientId = readAdminClientPickerFormValue(form, "clientId");
+    if (clientId == null) {
+      throw new Error("Select a client for this pet.");
+    }
+
+    const updatedPet = await resolved.api.adminResources.updateAdminPet(petId, {
+      clientId,
+      name: readRequiredFormValue(form, "name"),
+      species: readRequiredFormValue(form, "species"),
+      petSittingNotes: form.get("petSittingNotes")?.trim() ?? "",
+      archived: readCheckedFormValue(form, "archived")
+    });
+    if (updatedPet == null) {
+      throw new Error("Pet not found.");
+    }
+
+    redirect(response, `/admin/pets/${encodeURIComponent(updatedPet.id)}`);
+  } catch (error) {
+    writeHtml(response, 400, renderLayout({
+      title: "Admin Pet Detail",
+      body: `<article><h1>Admin Pet Detail</h1><p>${escapeHtml(error instanceof Error ? error.message : "Unable to update pet.")}</p></article>`
+    }));
+  }
+  return;
+}
+
+if (method === "POST" && handlers != null && resolved.api != null && adminPetDeleteMatch != null) {
+  const session = await loadPersistedSession(resolved.sessionStore, request);
+  if (session == null) {
+    redirect(response, buildAdminLoginRedirectPath(request));
+    return;
+  }
+
+  const petId = decodeURIComponent(adminPetDeleteMatch[1] ?? "");
+  try {
+    const deleted = await resolved.api.adminResources.deleteAdminPet(petId);
+    if (!deleted) {
+      throw new Error("Pet not found.");
+    }
+
+    redirect(response, "/admin/pets");
+  } catch (error) {
+    writeHtml(response, 400, renderLayout({
+      title: "Admin Pets",
+      body: `<article><h1>Admin Pets</h1><p>${escapeHtml(error instanceof Error ? error.message : "Unable to delete pet.")}</p></article>`
+    }));
+  }
+  return;
+}
+
+if (method === "POST" && handlers != null && portalPetFilesMatch != null) {
+  const session = await loadPersistedSession(resolved.sessionStore, request);
+  if (session == null) {
+    redirect(response, buildPortalLoginRedirectPath(request));
           return;
         }
 
@@ -11659,7 +11845,7 @@ body: `<article><h1>Portal</h1><p>${escapeHtml(summary.body.error.message)}</p><
 return;
 }
 
-          writeHtml(response, 200, renderLayout({
+writeHtml(response, 200, renderLayout({
             title: "Portal",
             body: [
               "<article>",
@@ -12037,10 +12223,10 @@ writeHtml(response, 200, renderLayout({
 
         if (url.pathname === "/portal/contacts") {
           const contacts = await handlers.handlePortalContacts(session);
-          if ("error" in contacts.body) {
-            await handleProtectedRouteFailure({
-              response,
-              request,
+  if ("error" in contacts.body) {
+    await handleProtectedRouteFailure({
+      response,
+      request,
               sessionStore: resolved.sessionStore,
               loginPath: buildPortalLoginRedirectPath(request),
               title: "Contacts",
@@ -12212,20 +12398,20 @@ writeHtml(response, 200, renderLayout({
         }
 
 if (url.pathname === "/portal/pets") {
-const pets = await handlers.handlePortalPets(session);
-if ("error" in pets.body) {
-await handleProtectedRouteFailure({
-response,
-request,
-sessionStore: resolved.sessionStore,
+  const pets = await handlers.handlePortalPets(session);
+  if ("error" in pets.body) {
+    await handleProtectedRouteFailure({
+      response,
+      request,
+              sessionStore: resolved.sessionStore,
 loginPath: buildPortalLoginRedirectPath(request),
 title: "Pets",
 result: pets
-});
-return;
-}
+    });
+    return;
+  }
 
-          writeHtml(response, 200, renderLayout({
+  writeHtml(response, 200, renderLayout({
             title: "Pets",
             body: [
               '<article class="content-stack">',
@@ -12406,10 +12592,10 @@ writeHtml(response, 200, renderLayout({
 
         if (url.pathname === "/portal/packages") {
           const packages = await handlers.handlePortalPackages(session);
-          if ("error" in packages.body) {
-            await handleProtectedRouteFailure({
-              response,
-              request,
+  if ("error" in packages.body) {
+    await handleProtectedRouteFailure({
+      response,
+      request,
               sessionStore: resolved.sessionStore,
               loginPath: buildPortalLoginRedirectPath(request),
               title: "Packages",
@@ -12418,7 +12604,7 @@ writeHtml(response, 200, renderLayout({
             return;
           }
 
-          writeHtml(response, 200, renderLayout({
+writeHtml(response, 200, renderLayout({
             title: "Packages",
             body: [
               '<article class="content-stack">',
@@ -12498,7 +12684,7 @@ writeHtml(response, 200, renderLayout({
             return;
           }
 
-          writeHtml(response, 200, renderLayout({
+writeHtml(response, 200, renderLayout({
             title: "Credits",
             body: [
               '<article class="content-stack">',
@@ -12566,10 +12752,10 @@ writeHtml(response, 200, renderLayout({
 
 if (url.pathname === "/portal/achievements") {
 const achievements = await handlers.handlePortalAchievements(session);
-if ("error" in achievements.body) {
-await handleProtectedRouteFailure({
-response,
-request,
+  if ("error" in achievements.body) {
+    await handleProtectedRouteFailure({
+      response,
+      request,
 sessionStore: resolved.sessionStore,
 loginPath: buildPortalLoginRedirectPath(request),
 title: "Achievements",
@@ -13168,10 +13354,9 @@ const adminNav = "";
         const selectedTemplate = templateId === ""
           ? null
           : templates.find((item) => item.id === templateId) ?? null;
-        const clientOptions = formType === "booking_form"
-          ? (await resolved.api.adminResources.listAdminClients())
-            .sort((left, right) => formatAdminClientOptionLabel(left).localeCompare(formatAdminClientOptionLabel(right)))
-          : [];
+const clientOptions = formType === "booking_form"
+  ? buildAdminClientPickerOptions(await resolved.api.adminResources.listAdminClients())
+  : [];
 
         if (formType === "booking_form" && (appointmentType == null || appointmentType.uniqueLink.trim() === "")) {
           errors.push("This booking link is not available because the appointment type is missing its public link.");
@@ -13293,9 +13478,17 @@ const adminNav = "";
             `<input type="hidden" name="booking_id" value="${escapeAttribute(bookingId)}">`,
             `<input type="hidden" name="pet_id" value="${escapeAttribute(petId)}">`,
             `<input type="hidden" name="appointment_type_id" value="${escapeAttribute(appointmentTypeId)}">`,
-            formType === "booking_form"
-              ? `<label>Client<select name="client_id"><option value="">Select a client</option>${clientOptions.map((client) => `<option value="${escapeAttribute(client.id)}"${clientId === client.id ? " selected" : ""}>${escapeHtml(formatAdminClientOptionLabel(client))}</option>`).join("")}</select></label>`
-              : `<input type="hidden" name="client_id" value="${escapeAttribute(clientId)}">`,
+          formType === "booking_form"
+            ? renderAdminClientPickerField({
+                label: "Client",
+                name: "client_id",
+                options: clientOptions,
+                selectedId: clientId,
+                required: true,
+                placeholder: "Search by client name or email",
+                helpText: "Search the client list instead of scrolling through every household."
+              })
+            : `<input type="hidden" name="client_id" value="${escapeAttribute(clientId)}">`,
             formType === "booking_form"
               ? ""
               : `<label>Form Template<select name="template_id"><option value="">Select a template</option>${templates.map((template) => `<option value="${escapeAttribute(template.id)}"${templateId === template.id ? " selected" : ""}>${escapeHtml(template.name)}</option>`).join("")}</select></label>`,
@@ -13910,11 +14103,11 @@ value: latestAchievement == null
 "</section>",
 '<section class="surface-block">',
 "<h2>Client Actions</h2>",
-`<div class="form-actions"><a href="/client/form_requests_create.php?form_type=client_form&client_id=${encodeURIComponent(clientId)}">Request Client Form</a><a href="/client/form_requests_create.php?form_type=survey_form&client_id=${encodeURIComponent(clientId)}">Request Survey</a><a href="${buildAdminInvoicesPath({ clientId })}#create-invoice">Create Invoice</a><a href="${buildAdminExpensesPath({ clientId })}#create-expense">Add Expense</a><a href="/admin/clients/${encodeURIComponent(clientId)}/contacts">Manage Contacts</a><a href="/admin/clients/${encodeURIComponent(clientId)}/achievements">View Achievements</a></div>`,
+              `<div class="form-actions"><a href="/client/form_requests_create.php?form_type=client_form&client_id=${encodeURIComponent(clientId)}">Request Client Form</a><a href="/client/form_requests_create.php?form_type=survey_form&client_id=${encodeURIComponent(clientId)}">Request Survey</a><a href="${buildAdminInvoicesPath({ clientId })}#create-invoice">Create Invoice</a><a href="${buildAdminQuotesPath({ clientId })}#create-quote">Create Quote</a><a href="${buildAdminExpensesPath({ clientId })}#create-expense">Add Expense</a><a href="${buildAdminPetsPath({ clientId })}#create-pet">Add Pet</a><a href="/admin/clients/${encodeURIComponent(clientId)}/contacts">Manage Contacts</a><a href="/admin/clients/${encodeURIComponent(clientId)}/achievements">View Achievements</a></div>`,
 renderQuickLinksGrid([
 { href: buildAdminBookingsPath({ clientId }), label: "Appointments", description: upcomingBookings.length === 0 ? "No active appointments linked right now." : `${formatCountLabel(upcomingBookings.length, "upcoming appointment")} scheduled.` },
 { href: `${buildAdminInvoicesPath({ clientId })}#create-invoice`, label: "Invoices", description: openInvoices.length === 0 ? "No outstanding invoices." : `${formatCurrency(outstandingBalance)} still due across ${formatCountLabel(openInvoices.length, "invoice")}.` },
-{ href: "/admin/quotes", label: "Quotes", description: activeQuotes.length === 0 ? "No open quotes awaiting response." : `${formatCountLabel(activeQuotes.length, "quote")} still active.` },
+              { href: `${buildAdminQuotesPath({ clientId })}#create-quote`, label: "Quotes", description: activeQuotes.length === 0 ? "No open quotes awaiting response." : `${formatCountLabel(activeQuotes.length, "quote")} still active.` },
 { href: "/admin/contracts", label: "Contracts", description: pendingContracts.length === 0 ? "No unsigned contracts pending." : `${formatCountLabel(pendingContracts.length, "contract")} still needs action.` },
 { href: "/admin/forms", label: "Forms", description: formsNeedingReview === 0 ? "No pending form review." : `${formatCountLabel(formsNeedingReview, "submission")} still needs review.` },
 { href: `/admin/clients/${encodeURIComponent(clientId)}/achievements`, label: "Achievements", description: recentAchievements.length === 0 ? "No awards on record." : `${formatCountLabel(recentAchievements.length, "recent award")} visible from this profile.` }
@@ -13928,13 +14121,14 @@ renderLongTextBlock(adminClientProfileItem.notes, "No internal notes recorded fo
 "<h2>Household Contacts</h2>",
 renderContactsPreviewTable(contacts, (contact) => `/admin/clients/${encodeURIComponent(clientId)}/contacts/${encodeURIComponent(contact.id)}`),
 "</section>",
-'<section class="surface-block">',
-"<h2>Pet Roster</h2>",
-renderPetsPreviewTable(pets, {
-detailPath: (petItem) => `/admin/pets/${encodeURIComponent(petItem.id)}`,
-filePath: (petItem) => `/admin/pets/${encodeURIComponent(petItem.id)}/files`
-}),
-"</section>",
+              '<section class="surface-block">',
+              "<h2>Pet Roster</h2>",
+              renderPetsPreviewTable(pets, {
+                detailPath: (petItem) => `/admin/pets/${encodeURIComponent(petItem.id)}`,
+                filePath: (petItem) => `/admin/pets/${encodeURIComponent(petItem.id)}/files`
+              }),
+              `<div class="form-actions"><a href="${buildAdminPetsPath({ clientId })}#create-pet">Add Pet</a></div>`,
+              "</section>",
 '<section class="surface-block">',
 "<h2>Upcoming Appointments</h2>",
 renderBookingsPreviewTable(upcomingBookings, (booking) => `/admin/bookings/${encodeURIComponent(booking.id)}`),
@@ -14010,9 +14204,12 @@ return;
         }
 
 if (adminClientContactsMatch != null) {
-const clientId = decodeURIComponent(adminClientContactsMatch[1] ?? "");
-const contacts = await handlers.handleAdminClientContacts(session, clientId);
-if ("error" in contacts.body) {
+  const clientId = decodeURIComponent(adminClientContactsMatch[1] ?? "");
+  const [contacts, allClients] = await Promise.all([
+    handlers.handleAdminClientContacts(session, clientId),
+    resolved.api == null ? Promise.resolve([] as Client[]) : resolved.api.adminResources.listAdminClients()
+  ]);
+  if ("error" in contacts.body) {
 await handleProtectedRouteFailure({
 response,
 request,
@@ -14020,11 +14217,14 @@ sessionStore: resolved.sessionStore,
 loginPath: buildAdminLoginRedirectPath(request),
 title: "Client Contacts",
 result: contacts
-});
-return;
-}
+    });
+    return;
+  }
 
-          writeHtml(response, 200, renderLayout({
+  const selectedClientId = clientId;
+  const clientPickerOptions = buildAdminClientPickerOptions(allClients);
+
+  writeHtml(response, 200, renderLayout({
             title: "Client Contacts",
             body: [
               '<article class="content-stack">',
@@ -14034,6 +14234,28 @@ return;
                 description: "Manage household members, emergency contacts, and the primary communication owner for this client."
               }),
               adminNav,
+              '<section id="create-pet" class="surface-block">',
+              "<h2>Add Pet</h2>",
+              [
+                '<form class="form-grid" method="post" action="/admin/pets">',
+                '<div class="form-grid form-grid--two">',
+                renderAdminClientPickerField({
+                  label: "Owner",
+                  name: "clientId",
+                  options: clientPickerOptions,
+                  selectedId: selectedClientId,
+                  required: true,
+                  placeholder: "Search by client name or email",
+                  helpText: "Choose the client who owns this pet."
+                }),
+                '<label>Name<input type="text" name="name" required></label>',
+                '<label>Species<input type="text" name="species" required></label>',
+                '</div>',
+                '<label>Care Notes<textarea name="petSittingNotes" rows="4" placeholder="Medication, handling notes, feeding reminders, gate code, or household context."></textarea></label>',
+                '<div class="form-actions"><button type="submit">Add Pet</button></div>',
+                '</form>'
+              ].join(""),
+              "</section>",
               '<section class="surface-block">',
               "<h2>Add Contact</h2>",
               `<form class="form-grid" method="post" action="/admin/clients/${encodeURIComponent(clientId)}/contacts">`,
@@ -14123,11 +14345,11 @@ sessionStore: resolved.sessionStore,
 loginPath: buildAdminLoginRedirectPath(request),
 title: "Client Achievements",
 result: achievements
-});
-return;
-}
+    });
+    return;
+  }
 
-          writeHtml(response, 200, renderLayout({
+  writeHtml(response, 200, renderLayout({
             title: "Client Achievements",
             body: [
               '<article class="content-stack">',
@@ -14239,16 +14461,11 @@ return;
           const petById = new Map(pets.map((pet) => [pet.id, pet]));
 const appointmentTypeById = new Map(appointmentTypes.map((appointmentType) => [appointmentType.id, appointmentType]));
 const bookingReferenceTime = new Date().toISOString();
-const selectedClientId = (url.searchParams.get("client_id") ?? "").trim();
+const selectedClientId = readAdminClientPickerQueryValue(url.searchParams, "client_id") ?? "";
 const selectedPetId = (url.searchParams.get("pet_id") ?? "").trim();
 const selectedStatus = normalizeSearchQuery(url.searchParams.get("status"));
 const selectedTimeframe = normalizeSearchQuery(url.searchParams.get("timeframe"));
-const clientOptions = [...clients]
-  .sort((left, right) => renderAdminClientDisplayName(left).localeCompare(renderAdminClientDisplayName(right)))
-  .map((client) => ({
-    id: client.id,
-    label: renderAdminClientDisplayName(client)
-  }));
+const clientOptions = buildAdminClientPickerOptions(clients);
 const petOptions = [...pets]
   .sort((left, right) => left.name.localeCompare(right.name))
   .map((pet) => ({
@@ -14342,7 +14559,14 @@ const hasBookingFilters = bookingQuery !== ""
               [
                 '<form class="form-grid" method="get" action="/admin/bookings">',
                 '<div class="form-grid form-grid--two">',
-                `<label>Client<select name="client_id"><option value="">All Clients</option>${clientOptions.map((client) => `<option value="${escapeAttribute(client.id)}"${selectedClientId === client.id ? " selected" : ""}>${escapeHtml(client.label)}</option>`).join("")}</select></label>`,
+              renderAdminClientPickerField({
+                label: "Client",
+                name: "client_id",
+                options: clientOptions,
+                selectedId: selectedClientId,
+                placeholder: "Filter by client name or email",
+                helpText: "Search for a client instead of scrolling through the full list."
+              }),
                 `<label>Pet<select name="pet_id"><option value="">All Pets</option>${petOptions.map((pet) => `<option value="${escapeAttribute(pet.id)}"${selectedPetId === pet.id ? " selected" : ""}>${escapeHtml(pet.label)}</option>`).join("")}</select></label>`,
                 `<label>Status<select name="status">${bookingStatusOptions.map((option) => `<option value="${escapeAttribute(option.value)}"${selectedStatus === option.value ? " selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}</select></label>`,
                 `<label>Timeframe<select name="timeframe">${bookingTimeframeOptions.map((option) => `<option value="${escapeAttribute(option.value)}"${selectedTimeframe === option.value ? " selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}</select></label>`,
@@ -14462,12 +14686,12 @@ if (method === "POST" && handlers != null && resolved.api != null && url.pathnam
               throw new Error("Expense amount must be a valid positive number.");
             }
 
-            const createdExpense = await resolved.api.adminResources.createAdminExpense({
-              clientId: readOptionalFormValue(form, "clientId"),
-              category: readRequiredFormValue(form, "category"),
-              description: readRequiredFormValue(form, "description"),
-              amount,
-              expenseDate: readOptionalFormValue(form, "expenseDate"),
+      const createdExpense = await resolved.api.adminResources.createAdminExpense({
+        clientId: readAdminClientPickerFormValue(form, "clientId"),
+        category: readRequiredFormValue(form, "category"),
+        description: readRequiredFormValue(form, "description"),
+        amount,
+        expenseDate: readOptionalFormValue(form, "expenseDate"),
               billable: readCheckedFormValue(form, "billable"),
               invoiced: readCheckedFormValue(form, "invoiced"),
               notes: form.get("notes")?.trim() ?? ""
@@ -14499,7 +14723,8 @@ if (method === "POST" && handlers != null && resolved.api != null && url.pathnam
             return;
           }
 
-          const selectedClientId = (url.searchParams.get("client_id") ?? "").trim();
+          const selectedClientId = readAdminClientPickerQueryValue(url.searchParams, "client_id") ?? "";
+          const clientPickerOptions = buildAdminClientPickerOptions(clients);
           const totalExpenses = expenses.body.items.reduce((sum, expense) => sum + expense.amount, 0);
           const billableExpenses = expenses.body.items.reduce((sum, expense) => expense.billable ? sum + expense.amount : sum, 0);
           const invoicedExpenses = expenses.body.items.filter((expense) => expense.invoiced).length;
@@ -14536,7 +14761,27 @@ if (method === "POST" && handlers != null && resolved.api != null && url.pathnam
               ]),
               '<section id="create-expense" class="surface-block">',
               '<h2>Add Expense</h2>',
-              `<form class="form-grid" method="post" action="/admin/expenses"><div class="form-grid form-grid--two"><label>Client<select name="clientId"><option value="">General business expense</option>${clients.map((client) => `<option value="${escapeAttribute(client.id)}"${client.id === selectedClientId ? " selected" : ""}>${escapeHtml(renderAdminClientDisplayName(client))}</option>`).join("")}</select></label><label>Expense Date<input type="date" name="expenseDate" value="${escapeAttribute(new Date().toISOString().slice(0, 10))}"></label><label>Category<input type="text" name="category" required></label><label>Amount<input type="number" name="amount" min="0" step="0.01" required></label></div><label>Description<input type="text" name="description" required></label><div class="form-grid form-grid--two"><label><input type="checkbox" name="billable"> Billable to client</label><label><input type="checkbox" name="invoiced"> Already invoiced</label></div><label>Notes<textarea name="notes" rows="4"></textarea></label><div class="form-actions"><button type="submit">Add Expense</button></div></form>`,
+              [
+                '<form class="form-grid" method="post" action="/admin/expenses">',
+                '<div class="form-grid form-grid--two">',
+                renderAdminClientPickerField({
+                  label: "Client",
+                  name: "clientId",
+                  options: clientPickerOptions,
+                  selectedId: selectedClientId,
+                  placeholder: "Search by client name or email",
+                  helpText: "Leave blank for a general business expense."
+                }),
+                `<label>Expense Date<input type="date" name="expenseDate" value="${escapeAttribute(new Date().toISOString().slice(0, 10))}"></label>`,
+                '<label>Category<input type="text" name="category" required></label>',
+                '<label>Amount<input type="number" name="amount" min="0" step="0.01" required></label>',
+                '</div>',
+                '<label>Description<input type="text" name="description" required></label>',
+                '<div class="form-grid form-grid--two"><label><input type="checkbox" name="billable"> Billable to client</label><label><input type="checkbox" name="invoiced"> Already invoiced</label></div>',
+                '<label>Notes<textarea name="notes" rows="4"></textarea></label>',
+                '<div class="form-actions"><button type="submit">Add Expense</button></div>',
+                '</form>'
+              ].join(""),
               '</section>',
               '<section class="surface-block">',
               '<h2>Expense Ledger</h2>',
@@ -14631,12 +14876,17 @@ if (method === "POST" && handlers != null && resolved.api != null && url.pathnam
               throw new Error("Invoice total must be a valid positive number.");
             }
 
-            const createdInvoice = await resolved.api.adminResources.createAdminInvoice({
-              clientId: readRequiredFormValue(form, "clientId"),
-              totalAmount,
-              dueAt: readOptionalFormValue(form, "dueAt"),
-              status: readRequiredFormValue(form, "status") as Invoice["status"],
-              notes: form.get("notes")?.trim() ?? ""
+      const clientId = readAdminClientPickerFormValue(form, "clientId");
+      if (clientId == null) {
+        throw new Error("Select a client for this invoice.");
+      }
+
+      const createdInvoice = await resolved.api.adminResources.createAdminInvoice({
+        clientId,
+        totalAmount,
+        dueAt: readOptionalFormValue(form, "dueAt"),
+        status: readRequiredFormValue(form, "status") as Invoice["status"],
+        notes: form.get("notes")?.trim() ?? ""
             });
             redirect(response, `/admin/invoices/${encodeURIComponent(createdInvoice.id)}`);
           } catch (error) {
@@ -14666,7 +14916,8 @@ if (method === "POST" && handlers != null && resolved.api != null && url.pathnam
           }
 
           const clientById = new Map(clients.map((client) => [client.id, client]));
-          const selectedClientId = (url.searchParams.get("client_id") ?? "").trim();
+          const selectedClientId = readAdminClientPickerQueryValue(url.searchParams, "client_id") ?? "";
+          const clientPickerOptions = buildAdminClientPickerOptions(clients);
 
           writeHtml(response, 200, renderLayout({
             title: "Admin Invoices",
@@ -14680,7 +14931,26 @@ if (method === "POST" && handlers != null && resolved.api != null && url.pathnam
               adminNav,
               '<section id="create-invoice" class="surface-block">',
               '<h2>Create Invoice</h2>',
-              `<form class="form-grid" method="post" action="/admin/invoices"><div class="form-grid form-grid--two"><label>Client<select name="clientId" required><option value="">Select client</option>${clients.map((client) => `<option value="${escapeAttribute(client.id)}"${client.id === selectedClientId ? " selected" : ""}>${escapeHtml(renderAdminClientDisplayName(client))}</option>`).join("")}</select></label><label>Due Date<input type="date" name="dueAt" value="${escapeAttribute(new Date().toISOString().slice(0, 10))}"></label><label>Total Amount<input type="number" name="totalAmount" min="0" step="0.01" required></label><label>Status<select name="status"><option value="draft">Draft</option><option value="sent" selected>Sent</option><option value="paid">Paid</option><option value="void">Void</option></select></label></div><label>Notes<textarea name="notes" rows="4"></textarea></label><div class="form-actions"><button type="submit">Create Invoice</button></div></form>`,
+              [
+                '<form class="form-grid" method="post" action="/admin/invoices">',
+                '<div class="form-grid form-grid--two">',
+                renderAdminClientPickerField({
+                  label: "Client",
+                  name: "clientId",
+                  options: clientPickerOptions,
+                  selectedId: selectedClientId,
+                  required: true,
+                  placeholder: "Search by client name or email",
+                  helpText: "Select the client this invoice belongs to."
+                }),
+                `<label>Due Date<input type="date" name="dueAt" value="${escapeAttribute(new Date().toISOString().slice(0, 10))}"></label>`,
+                '<label>Total Amount<input type="number" name="totalAmount" min="0" step="0.01" required></label>',
+                '<label>Status<select name="status"><option value="draft">Draft</option><option value="sent" selected>Sent</option><option value="paid">Paid</option><option value="void">Void</option></select></label>',
+                '</div>',
+                '<label>Notes<textarea name="notes" rows="4"></textarea></label>',
+                '<div class="form-actions"><button type="submit">Create Invoice</button></div>',
+                '</form>'
+              ].join(""),
               '</section>',
               '<section class="surface-block">',
               '<h2>Invoice Ledger</h2>',
@@ -14762,91 +15032,222 @@ if (method === "POST" && handlers != null && resolved.api != null && url.pathnam
           }));
           return;
         }
+if (method === "POST" && handlers != null && resolved.api != null && url.pathname === "/admin/quotes") {
+  const session = await loadPersistedSession(resolved.sessionStore, request);
+  if (session == null) {
+    redirect(response, buildAdminLoginRedirectPath(request));
+    return;
+  }
+
+  try {
+    const form = await readFormBody(request);
+    const clientId = readAdminClientPickerFormValue(form, "clientId");
+    if (clientId == null) {
+      throw new Error("Select a client for this quote.");
+    }
+
+    const descriptions = form.getAll("itemDescription").map((value) => String(value).trim());
+    const quantities = form.getAll("itemQuantity").map((value) => Number.parseFloat(String(value)));
+    const unitPrices = form.getAll("itemUnitPrice").map((value) => Number.parseFloat(String(value)));
+    const items = descriptions.flatMap((description, index) => {
+      const quantity = quantities[index] ?? 0;
+      const unitPrice = unitPrices[index] ?? 0;
+      if (description === "" && quantity === 0 && unitPrice === 0) {
+        return [];
+      }
+      if (description === "") {
+        throw new Error("Each quote line item needs a description.");
+      }
+      if (!Number.isFinite(quantity) || quantity <= 0) {
+        throw new Error(`Line item ${index + 1} needs a quantity greater than zero.`);
+      }
+      if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+        throw new Error(`Line item ${index + 1} needs a valid unit price.`);
+      }
+
+      return [{
+        description,
+        quantity,
+        unitPrice,
+        amount: quantity * unitPrice,
+        itemType: null,
+        referenceId: null
+      }];
+    });
+    if (items.length === 0) {
+      throw new Error("Add at least one service or line item to this quote.");
+    }
+
+    const createdQuote = await resolved.api.adminResources.createAdminQuote({
+      clientId,
+      status: readRequiredFormValue(form, "status") as Quote["status"],
+      title: readOptionalFormValue(form, "title"),
+      description: form.get("description")?.trim() ?? "",
+      expiresAt: readOptionalFormValue(form, "expiresAt"),
+      items
+    });
+    redirect(response, `/admin/quotes/${encodeURIComponent(createdQuote.id)}`);
+  } catch (error) {
+    writeHtml(response, 400, renderLayout({
+      title: "Admin Quotes",
+      body: `<article><h1>Admin Quotes</h1><p>${escapeHtml(error instanceof Error ? error.message : "Unable to create quote.")}</p></article>`
+    }));
+  }
+  return;
+}
+
 if (url.pathname === "/admin/quotes") {
-          const quotes = await handlers.handleAdminQuotes(session);
-          if ("error" in quotes.body) {
-            await handleProtectedRouteFailure({
-              response,
-              request,
-              sessionStore: resolved.sessionStore,
-              loginPath: buildAdminLoginRedirectPath(request),
-              title: "Admin Quotes",
-              result: quotes
-            });
-            return;
-          }
+  const [quotes, clients] = await Promise.all([
+    handlers.handleAdminQuotes(session),
+    resolved.api == null ? Promise.resolve([] as Client[]) : resolved.api.adminResources.listAdminClients()
+  ]);
+  if ("error" in quotes.body) {
+    await handleProtectedRouteFailure({
+      response,
+      request,
+      sessionStore: resolved.sessionStore,
+      loginPath: buildAdminLoginRedirectPath(request),
+      title: "Admin Quotes",
+      result: quotes
+    });
+    return;
+  }
 
-          writeHtml(response, 200, renderLayout({
-            title: "Admin Quotes",
-            body: [
-              '<article class="content-stack">',
-              renderSectionIntro({
-                eyebrow: "Quotes",
-                title: "Quotes",
-                description: "Review proposal totals and identify which quotes are still waiting on approval."
-              }),
-              adminNav,
-              '<section class="surface-block">',
-              "<h2>Quote Pipeline</h2>",
-              renderDataTable({
-                headers: ["Quote ID", "Total", "Status", "Actions"],
-                rows: quotes.body.items.map((quote) => [
-                  `<a href="/admin/quotes/${encodeURIComponent(quote.id)}">${escapeHtml(quote.id)}</a>`,
-                  escapeHtml(formatCurrency(quote.totalAmount)),
-                  renderStatusPill(quote.status, quote.status === "accepted" ? "success" : "warning"),
-                  renderTableActionLinks([
-                    { href: `/admin/quotes/${encodeURIComponent(quote.id)}`, label: "Manage" }
-                  ])
-                ]),
-                emptyMessage: "No quotes."
-              }),
-              "</section>",
-              "</article>"
-            ].join("")
-          }));
-          return;
+  const selectedClientId = readAdminClientPickerQueryValue(url.searchParams, "client_id") ?? "";
+  const clientById = new Map(clients.map((client) => [client.id, client]));
+  const clientPickerOptions = buildAdminClientPickerOptions(clients);
+  const filteredQuotes = quotes.body.items.filter((quote) => selectedClientId === "" || quote.clientId === selectedClientId);
+
+  writeHtml(response, 200, renderLayout({
+    title: "Admin Quotes",
+    body: [
+      '<article class="content-stack">',
+      renderSectionIntro({
+        eyebrow: "Quotes",
+        title: "Quotes",
+        description: "Draft new proposals, review sent quotes, and confirm the exact services included in each quote."
+      }),
+      adminNav,
+      '<section id="create-quote" class="surface-block">',
+      '<h2>Create Quote</h2>',
+      [
+        '<form class="form-grid" method="post" action="/admin/quotes">',
+        '<div class="form-grid form-grid--two">',
+        renderAdminClientPickerField({
+          label: "Client",
+          name: "clientId",
+          options: clientPickerOptions,
+          selectedId: selectedClientId,
+          required: true,
+          placeholder: "Search by client name or email",
+          helpText: "Pick the client before adding services."
+        }),
+        '<label>Title<input type="text" name="title" placeholder="Optional quote title"></label>',
+        `<label>Expiration Date<input type="date" name="expiresAt" value="${escapeAttribute(new Date().toISOString().slice(0, 10))}"></label>`,
+        '<label>Status<select name="status"><option value="draft">Draft</option><option value="sent" selected>Sent</option><option value="accepted">Accepted</option><option value="declined">Declined</option><option value="expired">Expired</option></select></label>',
+        '</div>',
+        '<label>Description<textarea name="description" rows="4" placeholder="Optional quote notes or summary"></textarea></label>',
+        '<section class="surface-block" data-no-reveal><h3>Service Breakdown</h3><div class="form-grid">' +
+          Array.from({ length: 5 }, (_, index) => [
+            '<div class="form-grid form-grid--two">',
+            `<label>Line Item ${index + 1}<input type="text" name="itemDescription" placeholder="Private lesson package"></label>`,
+            '<label>Quantity<input type="number" name="itemQuantity" min="0" step="0.01" value="1"></label>',
+            '<label>Unit Price<input type="number" name="itemUnitPrice" min="0" step="0.01" value="0"></label>',
+            '</div>'
+          ].join("")).join("") +
+        '</div></section>',
+        '<div class="form-actions"><button type="submit">Create Quote</button></div>',
+        '</form>'
+      ].join(""),
+      '</section>',
+      '<section class="surface-block">',
+      '<h2>Quote Pipeline</h2>',
+      renderDataTable({
+        headers: ["Quote ID", "Client", "Title", "Total", "Status", "Actions"],
+        rows: filteredQuotes.map((quote) => {
+          const client = clientById.get(quote.clientId) ?? null;
+          return [
+            `<a href="/admin/quotes/${encodeURIComponent(quote.id)}">${escapeHtml(quote.quoteNumber ?? quote.id)}</a>`,
+            client == null
+              ? escapeHtml(quote.clientId)
+              : `<a href="/admin/clients/${encodeURIComponent(client.id)}/profile">${escapeHtml(renderAdminClientDisplayName(client))}</a>`,
+            escapeHtml(quote.title ?? "Untitled Quote"),
+            escapeHtml(formatCurrency(quote.totalAmount)),
+            renderStatusPill(quote.status, quote.status === "accepted" ? "success" : quote.status === "declined" ? "danger" : "warning"),
+            renderTableActionLinks([
+              { href: `/admin/quotes/${encodeURIComponent(quote.id)}`, label: "Manage" }
+            ])
+          ];
+        }),
+        emptyMessage: selectedClientId === "" ? "No quotes." : "No quotes match this client."
+      }),
+      '</section>',
+      '</article>'
+    ].join("")
+  }));
+  return;
+}
+
+if (adminQuoteDetailMatch != null) {
+  const quoteId = decodeURIComponent(adminQuoteDetailMatch[1] ?? "");
+  const quote = await handlers.handleAdminQuoteDetail(session, quoteId);
+  if ("error" in quote.body) {
+    redirect(response, "/admin/quotes");
+    return;
+  }
+
+  const quoteClient = resolved.api == null ? null : await resolved.api.adminResources.findAdminClientById(quote.body.item.clientId);
+  const clientValue = quoteClient == null
+    ? escapeHtml(quote.body.item.clientId)
+    : `<a href="/admin/clients/${encodeURIComponent(quoteClient.id)}/profile">${escapeHtml(renderAdminClientDisplayName(quoteClient))}</a>`;
+
+  writeHtml(response, 200, renderLayout({
+    title: "Admin Quote Detail",
+    body: [
+      '<article class="content-stack">',
+      renderSectionIntro({
+        eyebrow: "Quotes",
+        title: quote.body.item.title ?? quote.body.item.quoteNumber ?? quote.body.item.id,
+        description: "Review the full service breakdown, client, totals, and public-access token for this quote."
+      }),
+      adminNav,
+      '<section class="surface-block">',
+      '<h2>Quote Details</h2>',
+      renderDetailGrid([
+        { label: "Quote ID", value: escapeHtml(quote.body.item.id) },
+        { label: "Quote Number", value: escapeHtml(quote.body.item.quoteNumber ?? quote.body.item.id) },
+        { label: "Client", value: clientValue },
+        {
+          label: "Status",
+          value: renderStatusPill(
+            quote.body.item.status,
+            quote.body.item.status === "accepted" ? "success" : quote.body.item.status === "declined" ? "danger" : "warning"
+          )
+        },
+        { label: "Total Amount", value: escapeHtml(formatCurrency(quote.body.item.totalAmount)) },
+        { label: "Expires", value: escapeHtml(formatAdminDate(quote.body.item.expiresAt)) },
+        { label: "Accepted", value: quote.body.item.acceptedAt == null ? "Not accepted" : renderLocalizedDateTime(quote.body.item.acceptedAt) },
+        { label: "Declined", value: quote.body.item.declinedAt == null ? "Not declined" : renderLocalizedDateTime(quote.body.item.declinedAt) },
+        {
+          label: "Public Access",
+          value: escapeHtml(quote.body.item.publicAccess?.token ?? "Portal-only")
         }
-
-        if (adminQuoteDetailMatch != null) {
-          const quoteId = decodeURIComponent(adminQuoteDetailMatch[1] ?? "");
-          const quote = await handlers.handleAdminQuoteDetail(session, quoteId);
-          if ("error" in quote.body) {
-            redirect(response, "/admin/quotes");
-            return;
-          }
-
-          writeHtml(response, 200, renderLayout({
-            title: "Admin Quote Detail",
-            body: [
-              '<article class="content-stack">',
-              renderSectionIntro({
-                eyebrow: "Quotes",
-                title: quote.body.item.id,
-                description: "Review this quote's pricing, approval state, and public-access token."
-              }),
-              adminNav,
-              '<section class="surface-block">',
-              "<h2>Quote Details</h2>",
-              renderDetailGrid([
-                { label: "Quote ID", value: escapeHtml(quote.body.item.id) },
-                { label: "Client ID", value: escapeHtml(quote.body.item.clientId) },
-                {
-                  label: "Status",
-                  value: renderStatusPill(quote.body.item.status, quote.body.item.status === "accepted" ? "success" : "warning")
-                },
-                { label: "Total Amount", value: escapeHtml(formatCurrency(quote.body.item.totalAmount)) },
-                {
-                  label: "Public Access",
-                  value: escapeHtml(quote.body.item.publicAccess?.token ?? "Portal-only")
-                }
-              ]),
-              '<div class="form-actions"><a href="/admin/quotes">Back to Quotes</a></div>',
-              "</section>",
-              "</article>"
-            ].join("")
-          }));
-          return;
-        }
+      ]),
+      '</section>',
+      '<section class="surface-block">',
+      '<h2>Description</h2>',
+      renderLongTextBlock(quote.body.item.description ?? "", "No quote description was added."),
+      '</section>',
+      '<section class="surface-block">',
+      '<h2>Service Breakdown</h2>',
+      renderLegacyQuoteItemsTable(quote.body.item.items),
+      '</section>',
+      `<div class="form-actions"><a href="${buildAdminQuotesPath({ clientId: quote.body.item.clientId })}">Back to Quotes</a></div>`,
+      '</article>'
+    ].join("")
+  }));
+  return;
+}
 
         if (url.pathname === "/admin/contracts") {
           const contracts = await handlers.handleAdminContracts(session);
@@ -15008,46 +15409,81 @@ if (url.pathname === "/admin/quotes") {
         }
 
 if (url.pathname === "/admin/pets") {
-const pets = await handlers.handleAdminPets(session);
+  const [pets, clients] = await Promise.all([
+    handlers.handleAdminPets(session),
+    resolved.api == null ? Promise.resolve([] as Client[]) : resolved.api.adminResources.listAdminClients()
+          ]);
 if ("error" in pets.body) {
 await handleProtectedRouteFailure({
 response,
 request,
 sessionStore: resolved.sessionStore,
 loginPath: buildAdminLoginRedirectPath(request),
-title: "Admin Pets",
-result: pets
-});
-return;
-}
+      title: "Admin Pets",
+      result: pets
+    });
+    return;
+  }
 
-          writeHtml(response, 200, renderLayout({
+  const selectedClientId = readAdminClientPickerQueryValue(url.searchParams, "client_id") ?? "";
+  const clientById = new Map(clients.map((client) => [client.id, client]));
+  const clientPickerOptions = buildAdminClientPickerOptions(clients);
+  const filteredPets = pets.body.items.filter((pet) => selectedClientId === "" || pet.clientId === selectedClientId);
+
+  writeHtml(response, 200, renderLayout({
             title: "Admin Pets",
             body: [
               '<article class="content-stack">',
               renderSectionIntro({
                 eyebrow: "Pets",
                 title: "Pets",
-                description: "Browse the pet directory and open file management for records that need updated documentation."
+                description: "Create pet records, update owner assignments, and manage active versus archived pets from one admin workspace."
               }),
               adminNav,
+              '<section id="create-pet" class="surface-block">',
+              "<h2>Add Pet</h2>",
+              [
+                '<form class="form-grid" method="post" action="/admin/pets">',
+                '<div class="form-grid form-grid--two">',
+                renderAdminClientPickerField({
+                  label: "Owner",
+                  name: "clientId",
+                  options: clientPickerOptions,
+                  selectedId: selectedClientId,
+                  required: true,
+                  placeholder: "Search by client name or email",
+                  helpText: "Choose the client who owns this pet."
+                }),
+                '<label>Name<input type="text" name="name" required></label>',
+                '<label>Species<input type="text" name="species" required></label>',
+                '</div>',
+                '<label>Care Notes<textarea name="petSittingNotes" rows="4" placeholder="Medication, handling notes, feeding reminders, gate code, or household context."></textarea></label>',
+                '<div class="form-actions"><button type="submit">Add Pet</button></div>',
+                '</form>'
+              ].join(""),
+              "</section>",
               '<section class="surface-block">',
               "<h2>Pet Directory</h2>",
               renderDataTable({
                 headers: ["Pet ID", "Name", "Species", "Owner", "Status", "Actions"],
-                rows: pets.body.items.map((pet) => [
+                rows: filteredPets.map((pet) => {
+                  const owner = clientById.get(pet.clientId) ?? null;
+                  return [
                   `<a href="/admin/pets/${encodeURIComponent(pet.id)}">${escapeHtml(pet.id)}</a>`,
                   `<a href="/admin/pets/${encodeURIComponent(pet.id)}">${escapeHtml(pet.name)}</a>`,
                   escapeHtml(pet.species),
-                  `<a href="/admin/clients/${encodeURIComponent(pet.clientId)}/profile">${escapeHtml(pet.clientId)}</a>`,
+                  owner == null
+                    ? `<a href="/admin/clients/${encodeURIComponent(pet.clientId)}/profile">${escapeHtml(pet.clientId)}</a>`
+                    : `<a href="/admin/clients/${encodeURIComponent(owner.id)}/profile">${escapeHtml(renderAdminClientDisplayName(owner))}</a>`,
                   renderStatusPill(pet.archived ? "Archived" : "Active", pet.archived ? "warning" : "success"),
                   renderTableActionLinks([
                     { href: `/admin/pets/${encodeURIComponent(pet.id)}`, label: "Manage" },
                     { href: `/admin/pets/${encodeURIComponent(pet.id)}/files`, label: "Files" },
                     { href: `/admin/clients/${encodeURIComponent(pet.clientId)}/profile`, label: "Owner" }
                   ])
-                ]),
-                emptyMessage: "No pets."
+                  ];
+                }),
+                emptyMessage: selectedClientId === "" ? "No pets." : "No pets match this client."
               }),
               "</section>",
               "</article>"
@@ -15066,12 +15502,13 @@ return;
 
 const adminPetItem = (pet.body as { item: Pet }).item;
 const ownerProfile = await loadSafeRouteItem<ClientProfile>(() => handlers.handleAdminClientProfile(session, adminPetItem.clientId));
-const [contacts, files, allBookings, allForms, allAchievements] = await Promise.all([
+const [contacts, files, allBookings, allForms, allAchievements, allClients] = await Promise.all([
 loadSafeRouteItems<ClientContact>(() => handlers.handleAdminClientContacts(session, adminPetItem.clientId)),
 loadSafeRouteItems<PetFile>(() => handlers.handleAdminPetFiles(session, petId)),
 loadSafeRouteItems<Booking>(() => handlers.handleAdminBookings(session)),
 loadSafeRouteItems<FormSubmission>(() => handlers.handleAdminForms(session)),
-loadSafeRouteItems<ClientAchievement>(() => handlers.handleAdminClientAchievements(session, adminPetItem.clientId))
+loadSafeRouteItems<ClientAchievement>(() => handlers.handleAdminClientAchievements(session, adminPetItem.clientId)),
+resolved.api == null ? Promise.resolve([] as Client[]) : resolved.api.adminResources.listAdminClients()
 ]);
 const primaryContact = contacts.find((contact) => contact.isPrimary) ?? contacts[0] ?? null;
 const petBookings = sortByTimeAsc(
@@ -15091,6 +15528,7 @@ allAchievements.filter((achievement) => petMatchesAchievement(adminPetItem, achi
 const nextBooking = upcomingBookings[0] ?? null;
 const latestFile = recentFiles[0] ?? null;
 const latestForm = petForms[0] ?? null;
+const clientPickerOptions = buildAdminClientPickerOptions(allClients);
 
 writeHtml(response, 200, renderLayout({
 title: "Admin Pet Detail",
@@ -15141,10 +15579,34 @@ value: latestForm == null
 }
 ]),
 "</section>",
-'<section class="surface-block">',
-"<h2>Care Notes</h2>",
-renderLongTextBlock(adminPetItem.petSittingNotes, "No care notes have been recorded for this pet yet."),
-"</section>",
+              '<section class="surface-block">',
+              "<h2>Care Notes</h2>",
+              renderLongTextBlock(adminPetItem.petSittingNotes, "No care notes have been recorded for this pet yet."),
+              "</section>",
+              '<section class="surface-block">',
+              "<h2>Edit Pet</h2>",
+              [
+                `<form class="form-grid" method="post" action="/admin/pets/${encodeURIComponent(adminPetItem.id)}">`,
+                '<div class="form-grid form-grid--two">',
+                renderAdminClientPickerField({
+                  label: "Owner",
+                  name: "clientId",
+                  options: clientPickerOptions,
+                  selectedId: adminPetItem.clientId,
+                  required: true,
+                  placeholder: "Search by client name or email",
+                  helpText: "Reassign the pet to a different client if needed."
+                }),
+                `<label>Name<input type="text" name="name" value="${escapeAttribute(adminPetItem.name)}" required></label>`,
+                `<label>Species<input type="text" name="species" value="${escapeAttribute(adminPetItem.species)}" required></label>`,
+                '</div>',
+                `<label>Care Notes<textarea name="petSittingNotes" rows="5">${escapeHtml(adminPetItem.petSittingNotes)}</textarea></label>`,
+                `<label><input type="checkbox" name="archived"${adminPetItem.archived ? " checked" : ""}> Archive this pet</label>`,
+                '<div class="form-actions"><button type="submit">Save Pet</button></div>',
+                '</form>',
+                `<form method="post" action="/admin/pets/${encodeURIComponent(adminPetItem.id)}/delete" onsubmit="return confirm('Delete this pet record? Files and direct pet access will be removed.');"><div class="form-actions"><button type="submit">Delete Pet</button></div></form>`
+              ].join(""),
+              "</section>",
 '<section class="surface-block">',
 "<h2>Pet Workspace</h2>",
 `<div class="form-actions"><a href="/client/form_requests_create.php?form_type=pet_form&pet_id=${encodeURIComponent(adminPetItem.id)}">Create Pet Form</a><a href="/admin/pets/${encodeURIComponent(adminPetItem.id)}/files">Manage Files</a><a href="/admin/pets">Back to Pets</a></div>`,
@@ -15219,11 +15681,11 @@ writeHtml(response, 200, renderLayout({
               loginPath: buildAdminLoginRedirectPath(request),
               title: "Admin Packages",
               result: packages
-            });
-            return;
-          }
+    });
+    return;
+  }
 
-          writeHtml(response, 200, renderLayout({
+  writeHtml(response, 200, renderLayout({
             title: "Admin Packages",
             body: [
               '<article class="content-stack">',
@@ -16030,12 +16492,22 @@ return;
               `<form class="form-grid" method="post" action="${legacyWorkflowEnrollPath ? `/client/workflows_enroll.php?workflow_id=${encodeURIComponent(clients.body.workflow.id)}` : `/admin/workflows/${encodeURIComponent(clients.body.workflow.id)}/enroll`}">`,
               clients.body.items.length === 0
                 ? "<p>No active clients are available for enrollment.</p>"
-                : `<div class="detail-grid">${clients.body.items.map((client) => [
-                  '<label class="detail-card">',
-                  `<div class="detail-card__label"><input type="checkbox" name="clientIds" value="${escapeAttribute(client.clientId)}"${client.alreadyEnrolled ? " disabled" : ""}> ${escapeHtml(client.name)}</div>`,
-                  `<div class="detail-card__value">${escapeHtml(client.email)}${client.alreadyEnrolled ? `<div>${renderStatusPill("Already Enrolled", "info")}</div>` : ""}</div>`,
-                  "</label>"
-                ].join("")).join("")}</div>`,
+                : renderEnhancedCollection({
+                    collectionClassName: "detail-grid",
+                    searchLabel: "Search Clients",
+                    searchPlaceholder: "Search by client name, email, or ID",
+                    emptyMessage: "No clients match this search.",
+                    defaultPageSize: 12,
+                    items: clients.body.items.map((client) => ({
+                      searchText: `${client.name} ${client.email} ${client.clientId}`,
+                      content: [
+                        '<label class="detail-card">',
+                        `<div class="detail-card__label"><input type="checkbox" name="clientIds" value="${escapeAttribute(client.clientId)}"${client.alreadyEnrolled ? " disabled" : ""}> ${escapeHtml(client.name)}</div>`,
+                        `<div class="detail-card__value">${escapeHtml(client.email)}${client.alreadyEnrolled ? `<div>${renderStatusPill("Already Enrolled", "info")}</div>` : ""}</div>`,
+                        "</label>"
+                      ].join("")
+                    }))
+                  }),
               `<div class="form-actions"><button type="submit"${availableCount === 0 ? " disabled" : ""}>Enroll Selected Clients</button><a href="${legacyWorkflowEnrollPath ? `/client/workflows_enrollments.php?workflow_id=${encodeURIComponent(clients.body.workflow.id)}` : `/admin/workflows/${encodeURIComponent(clients.body.workflow.id)}/enrollments`}">View Enrollments</a></div>`,
               "</form>",
               "</section>",
@@ -17024,7 +17496,7 @@ result: forms
 return;
 }
 
-          const clientFilter = url.searchParams.get("client_id")?.trim() ?? "";
+          const clientFilter = readAdminClientPickerQueryValue(url.searchParams, "client_id") ?? "";
           const templateFilter = url.searchParams.get("template_id")?.trim() ?? "";
           const statusFilter = url.searchParams.get("status")?.trim() ?? "";
           const queryFilter = url.searchParams.get("q")?.trim() ?? "";
@@ -17036,7 +17508,7 @@ return;
           });
           const listPath = legacyFormSubmissionsListPath ? "/client/form_submissions_list.php" : "/admin/forms";
           const clientOptions = Array.from(new Map(
-            forms.body.items.map((item) => [item.clientId, getAdminFormSubmissionClientLabel(item)])
+            forms.body.items.map((item) => [item.clientId, `${getAdminFormSubmissionClientLabel(item)} [${item.clientId}]`])
           ).entries()).sort((left, right) => left[1].localeCompare(right[1]));
           const templateOptions = Array.from(new Map(
             forms.body.items.map((item) => [item.templateId, getAdminFormSubmissionTitle(item)])
@@ -17056,7 +17528,14 @@ return;
               "<h2>Filters</h2>",
               `<form class="form-grid" method="get" action="${listPath}">`,
               '<div class="form-grid form-grid--two">',
-              `<label>Client<select name="client_id"><option value="">All Clients</option>${clientOptions.map(([clientId, label]) => `<option value="${escapeAttribute(clientId)}"${clientFilter === clientId ? " selected" : ""}>${escapeHtml(label)}</option>`).join("")}</select></label>`,
+              renderAdminClientPickerField({
+                label: "Client",
+                name: "client_id",
+                options: clientOptions.map(([clientId, label]) => ({ id: clientId, label })),
+                selectedId: clientFilter,
+                placeholder: "Filter by client name or ID",
+                helpText: "Search submissions by client without opening a full dropdown."
+              }),
               `<label>Form Template<select name="template_id"><option value="">All Forms</option>${templateOptions.map(([templateId, label]) => `<option value="${escapeAttribute(templateId)}"${templateFilter === templateId ? " selected" : ""}>${escapeHtml(label)}</option>`).join("")}</select></label>`,
               `<label>Status<select name="status"><option value="">All Statuses</option>${["pending", "draft", "submitted", "reviewed"].map((status) => `<option value="${status}"${statusFilter.toLowerCase() === status ? " selected" : ""}>${escapeHtml(formatAdminFormSubmissionStatus(status))}</option>`).join("")}</select></label>`,
               `<label>Search<input type="search" name="q" value="${escapeAttribute(queryFilter)}" placeholder="Search client, form, pet, booking"></label>`,
