@@ -1816,8 +1816,8 @@ function renderInvoiceStatusPill(status: Invoice["status"]): string {
 
 function renderQuoteStatusPill(status: Quote["status"]): string {
   switch (status) {
-    case "accepted":
-      return renderStatusPill("Accepted", "success");
+  case "accepted":
+    return renderStatusPill("Accepted", "success");
     case "declined":
       return renderStatusPill("Declined", "danger");
     case "expired":
@@ -1828,6 +1828,57 @@ function renderQuoteStatusPill(status: Quote["status"]): string {
     default:
       return renderStatusPill(toTitleCase(status), "default");
   }
+}
+
+function buildQuoteIdentifierDetailItems(quote: Quote): Array<{ label: string; value: string; }> {
+  const quoteNumber = quote.quoteNumber?.trim() ?? "";
+  if (quoteNumber === "" || quoteNumber === quote.id) {
+    return [{ label: "Quote Number", value: escapeHtml(quoteNumber || quote.id) }];
+  }
+
+  return [
+    { label: "Quote Number", value: escapeHtml(quoteNumber) },
+    { label: "Quote ID", value: escapeHtml(quote.id) }
+  ];
+}
+
+function renderQuoteStatusDetail(quote: Quote): string {
+  let summary = "";
+  switch (quote.status) {
+  case "accepted":
+    summary = quote.acceptedAt == null
+      ? "Client has accepted this quote."
+      : `Accepted on ${renderLocalizedDateTime(quote.acceptedAt)}.`;
+    break;
+  case "declined":
+    summary = quote.declinedAt == null
+      ? "Client declined this quote."
+      : `Declined on ${renderLocalizedDateTime(quote.declinedAt)}.`;
+    break;
+  case "expired":
+    summary = quote.expiresAt == null
+      ? "Quote expired before acceptance."
+      : `Expired on ${escapeHtml(formatAdminDate(quote.expiresAt))}.`;
+    break;
+  case "sent":
+    summary = quote.expiresAt == null
+      ? "Awaiting client response."
+      : `Awaiting client response until ${escapeHtml(formatAdminDate(quote.expiresAt))}.`;
+    break;
+  case "draft":
+  default:
+    summary = quote.expiresAt == null
+      ? "Draft only. Not yet sent to client."
+      : `Draft only. Planned to expire ${escapeHtml(formatAdminDate(quote.expiresAt))}.`;
+    break;
+  }
+
+  return [
+    '<div class="detail-card__stack">',
+    renderQuoteStatusPill(quote.status),
+    `<div class="detail-card__meta">${summary}</div>`,
+    "</div>"
+  ].join("");
 }
 
 function renderContractStatusPill(status: Contract["status"]): string {
@@ -2118,6 +2169,55 @@ function renderAdminClientPickerField(input: {
     `<datalist id="${escapeAttribute(listId)}">${input.options.map((option) => `<option value="${escapeAttribute(option.label)}" label="${escapeAttribute(option.id)}"></option>`).join("")}</datalist>`,
     input.helpText == null || input.helpText.trim() === "" ? "" : `<p class="meta">${escapeHtml(input.helpText)}</p>`,
     "</div>"
+  ].join("");
+}
+
+function renderAdminQuoteLineItemRow(title: string): string {
+  return [
+    '<div class="quote-line-item" data-quote-line-item>',
+    '<div class="quote-line-item__header">',
+    `<div class="quote-line-item__title" data-quote-line-item-title>${escapeHtml(title)}</div>`,
+    '<button type="button" data-quote-line-item-remove>Remove Item</button>',
+    "</div>",
+    '<div class="form-grid form-grid--two">',
+    '<label>Service<input type="text" name="itemDescription" placeholder="Private lesson package"></label>',
+    '<label>Quantity<input type="number" name="itemQuantity" min="0" step="0.01" value="0"></label>',
+    '<label>Unit Price<input type="number" name="itemUnitPrice" min="0" step="0.01" value="0"></label>',
+    "</div>",
+    "</div>"
+  ].join("");
+}
+
+function renderAdminQuoteCreateForm(input: {
+  clientPickerOptions: readonly AdminClientPickerOption[];
+  selectedClientId?: string | null;
+}): string {
+  return [
+    '<form class="form-grid" method="post" action="/admin/quotes">',
+    '<div class="form-grid form-grid--two">',
+    renderAdminClientPickerField({
+      label: "Client",
+      name: "clientId",
+      options: input.clientPickerOptions,
+      selectedId: input.selectedClientId,
+      required: true,
+      placeholder: "Search by client name or email",
+      helpText: "Pick client before adding services."
+    }),
+    '<label>Title<input type="text" name="title" placeholder="Optional quote title"></label>',
+    `<label>Expiration Date<input type="date" name="expiresAt" value="${escapeAttribute(new Date().toISOString().slice(0, 10))}"></label>`,
+    '<label>Status<select name="status"><option value="draft">Draft</option><option value="sent" selected>Sent</option><option value="accepted">Accepted</option><option value="declined">Declined</option><option value="expired">Expired</option></select></label>',
+    "</div>",
+    '<label>Description<textarea name="description" rows="4" placeholder="Optional quote notes or summary"></textarea></label>',
+    '<section class="surface-block" data-no-reveal data-admin-quote-line-items>',
+    '<h3>Service Breakdown</h3>',
+    '<p class="section-copy">Start with one line item and add more only when needed.</p>',
+    `<div class="quote-line-items" data-quote-line-items-list>${renderAdminQuoteLineItemRow("Line Item 1")}</div>`,
+    '<div class="form-actions"><button type="button" data-quote-line-item-add>Add Line Item</button></div>',
+    `<template data-quote-line-item-template>${renderAdminQuoteLineItemRow("Line Item")}</template>`,
+    "</section>",
+    '<div class="form-actions"><button type="submit">Create Quote</button></div>',
+    "</form>"
   ].join("");
 }
 
@@ -6888,16 +6988,22 @@ function renderLayout(input: {
     ".surface-block details > summary, details.surface-block > summary { cursor: pointer; }",
     ".inline-link-list { display: flex; flex-wrap: wrap; gap: 0.7rem 1rem; margin: 0 0 1.25rem; color: #64748b; }",
     ".inline-link-list a { font-weight: 500; }",
-    ".detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin: 0 0 1.5rem; }",
-    ".detail-card { padding: 1rem 1.1rem; border-radius: 1rem; border: 1px solid rgba(148, 163, 184, 0.2); background: #f8fafc; }",
-    ".detail-card__label { font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.08em; color: #64748b; }",
-    ".detail-card__value { margin-top: 0.4rem; font-weight: 600; color: #1f2937; word-break: break-word; }",
-    ".status-pill { display: inline-flex; align-items: center; padding: 0.38rem 0.72rem; border-radius: 999px; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.03em; background: #e2e8f0; color: #334155; }",
-    ".status-pill.is-success { background: #dcfce7; color: #166534; }",
-    ".status-pill.is-warning { background: #fef3c7; color: #92400e; }",
-    ".status-pill.is-danger { background: #fee2e2; color: #991b1b; }",
-    ".status-pill.is-info { background: #dbeafe; color: #1d4ed8; }",
-    ".form-grid { display: grid; gap: 1rem; }",
+".detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin: 0 0 1.5rem; }",
+".detail-card { padding: 1rem 1.1rem; border-radius: 1rem; border: 1px solid rgba(148, 163, 184, 0.2); background: #f8fafc; }",
+".detail-card__label { font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.08em; color: #64748b; }",
+".detail-card__value { margin-top: 0.4rem; font-weight: 600; color: #1f2937; word-break: break-word; }",
+".detail-card__stack { display: flex; flex-direction: column; align-items: flex-start; gap: 0.55rem; }",
+".detail-card__meta { font-size: 0.92rem; font-weight: 500; line-height: 1.4; color: #475569; }",
+".status-pill { display: inline-flex; align-items: center; padding: 0.38rem 0.72rem; border-radius: 999px; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.03em; background: #e2e8f0; color: #334155; }",
+".status-pill.is-success { background: #dcfce7; color: #166534; }",
+".status-pill.is-warning { background: #fef3c7; color: #92400e; }",
+".status-pill.is-danger { background: #fee2e2; color: #991b1b; }",
+".status-pill.is-info { background: #dbeafe; color: #1d4ed8; }",
+".quote-line-items { display: grid; gap: 0.9rem; }",
+".quote-line-item { padding: 1rem; border-radius: 0.95rem; border: 1px solid rgba(148, 163, 184, 0.24); background: #ffffff; }",
+".quote-line-item__header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.8rem; margin-bottom: 0.9rem; }",
+".quote-line-item__title { font-size: 0.95rem; font-weight: 700; color: #334155; }",
+".form-grid { display: grid; gap: 1rem; }",
     ".form-grid--two { grid-template-columns: repeat(2, minmax(0, 1fr)); }",
     ".form-actions { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; }",
     ".table-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; }",
@@ -7548,6 +7654,70 @@ function renderLayout(input: {
 " });",
 " }",
 " render();",
+" }",
+" for (const container of root.querySelectorAll('[data-admin-quote-line-items]')) {",
+" if (!(container instanceof HTMLElement) || container.dataset.quoteLineItemsEnhanced === 'true') {",
+" continue;",
+" }",
+" container.dataset.quoteLineItemsEnhanced = 'true';",
+" const list = container.querySelector('[data-quote-line-items-list]');",
+" const template = container.querySelector('template[data-quote-line-item-template]');",
+" const addButton = container.querySelector('[data-quote-line-item-add]');",
+" if (!(list instanceof HTMLElement) || !(template instanceof HTMLTemplateElement)) {",
+" continue;",
+" }",
+" const refreshLineItems = () => {",
+" const items = Array.from(list.querySelectorAll('[data-quote-line-item]')).filter((item) => item instanceof HTMLElement);",
+" items.forEach((item, index) => {",
+" const title = item.querySelector('[data-quote-line-item-title]');",
+" if (title instanceof HTMLElement) {",
+" title.textContent = `Line Item ${index + 1}`;",
+" }",
+" const removeButton = item.querySelector('[data-quote-line-item-remove]');",
+" if (removeButton instanceof HTMLButtonElement) {",
+" const isOnlyItem = items.length <= 1;",
+" removeButton.hidden = isOnlyItem;",
+" removeButton.disabled = isOnlyItem;",
+" }",
+" });",
+" };",
+" const appendLineItem = () => {",
+" const fragment = template.content.cloneNode(true);",
+" list.appendChild(fragment);",
+" refreshLineItems();",
+" const items = list.querySelectorAll('[data-quote-line-item]');",
+" const lastItem = items.item(items.length - 1);",
+" const descriptionInput = lastItem instanceof HTMLElement ? lastItem.querySelector('input[name=\"itemDescription\"]') : null;",
+" if (descriptionInput instanceof HTMLInputElement) {",
+" descriptionInput.focus();",
+" }",
+" };",
+" if (list.querySelectorAll('[data-quote-line-item]').length === 0) {",
+" appendLineItem();",
+" } else {",
+" refreshLineItems();",
+" }",
+" if (addButton instanceof HTMLButtonElement) {",
+" addButton.addEventListener('click', () => {",
+" appendLineItem();",
+" });",
+" }",
+" list.addEventListener('click', (event) => {",
+" const target = event.target;",
+" if (!(target instanceof Element)) {",
+" return;",
+" }",
+" const removeButton = target.closest('[data-quote-line-item-remove]');",
+" if (!(removeButton instanceof HTMLButtonElement)) {",
+" return;",
+" }",
+" const item = removeButton.closest('[data-quote-line-item]');",
+" if (!(item instanceof HTMLElement) || list.querySelectorAll('[data-quote-line-item]').length <= 1) {",
+" return;",
+" }",
+" item.remove();",
+" refreshLineItems();",
+" });",
 " }",
 " };",
 " window.__bdtaEnhanceDynamicContent = enhanceDynamicContent;",
@@ -13632,6 +13802,7 @@ const clientOptions = formType === "booking_form"
               && (
                 url.pathname === "/admin/expenses"
                 || url.pathname === "/admin/invoices"
+                || url.pathname === "/admin/quotes"
               )
             )
           )
@@ -15130,35 +15301,10 @@ if (url.pathname === "/admin/quotes") {
       adminNav,
       '<section id="create-quote" class="surface-block">',
       '<h2>Create Quote</h2>',
-      [
-        '<form class="form-grid" method="post" action="/admin/quotes">',
-        '<div class="form-grid form-grid--two">',
-        renderAdminClientPickerField({
-          label: "Client",
-          name: "clientId",
-          options: clientPickerOptions,
-          selectedId: selectedClientId,
-          required: true,
-          placeholder: "Search by client name or email",
-          helpText: "Pick the client before adding services."
-        }),
-        '<label>Title<input type="text" name="title" placeholder="Optional quote title"></label>',
-        `<label>Expiration Date<input type="date" name="expiresAt" value="${escapeAttribute(new Date().toISOString().slice(0, 10))}"></label>`,
-        '<label>Status<select name="status"><option value="draft">Draft</option><option value="sent" selected>Sent</option><option value="accepted">Accepted</option><option value="declined">Declined</option><option value="expired">Expired</option></select></label>',
-        '</div>',
-        '<label>Description<textarea name="description" rows="4" placeholder="Optional quote notes or summary"></textarea></label>',
-        '<section class="surface-block" data-no-reveal><h3>Service Breakdown</h3><div class="form-grid">' +
-          Array.from({ length: 5 }, (_, index) => [
-            '<div class="form-grid form-grid--two">',
-            `<label>Line Item ${index + 1}<input type="text" name="itemDescription" placeholder="Private lesson package"></label>`,
-            '<label>Quantity<input type="number" name="itemQuantity" min="0" step="0.01" value="1"></label>',
-            '<label>Unit Price<input type="number" name="itemUnitPrice" min="0" step="0.01" value="0"></label>',
-            '</div>'
-          ].join("")).join("") +
-        '</div></section>',
-        '<div class="form-actions"><button type="submit">Create Quote</button></div>',
-        '</form>'
-      ].join(""),
+      renderAdminQuoteCreateForm({
+        clientPickerOptions,
+        selectedClientId
+      }),
       '</section>',
       '<section class="surface-block">',
       '<h2>Quote Pipeline</h2>',
@@ -15214,20 +15360,14 @@ if (adminQuoteDetailMatch != null) {
       '<section class="surface-block">',
       '<h2>Quote Details</h2>',
       renderDetailGrid([
-        { label: "Quote ID", value: escapeHtml(quote.body.item.id) },
-        { label: "Quote Number", value: escapeHtml(quote.body.item.quoteNumber ?? quote.body.item.id) },
+        ...buildQuoteIdentifierDetailItems(quote.body.item),
         { label: "Client", value: clientValue },
         {
           label: "Status",
-          value: renderStatusPill(
-            quote.body.item.status,
-            quote.body.item.status === "accepted" ? "success" : quote.body.item.status === "declined" ? "danger" : "warning"
-          )
+          value: renderQuoteStatusDetail(quote.body.item)
         },
         { label: "Total Amount", value: escapeHtml(formatCurrency(quote.body.item.totalAmount)) },
         { label: "Expires", value: escapeHtml(formatAdminDate(quote.body.item.expiresAt)) },
-        { label: "Accepted", value: quote.body.item.acceptedAt == null ? "Not accepted" : renderLocalizedDateTime(quote.body.item.acceptedAt) },
-        { label: "Declined", value: quote.body.item.declinedAt == null ? "Not declined" : renderLocalizedDateTime(quote.body.item.declinedAt) },
         {
           label: "Public Access",
           value: escapeHtml(quote.body.item.publicAccess?.token ?? "Portal-only")

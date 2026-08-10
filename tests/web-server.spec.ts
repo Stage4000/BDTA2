@@ -4156,20 +4156,48 @@ expect(legacyContractView.headers.get("location")).toBe("/admin/contracts/contra
       },
       redirect: "manual",
       body: new URLSearchParams({
-        clientId: "client-portal-1",
+        clientId: "Portal Client (portal@example.com) [client-portal-1]",
         totalAmount: "180.00",
         dueAt: "2026-06-10",
         status: "sent",
         notes: "Manual billing entry."
       })
     });
+    const createQuoteParams = new URLSearchParams({
+      clientId: "Portal Client (portal@example.com) [client-portal-1]",
+      title: "Board and Train Proposal",
+      expiresAt: "2026-06-12",
+      status: "sent",
+      description: "Initial board and train quote."
+    });
+    createQuoteParams.append("itemDescription", "Board and Train Program");
+    createQuoteParams.append("itemQuantity", "1");
+    createQuoteParams.append("itemUnitPrice", "450.00");
+    for (let index = 0; index < 4; index += 1) {
+      createQuoteParams.append("itemDescription", "");
+      createQuoteParams.append("itemQuantity", "0");
+      createQuoteParams.append("itemUnitPrice", "0");
+    }
+    const createQuote = await fetch(`${baseUrl}/admin/quotes`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        cookie: cookie ?? ""
+      },
+      redirect: "manual",
+      body: createQuoteParams
+    });
 
     expect(createExpense.status).toBe(302);
     expect(createExpense.headers.get("location")).toBe("/admin/expenses/expense-2");
     expect(createInvoice.status).toBe(302);
     expect(createInvoice.headers.get("location")).toBe("/admin/invoices/invoice-2");
+    expect(createQuote.status).toBe(302);
+    expect(createQuote.headers.get("location")).toBe("/admin/quotes/quote-2");
     expect(state.expenses[0]?.description).toBe("Mileage reimbursement");
     expect(state.invoices[0]?.totalAmount).toBe(180);
+    expect(state.quotes[0]?.title).toBe("Board and Train Proposal");
+    expect(state.quotes[0]?.items?.[0]?.description).toBe("Board and Train Program");
 
     const bookings = await fetch(`${baseUrl}/admin/bookings`, { headers: { cookie: cookie ?? "" } });
     const bookingDetail = await fetch(`${baseUrl}/admin/bookings/booking-1`, { headers: { cookie: cookie ?? "" } });
@@ -4253,12 +4281,22 @@ expect(legacyContractView.headers.get("location")).toBe("/admin/contracts/contra
     expect(invoicesHtml).toContain("client-portal-1");
     expect(invoiceDetailHtml).toContain("Invoice Details");
     expect(invoiceDetailHtml).toContain("$125.00");
-      expect(quotesHtml).toContain('href="/admin/quotes/quote-1"');
-      expect(quoteDetailHtml).toContain("Quote Details");
-      expect(quoteDetailHtml).toContain("$450.00");
-      expect(contractsHtml).toContain('href="/admin/contracts/contract-1"');
-      expect(contractDetailHtml).toContain("Contract Details");
-      expect(contractDetailHtml).toContain("contract-1");
+    expect(quotesHtml).toContain('href="/admin/quotes/quote-1"');
+    expect(quotesHtml).toContain("Start with one line item and add more only when needed.");
+    expect(quotesHtml).toContain("Add Line Item");
+    expect(quotesHtml).toContain("Remove Item");
+    expect(quotesHtml).toContain("data-admin-quote-line-items");
+    expect(quotesHtml).not.toContain("Line Item 5");
+    expect(quoteDetailHtml).toContain("Quote Details");
+    expect(quoteDetailHtml).toContain("$450.00");
+    expect(quoteDetailHtml).toContain('detail-card__label">Quote Number<');
+    expect(quoteDetailHtml).not.toContain('detail-card__label">Quote ID<');
+    expect(quoteDetailHtml).toContain("Awaiting client response.");
+    expect(quoteDetailHtml).not.toContain("Not accepted");
+    expect(quoteDetailHtml).not.toContain("Not declined");
+    expect(contractsHtml).toContain('href="/admin/contracts/contract-1"');
+    expect(contractDetailHtml).toContain("Contract Details");
+    expect(contractDetailHtml).toContain("contract-1");
       expect(petsHtml).toContain('href="/admin/pets/pet-1"');
       expect(petDetailHtml).toContain("Pet Details");
       expect(petDetailHtml).toContain("Care Notes");
