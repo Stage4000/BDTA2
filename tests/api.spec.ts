@@ -647,6 +647,14 @@ function createPortalResourceReadDependencies(
       clientId: "client-1",
       name: "Buddy",
       species: "Dog",
+      breed: "Labrador Retriever",
+      age: "4 years",
+      gender: "Male",
+      spayNeuterStatus: "Neutered",
+      vaccineStatus: "Current on core vaccines",
+      behaviorNotes: "Excited greeter with new visitors.",
+      trainingNotes: "Practicing place cue and calm door exits.",
+      medicalNotes: "Takes allergy medication with breakfast.",
       petSittingNotes: "Use the side gate and towel paws before re-entry.",
       archived: false
     } : null,
@@ -842,6 +850,14 @@ function createAdminResourceReadDependencies(
       clientId: "client-1",
       name: "Buddy",
       species: "Dog",
+      breed: "Labrador Retriever",
+      age: "4 years",
+      gender: "Male",
+      spayNeuterStatus: "Neutered",
+      vaccineStatus: "Current on core vaccines",
+      behaviorNotes: "Excited greeter with new visitors.",
+      trainingNotes: "Practicing place cue and calm door exits.",
+      medicalNotes: "Takes allergy medication with breakfast.",
       petSittingNotes: "Use the side gate and towel paws before re-entry.",
       archived: false
     }],
@@ -850,6 +866,14 @@ function createAdminResourceReadDependencies(
       clientId: "client-1",
       name: "Buddy",
       species: "Dog",
+      breed: "Labrador Retriever",
+      age: "4 years",
+      gender: "Male",
+      spayNeuterStatus: "Neutered",
+      vaccineStatus: "Current on core vaccines",
+      behaviorNotes: "Excited greeter with new visitors.",
+      trainingNotes: "Practicing place cue and calm door exits.",
+      medicalNotes: "Takes allergy medication with breakfast.",
       petSittingNotes: "Use the side gate and towel paws before re-entry.",
       archived: false
     } : null,
@@ -858,6 +882,14 @@ function createAdminResourceReadDependencies(
       clientId: input.clientId,
       name: input.name,
       species: input.species,
+      breed: input.breed,
+      age: input.age,
+      gender: input.gender,
+      spayNeuterStatus: input.spayNeuterStatus,
+      vaccineStatus: input.vaccineStatus,
+      behaviorNotes: input.behaviorNotes,
+      trainingNotes: input.trainingNotes,
+      medicalNotes: input.medicalNotes,
       petSittingNotes: input.petSittingNotes,
       archived: input.archived
     }),
@@ -866,6 +898,14 @@ function createAdminResourceReadDependencies(
       clientId: input.clientId,
       name: input.name,
       species: input.species,
+      breed: input.breed,
+      age: input.age,
+      gender: input.gender,
+      spayNeuterStatus: input.spayNeuterStatus,
+      vaccineStatus: input.vaccineStatus,
+      behaviorNotes: input.behaviorNotes,
+      trainingNotes: input.trainingNotes,
+      medicalNotes: input.medicalNotes,
       petSittingNotes: input.petSittingNotes,
       archived: input.archived
     }),
@@ -1037,6 +1077,18 @@ function createAdminResourceReadDependencies(
       })),
       publicAccess: null
     }),
+    listAdminOutboundEmails: async () => [],
+    queueAdminOutboundEmail: async (input) => ({
+      id: "queued-email-1",
+      recipient: input.recipientEmail ?? "client@example.com",
+      subject: input.subject,
+      templateKey: input.templateKey ?? "admin_compose",
+      status: "queued",
+      createdAt: "2026-05-27T18:00:00.000Z",
+      processedAt: null
+    }),
+    listAdminInboundEmails: async () => [],
+    listAdminUnmatchedEmails: async () => [],
     listAdminContracts: async () => [{
       id: "contract-1",
       clientId: "client-1",
@@ -3187,6 +3239,8 @@ it("returns admin job logs and integration callback logs for a valid admin sessi
     expect(pets.body.items[0]?.id).toBe("pet-1");
     expect(pets.body.items[0]?.petSittingNotes).toBe("Use the side gate and towel paws before re-entry.");
     expect(pet.body.item.species).toBe("Dog");
+    expect(pet.body.item.breed).toBe("Labrador Retriever");
+    expect(pet.body.item.medicalNotes).toBe("Takes allergy medication with breakfast.");
     expect(pet.body.item.petSittingNotes).toBe("Use the side gate and towel paws before re-entry.");
     expect(client.body.item.email).toBe("client@example.com");
     expect(booking.body.item.id).toBe("booking-2");

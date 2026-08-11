@@ -4187,6 +4187,50 @@ expect(legacyContractView.headers.get("location")).toBe("/admin/contracts/contra
       redirect: "manual",
       body: createQuoteParams
     });
+    const createPet = await fetch(`${baseUrl}/admin/pets`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        cookie: cookie ?? ""
+      },
+      redirect: "manual",
+      body: new URLSearchParams({
+        clientId: "Portal Client (portal@example.com) [client-portal-1]",
+        name: "Juniper",
+        species: "Dog",
+        breed: "Border Collie",
+        age: "2 years",
+        gender: "Female",
+        spayNeuterStatus: "Spayed",
+        vaccineStatus: "Current on core vaccines",
+        petSittingNotes: "Crate after training sessions.",
+        behaviorNotes: "Alert barks at delivery trucks.",
+        trainingNotes: "Working on threshold waits.",
+        medicalNotes: "Daily probiotic with breakfast."
+      })
+    });
+    const updatePet = await fetch(`${baseUrl}/admin/pets/pet-1`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        cookie: cookie ?? ""
+      },
+      redirect: "manual",
+      body: new URLSearchParams({
+        clientId: "Portal Client (portal@example.com) [client-portal-1]",
+        name: "Buddy",
+        species: "Dog",
+        breed: "Labrador Retriever",
+        age: "4 years",
+        gender: "Male",
+        spayNeuterStatus: "Neutered",
+        vaccineStatus: "Current on core vaccines",
+        petSittingNotes: "Use the side gate and towel paws before re-entry.",
+        behaviorNotes: "Excited greeter with new visitors.",
+        trainingNotes: "Practicing place cue and calm door exits.",
+        medicalNotes: "Takes allergy medication with breakfast."
+      })
+    });
 
     expect(createExpense.status).toBe(302);
     expect(createExpense.headers.get("location")).toBe("/admin/expenses/expense-2");
@@ -4194,10 +4238,16 @@ expect(legacyContractView.headers.get("location")).toBe("/admin/contracts/contra
     expect(createInvoice.headers.get("location")).toBe("/admin/invoices/invoice-2");
     expect(createQuote.status).toBe(302);
     expect(createQuote.headers.get("location")).toBe("/admin/quotes/quote-2");
+    expect(createPet.status).toBe(302);
+    expect(createPet.headers.get("location")).toBe("/admin/pets/pet-2");
+    expect(updatePet.status).toBe(302);
+    expect(updatePet.headers.get("location")).toBe("/admin/pets/pet-1");
     expect(state.expenses[0]?.description).toBe("Mileage reimbursement");
     expect(state.invoices[0]?.totalAmount).toBe(180);
     expect(state.quotes[0]?.title).toBe("Board and Train Proposal");
     expect(state.quotes[0]?.items?.[0]?.description).toBe("Board and Train Program");
+    expect(state.pets.find((pet) => pet.id === "pet-2")?.breed).toBe("Border Collie");
+    expect(state.pets.find((pet) => pet.id === "pet-1")?.medicalNotes).toBe("Takes allergy medication with breakfast.");
 
     const bookings = await fetch(`${baseUrl}/admin/bookings`, { headers: { cookie: cookie ?? "" } });
     const bookingDetail = await fetch(`${baseUrl}/admin/bookings/booking-1`, { headers: { cookie: cookie ?? "" } });
@@ -4258,12 +4308,14 @@ expect(legacyContractView.headers.get("location")).toBe("/admin/contracts/contra
  expect(bookingsHtml).toContain("client-portal-1");
  expect(bookingsHtml).toContain('name="client_id"');
  expect(bookingsHtml).toContain('name="pet_id"');
- expect(bookingsHtml).toContain('name="status"');
- expect(bookingsHtml).toContain('name="timeframe"');
- expect(bookingsHtml).toContain("Apply Filters");
- expect(bookingsHtml).toContain('/admin/bookings?client_id=client-portal-1');
- expect(bookingsHtml).toContain("Search by client name, pet name, appointment type, or booking ID");
- expect(bookingDetailHtml).toContain("Booking Details");
+    expect(bookingsHtml).toContain('name="status"');
+    expect(bookingsHtml).toContain('name="timeframe"');
+    expect(bookingsHtml).toContain("Apply Filters");
+    expect(bookingsHtml).toContain('/admin/bookings?client_id=client-portal-1');
+    expect(bookingsHtml).toContain("Search by client name, pet name, appointment type, or booking ID");
+    expect(bookingsHtml).toContain('data-mobile-layout="scroll"');
+    expect(bookingsHtml).toContain("--data-table-mobile-min-width: 56rem;");
+    expect(bookingDetailHtml).toContain("Booking Details");
  expect(bookingDetailHtml).toContain("client-portal-1");
  expect(bookingDetailHtml).toContain("Duration");
  expect(bookingDetailHtml).toContain("Timing");
@@ -4298,12 +4350,20 @@ expect(legacyContractView.headers.get("location")).toBe("/admin/contracts/contra
     expect(contractDetailHtml).toContain("Contract Details");
     expect(contractDetailHtml).toContain("contract-1");
       expect(petsHtml).toContain('href="/admin/pets/pet-1"');
-      expect(petDetailHtml).toContain("Pet Details");
-      expect(petDetailHtml).toContain("Care Notes");
- expect(petDetailHtml).toContain("Stored Files");
- expect(petDetailHtml).toContain("Owner Profile");
- expect(petDetailHtml).toContain("Buddy");
- expect(petDetailHtml).toContain('/admin/bookings?pet_id=pet-1');
+    expect(petDetailHtml).toContain("Pet Details");
+    expect(petDetailHtml).toContain("Care Notes");
+    expect(petDetailHtml).toContain("Behavior Notes");
+    expect(petDetailHtml).toContain("Training Notes");
+    expect(petDetailHtml).toContain("Medical Notes");
+    expect(petDetailHtml).toContain("Stored Files");
+    expect(petDetailHtml).toContain("Owner Profile");
+    expect(petDetailHtml).toContain("Buddy");
+    expect(petDetailHtml).toContain("Labrador Retriever");
+    expect(petDetailHtml).toContain("4 years");
+    expect(petDetailHtml).toContain("Neutered");
+    expect(petDetailHtml).toContain("Excited greeter with new visitors.");
+    expect(petDetailHtml).toContain("Takes allergy medication with breakfast.");
+    expect(petDetailHtml).toContain('/admin/bookings?pet_id=pet-1');
  expect(petDetailHtml).toContain('/client/form_requests_create.php?form_type=pet_form&pet_id=pet-1');
     expect(packagesHtml).toContain('href="/admin/packages/package-1"');
     expect(packagesHtml).toContain("Included Credits");
@@ -4316,10 +4376,12 @@ expect(legacyContractView.headers.get("location")).toBe("/admin/contracts/contra
     expect(creditDetailHtml).toContain("Credit Details");
     expect(creditDetailHtml).toContain("Appointment Type");
     expect(creditDetailHtml).toContain("4");
-      expect(formsHtml).toContain('href="/admin/forms/form-1"');
-      expect(formDetailHtml).toContain("Review Status");
-      expect(formDetailHtml).toContain("Follow-up Note");
-    } finally {
+    expect(formsHtml).toContain('href="/admin/forms/form-1"');
+    expect(formDetailHtml).toContain("Review Status");
+    expect(formDetailHtml).toContain("Follow-up Note");
+    expect(formDetailHtml).toContain("submitted-form-sheet");
+    expect(formDetailHtml).toContain("submitted-form-field__value");
+  } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((error?: Error) => error ? reject(error) : resolve());
       });

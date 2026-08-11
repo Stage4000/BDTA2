@@ -206,6 +206,14 @@ export const petSchema = z.object({
   clientId: idSchema,
   name: z.string().min(1),
   species: z.string().min(1),
+  breed: z.string().optional(),
+  age: z.string().optional(),
+  gender: z.string().optional(),
+  spayNeuterStatus: z.string().optional(),
+  vaccineStatus: z.string().optional(),
+  behaviorNotes: z.string().optional(),
+  trainingNotes: z.string().optional(),
+  medicalNotes: z.string().optional(),
   petSittingNotes: z.string(),
   archived: z.boolean()
 });

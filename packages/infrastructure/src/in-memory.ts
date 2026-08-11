@@ -1912,6 +1912,30 @@ function toClientProfile(user: InMemoryPortalUser): ClientProfile {
   };
 }
 
+function normalizePetMetadataValue(value: string | undefined): string | undefined {
+  const trimmed = value?.trim() ?? "";
+  return trimmed === "" ? undefined : trimmed;
+}
+
+function buildInMemoryPetRecord(id: string, input: Omit<Pet, "id">): Pet {
+  return {
+    id,
+    clientId: input.clientId,
+    name: input.name,
+    species: input.species,
+    breed: normalizePetMetadataValue(input.breed),
+    age: normalizePetMetadataValue(input.age),
+    gender: normalizePetMetadataValue(input.gender),
+    spayNeuterStatus: normalizePetMetadataValue(input.spayNeuterStatus),
+    vaccineStatus: normalizePetMetadataValue(input.vaccineStatus),
+    behaviorNotes: normalizePetMetadataValue(input.behaviorNotes),
+    trainingNotes: normalizePetMetadataValue(input.trainingNotes),
+    medicalNotes: normalizePetMetadataValue(input.medicalNotes),
+    petSittingNotes: input.petSittingNotes.trim(),
+    archived: input.archived
+  };
+}
+
 function createClientProfileDependencies(state: InMemoryPlatformState): ClientProfileDependencies {
   async function isClientEmailInUse(email: string, excludeClientId: string | null): Promise<boolean> {
     return state.portalUsers.some((user) => user.email === email && user.clientId !== excludeClientId);
@@ -2311,14 +2335,7 @@ function createAdminResourceReadDependencies(state: InMemoryPlatformState): Admi
     listAdminPets: async () => state.pets,
     findAdminPetById: async (petId) => state.pets.find((pet) => pet.id === petId) ?? null,
     createAdminPet: async (input) => {
-      const item: Pet = {
-        id: `pet-${state.pets.length + 1}`,
-        clientId: input.clientId,
-        name: input.name,
-        species: input.species,
-        petSittingNotes: input.petSittingNotes,
-        archived: input.archived
-      };
+      const item = buildInMemoryPetRecord(`pet-${state.pets.length + 1}`, input);
       state.pets.unshift(item);
       return item;
     },
@@ -2328,14 +2345,10 @@ function createAdminResourceReadDependencies(state: InMemoryPlatformState): Admi
         return null;
       }
 
-      const item: Pet = {
+      const item = buildInMemoryPetRecord(petId, {
         ...current,
-        clientId: input.clientId,
-        name: input.name,
-        species: input.species,
-        petSittingNotes: input.petSittingNotes,
-        archived: input.archived
-      };
+        ...input
+      });
       state.pets = state.pets.map((pet) => pet.id === petId ? item : pet);
       return item;
     },
@@ -2419,6 +2432,15 @@ function createAdminResourceReadDependencies(state: InMemoryPlatformState): Admi
         dueAt: input.dueAt
       };
       state.invoices.unshift(item);
+      const invoiceClient = state.portalUsers.find((candidate) => candidate.clientId === input.clientId);
+      if (input.status === "sent" && invoiceClient?.email) {
+        state.queuedEmails.push({
+          to: [invoiceClient.email],
+          subject: `Invoice ${item.id} is ready`,
+          html: `<p>Hello ${invoiceClient.displayName},</p><p>Your invoice is ready.</p><p><a href="https://portal.example.test/portal/invoices/${item.id}">Open invoice</a></p>`,
+          templateKey: "admin_invoice_created"
+        });
+      }
       return item;
     },
     listAdminQuotes: async () => state.quotes,
@@ -2455,8 +2477,97 @@ function createAdminResourceReadDependencies(state: InMemoryPlatformState): Admi
         }
       };
       state.quotes.unshift(item);
+      const quoteClient = state.portalUsers.find((candidate) => candidate.clientId === input.clientId);
+      if (input.status === "sent" && quoteClient?.email) {
+        state.queuedEmails.push({
+          to: [quoteClient.email],
+          subject: `Quote ${item.quoteNumber ?? item.id} is ready to review`,
+          html: `<p>Hello ${quoteClient.displayName},</p><p>Your quote is ready.</p><p><a href="https://portal.example.test/backend/public/quote.php?id=${item.id}&token=${item.publicAccess?.token ?? ""}">Review quote</a></p>`,
+          templateKey: "admin_quote_created"
+        });
+      }
       return item;
     },
+    listAdminOutboundEmails: async (limit = 100) => {
+      const queued = state.queuedEmails.map((message, index) => ({
+        id: `queued-${index + 1}`,
+        recipient: message.to[0] ?? "",
+        subject: message.subject,
+        templateKey: message.templateKey,
+        status: "queued" as const,
+        createdAt: state.now(),
+        processedAt: null
+      }));
+      const sent = state.sentEmails.map((message, index) => ({
+        id: `sent-${index + 1}`,
+        recipient: message.to[0] ?? "",
+        subject: message.subject,
+        templateKey: message.templateKey,
+        status: "sent" as const,
+        createdAt: state.now(),
+        processedAt: state.now()
+      }));
+      const failed = state.failedEmailAttempts.map((attempt, index) => ({
+        id: `failed-${index + 1}`,
+        recipient: attempt.message.to[0] ?? "",
+        subject: attempt.message.subject,
+        templateKey: attempt.message.templateKey,
+        status: "failed" as const,
+        createdAt: state.now(),
+        processedAt: state.now()
+      }));
+      return [...queued, ...sent, ...failed].slice(0, Math.max(1, Math.trunc(limit)));
+    },
+    queueAdminOutboundEmail: async (input) => {
+      const client = input.clientId == null ? null : state.portalUsers.find((candidate) => candidate.clientId === input.clientId) ?? null;
+      const recipient = ((input.recipientEmail?.trim() ?? "") || client?.email) ?? "";
+      const message = {
+        to: [recipient],
+        subject: input.subject,
+        html: input.html,
+        templateKey: input.templateKey?.trim() === "" ? "admin_compose" : input.templateKey ?? "admin_compose"
+      };
+      state.queuedEmails.push(message);
+      return {
+        id: `queued-${state.queuedEmails.length}`,
+        recipient,
+        subject: message.subject,
+        templateKey: message.templateKey,
+        status: "queued" as const,
+        createdAt: state.now(),
+        processedAt: null
+      };
+    },
+    listAdminInboundEmails: async (limit = 100) => state.inboundEmails
+      .slice()
+      .sort((left, right) => right.receivedAt.localeCompare(left.receivedAt) || right.id.localeCompare(left.id))
+      .slice(0, Math.max(1, Math.trunc(limit)))
+      .map((item) => ({
+        id: item.id,
+        provider: item.provider,
+        mailbox: item.mailbox,
+        messageId: item.messageId,
+        receivedAt: item.receivedAt,
+        fromEmail: item.fromEmail,
+        subject: item.subject,
+        matchedClientId: item.matchedClientId
+      })),
+    listAdminUnmatchedEmails: async (limit = 100) => state.unmatchedEmails
+      .slice()
+      .sort((left, right) => right.detectedAt.localeCompare(left.detectedAt) || right.id.localeCompare(left.id))
+      .slice(0, Math.max(1, Math.trunc(limit)))
+      .map((item) => {
+        const inbound = state.inboundEmails.find((candidate) => candidate.id === item.inboundEmailId) ?? null;
+        return {
+          id: item.id,
+          inboundEmailId: item.inboundEmailId,
+          reason: item.reason,
+          detectedAt: item.detectedAt,
+          resolvedAt: item.resolvedAt,
+          fromEmail: inbound?.fromEmail ?? null,
+          subject: inbound?.subject ?? null
+        };
+      }),
     listAdminContracts: async () => state.contracts,
     findAdminContractById: async (contractId) => state.contracts.find((contract) => contract.id === contractId) ?? null,
     listAdminForms: async () => state.formSubmissions

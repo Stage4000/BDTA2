@@ -20,6 +20,7 @@ import {
   SessionActorError,
   signPublicContract,
   submitPublicForm,
+  type AdminPetMutationInput,
   type PublicPackageCheckoutForm,
   getPublicBlogPostDetail,
   getPublicSitePage,
@@ -1651,6 +1652,8 @@ function renderDataTable(input: {
   headers: string[];
   rows: string[][];
   emptyMessage: string;
+  mobileLayout?: "stacked" | "scroll";
+  mobileMinWidth?: string;
 }): string {
   if (input.rows.length === 0) {
     return `<p>${escapeHtml(input.emptyMessage)}</p>`;
@@ -1658,7 +1661,7 @@ function renderDataTable(input: {
 
   return [
     '<div class="data-table">',
-    `<div class="data-table__surface" data-enhanced-table data-empty-message="${escapeAttribute(input.emptyMessage)}">`,
+    `<div class="data-table__surface" data-enhanced-table data-empty-message="${escapeAttribute(input.emptyMessage)}" data-mobile-layout="${escapeAttribute(input.mobileLayout ?? "stacked")}"${input.mobileMinWidth == null ? "" : ` style="--data-table-mobile-min-width: ${escapeAttribute(input.mobileMinWidth)};"`}>`,
     '<div class="data-table__toolbar" data-enhanced-table-toolbar hidden>',
     '<label class="data-table__search">',
     '<span class="data-table__search-label">Search this list</span>',
@@ -2170,6 +2173,45 @@ function renderAdminClientPickerField(input: {
     input.helpText == null || input.helpText.trim() === "" ? "" : `<p class="meta">${escapeHtml(input.helpText)}</p>`,
     "</div>"
   ].join("");
+}
+
+type AdminPetFormValues = {
+  name: string;
+  species: string;
+  breed?: string;
+  age?: string;
+  gender?: string;
+  spayNeuterStatus?: string;
+  vaccineStatus?: string;
+  behaviorNotes?: string;
+  trainingNotes?: string;
+  medicalNotes?: string;
+  petSittingNotes?: string;
+};
+
+function renderAdminPetFormFields(input: AdminPetFormValues): string {
+  return [
+    '<div class="form-grid form-grid--two">',
+    `<label>Name<input type="text" name="name" value="${escapeAttribute(input.name)}" required></label>`,
+    `<label>Species<input type="text" name="species" value="${escapeAttribute(input.species)}" required></label>`,
+    `<label>Breed<input type="text" name="breed" value="${escapeAttribute(input.breed ?? "")}" placeholder="German Shepherd mix"></label>`,
+    `<label>Age<input type="text" name="age" value="${escapeAttribute(input.age ?? "")}" placeholder="3 years"></label>`,
+    `<label>Gender<input type="text" name="gender" value="${escapeAttribute(input.gender ?? "")}" placeholder="Female"></label>`,
+    `<label>Spay / Neuter Status<input type="text" name="spayNeuterStatus" value="${escapeAttribute(input.spayNeuterStatus ?? "")}" placeholder="Spayed"></label>`,
+    `<label>Vaccine Status<input type="text" name="vaccineStatus" value="${escapeAttribute(input.vaccineStatus ?? "")}" placeholder="Current on core vaccines"></label>`,
+    "</div>",
+    '<div class="form-grid form-grid--two">',
+    `<label>Care Notes<textarea name="petSittingNotes" rows="4" placeholder="Medication, handling notes, feeding reminders, gate code, or household context.">${escapeHtml(input.petSittingNotes ?? "")}</textarea></label>`,
+    `<label>Behavior Notes<textarea name="behaviorNotes" rows="4" placeholder="Reactivity, triggers, social preferences, or handling concerns.">${escapeHtml(input.behaviorNotes ?? "")}</textarea></label>`,
+    `<label>Training Notes<textarea name="trainingNotes" rows="4" placeholder="Current goals, cues, progress, or homework already assigned.">${escapeHtml(input.trainingNotes ?? "")}</textarea></label>`,
+    `<label>Medical Notes<textarea name="medicalNotes" rows="4" placeholder="Conditions, medications, injuries, or vet guidance to remember.">${escapeHtml(input.medicalNotes ?? "")}</textarea></label>`,
+    "</div>"
+  ].join("");
+}
+
+function renderPetFieldValue(value: string | undefined, emptyMessage = "Not provided"): string {
+  const normalized = value?.trim() ?? "";
+  return normalized === "" ? emptyMessage : escapeHtml(normalized);
 }
 
 function renderAdminQuoteLineItemRow(title: string): string {
@@ -4186,6 +4228,41 @@ function renderLegacyPublicFormResponses(submission: FormSubmission): string {
   }
 
   return `<div class="detail-grid">${rows.join("")}</div>`;
+}
+
+function renderSubmittedFormSheet(items: Array<{ label: string; value: string; }>, emptyMessage: string): string {
+  if (items.length === 0) {
+    return `<p class="section-copy">${escapeHtml(emptyMessage)}</p>`;
+  }
+
+  return `<div class="submitted-form-sheet">${items.map((item) => [
+    '<section class="submitted-form-field">',
+    `<div class="submitted-form-field__label">${escapeHtml(item.label)}</div>`,
+    `<div class="submitted-form-field__value">${item.value}</div>`,
+    "</section>"
+  ].join("")).join("")}</div>`;
+}
+
+function renderAdminFormSubmissionResponses(submission: FormSubmission): string {
+  const fields = submission.templateFields ?? [];
+  const responses = submission.responses ?? [];
+  const items = fields
+    .flatMap((rawField, index) => {
+      const fieldType = typeof rawField.type === "string" ? rawField.type.trim().toLowerCase() : "text";
+      if (isLegacyPublicDisplayOnlyField(fieldType)) {
+        return [];
+      }
+
+      const label = typeof rawField.label === "string" && rawField.label.trim() !== ""
+        ? rawField.label.trim()
+        : `Field ${index + 1}`;
+      return [{
+        label,
+        value: formatLegacyPublicFormResponseValue(responses[index])
+      }];
+    });
+
+  return renderSubmittedFormSheet(items, "No submitted responses stored for this form yet.");
 }
 
 function formatAdminDate(value: string | null | undefined): string {
@@ -6834,10 +6911,11 @@ function renderLayout(input: {
     '<a class="app-sidebar__link" href="/admin/workflows">Workflows</a>',
     '<a class="app-sidebar__link" href="/admin/appointment-types">Appointment Types</a>',
     '<a class="app-sidebar__link" href="/admin/packages">Packages</a>',
-    '<a class="app-sidebar__link" href="/admin/credits">Credits</a>',
-    '<a class="app-sidebar__link" href="/admin/form-templates">Form Templates</a>',
-    '<a class="app-sidebar__link" href="/admin/email-templates">Email Templates</a>',
-    '<a class="app-sidebar__link" href="/admin/scheduled-tasks">Scheduled Tasks</a>',
+  '<a class="app-sidebar__link" href="/admin/credits">Credits</a>',
+  '<a class="app-sidebar__link" href="/admin/form-templates">Form Templates</a>',
+  '<a class="app-sidebar__link" href="/admin/emails">Emails</a>',
+  '<a class="app-sidebar__link" href="/admin/email-templates">Email Templates</a>',
+  '<a class="app-sidebar__link" href="/admin/scheduled-tasks">Scheduled Tasks</a>',
     '<a class="app-sidebar__link" href="/admin/blog-posts">Blog Posts</a>',
     '<a class="app-sidebar__link" href="/admin/site-pages">Site Pages</a>',
     '<a class="app-sidebar__link" href="/admin/settings">Settings</a>',
@@ -6994,6 +7072,12 @@ function renderLayout(input: {
 ".detail-card__value { margin-top: 0.4rem; font-weight: 600; color: #1f2937; word-break: break-word; }",
 ".detail-card__stack { display: flex; flex-direction: column; align-items: flex-start; gap: 0.55rem; }",
 ".detail-card__meta { font-size: 0.92rem; font-weight: 500; line-height: 1.4; color: #475569; }",
+".submitted-form-sheet { display: grid; gap: 1rem; margin: 0 0 1.5rem; }",
+".submitted-form-field { display: grid; gap: 0.5rem; }",
+".submitted-form-field__label { font-size: 0.76rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #64748b; }",
+".submitted-form-field__value { min-height: 3.2rem; padding: 0.9rem 1rem; border-radius: 0.95rem; border: 1px solid rgba(148, 163, 184, 0.22); background: #f8fafc; color: #1f2937; font-weight: 500; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }",
+".submitted-form-field__value pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.92rem; }",
+".submitted-form-field__value .meta { color: #64748b; }",
 ".status-pill { display: inline-flex; align-items: center; padding: 0.38rem 0.72rem; border-radius: 999px; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.03em; background: #e2e8f0; color: #334155; }",
 ".status-pill.is-success { background: #dcfce7; color: #166534; }",
 ".status-pill.is-warning { background: #fef3c7; color: #92400e; }",
@@ -7053,12 +7137,15 @@ function renderLayout(input: {
     "html[data-bs-theme='dark'] h1, html[data-bs-theme='dark'] h2, html[data-bs-theme='dark'] h3, html[data-bs-theme='dark'] h4, html[data-bs-theme='dark'] h5, html[data-bs-theme='dark'] h6 { color: #f8fafc; }",
     "html[data-bs-theme='dark'] label { color: #e2e8f0; }",
     "html[data-bs-theme='dark'] input, html[data-bs-theme='dark'] textarea, html[data-bs-theme='dark'] select { background: rgba(15, 23, 42, 0.92); color: #f8fafc; border-color: rgba(148, 163, 184, 0.26); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03); }",
-    "html[data-bs-theme='dark'] input::placeholder, html[data-bs-theme='dark'] textarea::placeholder { color: #94a3b8; }",
-    "html[data-bs-theme='dark'] input:disabled, html[data-bs-theme='dark'] textarea:disabled, html[data-bs-theme='dark'] select:disabled { background: rgba(30, 41, 59, 0.94); color: #cbd5e1; -webkit-text-fill-color: #cbd5e1; opacity: 1; }",
-    "html[data-bs-theme='dark'] .detail-card { background: rgba(30, 41, 59, 0.76); border-color: rgba(148, 163, 184, 0.18); }",
-    "html[data-bs-theme='dark'] .detail-card__label { color: #94a3b8; }",
-    "html[data-bs-theme='dark'] .detail-card__value { color: #f8fafc; }",
-    "html[data-bs-theme='dark'] .site-header { background: rgba(15, 23, 42, 0.94); border-bottom-color: rgba(148, 163, 184, 0.18); }",
+"html[data-bs-theme='dark'] input::placeholder, html[data-bs-theme='dark'] textarea::placeholder { color: #94a3b8; }",
+"html[data-bs-theme='dark'] input:disabled, html[data-bs-theme='dark'] textarea:disabled, html[data-bs-theme='dark'] select:disabled { background: rgba(30, 41, 59, 0.94); color: #cbd5e1; -webkit-text-fill-color: #cbd5e1; opacity: 1; }",
+"html[data-bs-theme='dark'] .detail-card { background: rgba(30, 41, 59, 0.76); border-color: rgba(148, 163, 184, 0.18); }",
+"html[data-bs-theme='dark'] .detail-card__label { color: #94a3b8; }",
+"html[data-bs-theme='dark'] .detail-card__value { color: #f8fafc; }",
+"html[data-bs-theme='dark'] .submitted-form-field__label { color: #94a3b8; }",
+"html[data-bs-theme='dark'] .submitted-form-field__value { background: rgba(30, 41, 59, 0.76); border-color: rgba(148, 163, 184, 0.18); color: #f8fafc; }",
+"html[data-bs-theme='dark'] .submitted-form-field__value .meta { color: #cbd5e1; }",
+"html[data-bs-theme='dark'] .site-header { background: rgba(15, 23, 42, 0.94); border-bottom-color: rgba(148, 163, 184, 0.18); }",
     "html[data-bs-theme='dark'] .navbar-brand, html[data-bs-theme='dark'] .nav-link { color: #e2e8f0; }",
     "html[data-bs-theme='dark'] .nav-link:hover { background: rgba(154, 0, 115, 0.22); color: #f8fafc; }",
     "html[data-bs-theme='dark'] .nav-link.active { background: rgba(154, 0, 115, 0.28); color: #f8fafc; box-shadow: inset 0 0 0 1px rgba(244, 114, 182, 0.26); }",
@@ -7249,7 +7336,8 @@ function renderLayout(input: {
     ".settings-current-value-panel { padding: 1rem 1.05rem; border-radius: 1rem; border: 1px solid rgba(148, 163, 184, 0.2); background: #f8fafc; margin-bottom: 0.8rem; }",
     ".settings-editor-shell .quick-link-card { box-shadow: none; }",
   "@media (max-width: 960px) { .app-layout, .app-layout.is-sidebar-collapsed, .auth-shell { grid-template-columns: 1fr; } .app-mobile-navbar { display: flex; } .app-sidebar { display: none; padding-top: 1rem; } .app-layout.is-sidebar-open .app-sidebar { display: block; } .app-main-shell { display: block; } .app-main-toolbar { display: none; } .app-main-content, .auth-main, .auth-shell__hero, .auth-shell__panel { padding: 1rem; } .navbar { flex-direction: column; align-items: flex-start; } .form-grid--two, .settings-shell, .settings-console__hero, .settings-detail-grid, .settings-card__meta-grid { grid-template-columns: 1fr; } .settings-sidebar { position: static; } .settings-sidebar__nav { max-height: none; overflow: visible; padding-right: 0; } .marketing-hero__grid, .about-panel__grid, .contact-panel__grid, .booking-shell__grid, .article-shell, .program-grid, .resource-grid, .process-grid, .story-grid, .testimonial-grid, .service-overview-grid, .featured-story__layout { grid-template-columns: 1fr; } .settings-console-toolbar, .settings-card__footer, .settings-detail-hero { align-items: stretch; } .public-cta-banner { flex-direction: column; align-items: flex-start; } .hero-media-frame { min-height: 280px; } .public-site-footer__inner { align-items: flex-start; } .public-social-slot--footer { justify-items: start; } }",
-    "@media (max-width: 767.98px) { .data-table__toolbar, .data-table__pagination { padding-left: 0.85rem; padding-right: 0.85rem; } .data-table__status, .enhanced-collection__status { justify-content: flex-start; } .enhanced-collection__toolbar { align-items: stretch; } .data-table thead { display: none; } .data-table table, .data-table tbody, .data-table tr, .data-table td { display: block; width: 100%; } .data-table tbody { display: grid; gap: 0.75rem; padding: 0.85rem; } .data-table tbody tr { overflow: hidden; border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 0.95rem; background: #fff; box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05); } .data-table tbody tr td { display: grid; grid-template-columns: minmax(0, 8rem) minmax(0, 1fr); gap: 0.75rem; align-items: start; } .data-table td::before { content: attr(data-label); font-size: 0.74rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #64748b; } .data-table td:last-child { border-bottom: 0; } }",
+    "@media (max-width: 767.98px) { .data-table__toolbar, .data-table__pagination { padding-left: 0.85rem; padding-right: 0.85rem; } .data-table__status, .enhanced-collection__status { justify-content: flex-start; } .enhanced-collection__toolbar { align-items: stretch; } .data-table__surface[data-mobile-layout='stacked'] thead { display: none; } .data-table__surface[data-mobile-layout='stacked'] table, .data-table__surface[data-mobile-layout='stacked'] tbody, .data-table__surface[data-mobile-layout='stacked'] tr, .data-table__surface[data-mobile-layout='stacked'] td { display: block; width: 100%; } .data-table__surface[data-mobile-layout='stacked'] tbody { display: grid; gap: 0.75rem; padding: 0.85rem; } .data-table__surface[data-mobile-layout='stacked'] tbody tr { overflow: hidden; border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 0.95rem; background: #fff; box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05); } .data-table__surface[data-mobile-layout='stacked'] tbody tr td { display: grid; grid-template-columns: minmax(0, 7rem) minmax(0, 1fr); gap: 0.75rem; align-items: start; } .data-table__surface[data-mobile-layout='stacked'] td::before { content: attr(data-label); font-size: 0.74rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #64748b; } .data-table__surface[data-mobile-layout='stacked'] td:last-child { border-bottom: 0; } .data-table__surface[data-mobile-layout='scroll'] .data-table__viewport { overflow-x: auto; -webkit-overflow-scrolling: touch; } .data-table__surface[data-mobile-layout='scroll'] table { min-width: var(--data-table-mobile-min-width, 48rem); } .data-table__surface[data-mobile-layout='scroll'] th, .data-table__surface[data-mobile-layout='scroll'] td { white-space: nowrap; padding: 0.85rem 0.9rem; } .data-table__surface[data-mobile-layout='scroll'] td::before { content: none; } }",
+    "@media (max-width: 575.98px) { .data-table__surface[data-mobile-layout='stacked'] tbody tr td { grid-template-columns: minmax(0, 1fr); gap: 0.45rem; padding-top: 0.8rem; padding-bottom: 0.8rem; } .data-table__surface[data-mobile-layout='stacked'] td::before { display: block; } .data-table__surface[data-mobile-layout='stacked'] .status-pill { width: fit-content; max-width: 100%; } .data-table__surface[data-mobile-layout='stacked'] .table-actions { justify-content: flex-start; flex-wrap: wrap; } }",
     "@media (max-width: 767.98px) { .btn.public-theme-toggle { right: 1rem; left: auto; bottom: calc(5rem + env(safe-area-inset-bottom, 0px)); } }",
     `${input.css ?? ""}`,
     "</style>",
@@ -8024,6 +8112,23 @@ function readOptionalTimestampFormValue(form: URLSearchParams, key: string): str
 function readCheckedFormValue(form: URLSearchParams, key: string): boolean {
   const value = form.get(key);
   return value === "on" || value === "true" || value === "1";
+}
+
+function readAdminPetFormInput(form: URLSearchParams): Omit<AdminPetMutationInput, "clientId"> {
+  return {
+    name: readRequiredFormValue(form, "name"),
+    species: readRequiredFormValue(form, "species"),
+    breed: readOptionalFormValue(form, "breed") ?? "",
+    age: readOptionalFormValue(form, "age") ?? "",
+    gender: readOptionalFormValue(form, "gender") ?? "",
+    spayNeuterStatus: readOptionalFormValue(form, "spayNeuterStatus") ?? "",
+    vaccineStatus: readOptionalFormValue(form, "vaccineStatus") ?? "",
+    behaviorNotes: readOptionalFormValue(form, "behaviorNotes") ?? "",
+    trainingNotes: readOptionalFormValue(form, "trainingNotes") ?? "",
+    medicalNotes: readOptionalFormValue(form, "medicalNotes") ?? "",
+    petSittingNotes: readOptionalFormValue(form, "petSittingNotes") ?? "",
+    archived: readCheckedFormValue(form, "archived")
+  };
 }
 
 function readIntegerFormValue(form: URLSearchParams, key: string, fallback: number): number {
@@ -11521,15 +11626,44 @@ const adminPackageDetailMatch = /^\/admin\/packages\/([^/]+)$/.exec(url.pathname
           return;
         }
 
-        redirect(response, `/admin/scheduled-tasks/${encodeURIComponent(taskId)}`);
-        return;
-      }
+  redirect(response, `/admin/scheduled-tasks/${encodeURIComponent(taskId)}`);
+  return;
+}
 
-      if (method === "POST" && handlers != null && url.pathname === "/portal/profile") {
-        const session = await loadPersistedSession(resolved.sessionStore, request);
-        if (session == null) {
-          redirect(response, buildPortalLoginRedirectPath(request));
-          return;
+if (method === "POST" && resolved.api != null && url.pathname === "/admin/emails") {
+  const session = await loadPersistedSession(resolved.sessionStore, request);
+  if (session == null) {
+    redirect(response, buildAdminLoginRedirectPath(request));
+    return;
+  }
+
+  try {
+    const form = await readFormBody(request);
+    const clientId = readAdminClientPickerFormValue(form, "clientId");
+    const bodyText = readRequiredFormValue(form, "bodyText");
+    const html = `<p>${escapeHtml(bodyText).replace(/\r?\n/g, "<br>")}</p>`;
+    await resolved.api.adminResources.queueAdminOutboundEmail({
+      clientId,
+      recipientEmail: readOptionalFormValue(form, "recipientEmail"),
+      subject: readRequiredFormValue(form, "subject"),
+      html,
+      templateKey: "admin_compose"
+    });
+    redirect(response, "/admin/emails?queued=1#email-outbox");
+  } catch (error) {
+    writeHtml(response, 400, renderLayout({
+      title: "Admin Emails",
+      body: `<article><h1>Admin Emails</h1><p>${escapeHtml(error instanceof Error ? error.message : "Unable to queue email.")}</p></article>`
+    }));
+  }
+  return;
+}
+
+if (method === "POST" && handlers != null && url.pathname === "/portal/profile") {
+  const session = await loadPersistedSession(resolved.sessionStore, request);
+  if (session == null) {
+    redirect(response, buildPortalLoginRedirectPath(request));
+    return;
         }
 
         const form = await readFormBody(request);
@@ -11785,11 +11919,8 @@ if (method === "POST" && handlers != null && resolved.api != null && url.pathnam
     }
 
     const createdPet = await resolved.api.adminResources.createAdminPet({
+      ...readAdminPetFormInput(form),
       clientId,
-      name: readRequiredFormValue(form, "name"),
-      species: readRequiredFormValue(form, "species"),
-      petSittingNotes: form.get("petSittingNotes")?.trim() ?? "",
-      archived: readCheckedFormValue(form, "archived")
     });
     redirect(response, `/admin/pets/${encodeURIComponent(createdPet.id)}`);
   } catch (error) {
@@ -11817,11 +11948,8 @@ if (method === "POST" && handlers != null && resolved.api != null && adminPetDet
     }
 
     const updatedPet = await resolved.api.adminResources.updateAdminPet(petId, {
+      ...readAdminPetFormInput(form),
       clientId,
-      name: readRequiredFormValue(form, "name"),
-      species: readRequiredFormValue(form, "species"),
-      petSittingNotes: form.get("petSittingNotes")?.trim() ?? "",
-      archived: readCheckedFormValue(form, "archived")
     });
     if (updatedPet == null) {
       throw new Error("Pet not found.");
@@ -14103,6 +14231,7 @@ const clientOptions = formType === "booking_form"
                 { href: "/admin/workflows", label: "Workflows", description: "Automation enrollment" },
                 { href: "/admin/appointment-types", label: "Appointment Types", description: "Booking configuration" },
                 { href: "/admin/form-templates", label: "Form Templates", description: "Client and internal forms" },
+                { href: "/admin/emails", label: "Emails", description: "Compose and mailbox activity" },
                 { href: "/admin/email-templates", label: "Email Templates", description: "Communication catalog" },
                 { href: "/admin/scheduled-tasks", label: "Scheduled Tasks", description: "Automation cadence" },
                 { href: "/admin/blog-posts", label: "Blog Posts", description: "Public content" },
@@ -14409,7 +14538,6 @@ result: contacts
               "<h2>Add Pet</h2>",
               [
                 '<form class="form-grid" method="post" action="/admin/pets">',
-                '<div class="form-grid form-grid--two">',
                 renderAdminClientPickerField({
                   label: "Owner",
                   name: "clientId",
@@ -14419,10 +14547,10 @@ result: contacts
                   placeholder: "Search by client name or email",
                   helpText: "Choose the client who owns this pet."
                 }),
-                '<label>Name<input type="text" name="name" required></label>',
-                '<label>Species<input type="text" name="species" required></label>',
-                '</div>',
-                '<label>Care Notes<textarea name="petSittingNotes" rows="4" placeholder="Medication, handling notes, feeding reminders, gate code, or household context."></textarea></label>',
+                renderAdminPetFormFields({
+                  name: "",
+                  species: ""
+                }),
                 '<div class="form-actions"><button type="submit">Add Pet</button></div>',
                 '</form>'
               ].join(""),
@@ -14768,7 +14896,9 @@ const hasBookingFilters = bookingQuery !== ""
                     { href: buildAdminBookingsPath({ clientId: item.booking.clientId }), label: "Client Bookings" }
                   ])
                 ]),
-                emptyMessage: hasBookingFilters ? "No bookings match these filters." : "No bookings."
+                emptyMessage: hasBookingFilters ? "No bookings match these filters." : "No bookings.",
+                mobileLayout: "scroll",
+                mobileMinWidth: "56rem"
               }),
               '</section>',
               '</article>'
@@ -14934,7 +15064,6 @@ if (method === "POST" && handlers != null && resolved.api != null && url.pathnam
               '<h2>Add Expense</h2>',
               [
                 '<form class="form-grid" method="post" action="/admin/expenses">',
-                '<div class="form-grid form-grid--two">',
                 renderAdminClientPickerField({
                   label: "Client",
                   name: "clientId",
@@ -15584,7 +15713,6 @@ loginPath: buildAdminLoginRedirectPath(request),
               "<h2>Add Pet</h2>",
               [
                 '<form class="form-grid" method="post" action="/admin/pets">',
-                '<div class="form-grid form-grid--two">',
                 renderAdminClientPickerField({
                   label: "Owner",
                   name: "clientId",
@@ -15594,10 +15722,10 @@ loginPath: buildAdminLoginRedirectPath(request),
                   placeholder: "Search by client name or email",
                   helpText: "Choose the client who owns this pet."
                 }),
-                '<label>Name<input type="text" name="name" required></label>',
-                '<label>Species<input type="text" name="species" required></label>',
-                '</div>',
-                '<label>Care Notes<textarea name="petSittingNotes" rows="4" placeholder="Medication, handling notes, feeding reminders, gate code, or household context."></textarea></label>',
+                renderAdminPetFormFields({
+                  name: "",
+                  species: ""
+                }),
                 '<div class="form-actions"><button type="submit">Add Pet</button></div>',
                 '</form>'
               ].join(""),
@@ -15690,8 +15818,13 @@ renderStatsGrid([
 "<h2>Pet Details</h2>",
 renderDetailGrid([
 { label: "Pet ID", value: escapeHtml(adminPetItem.id) },
-{ label: "Species", value: escapeHtml(adminPetItem.species) },
-{ label: "Status", value: renderStatusPill(adminPetItem.archived ? "Archived" : "Active", adminPetItem.archived ? "warning" : "success") },
+                { label: "Species", value: escapeHtml(adminPetItem.species) },
+                { label: "Breed", value: renderPetFieldValue(adminPetItem.breed) },
+                { label: "Age", value: renderPetFieldValue(adminPetItem.age) },
+                { label: "Gender", value: renderPetFieldValue(adminPetItem.gender) },
+                { label: "Spay / Neuter", value: renderPetFieldValue(adminPetItem.spayNeuterStatus) },
+                { label: "Vaccine Status", value: renderPetFieldValue(adminPetItem.vaccineStatus) },
+                { label: "Status", value: renderStatusPill(adminPetItem.archived ? "Archived" : "Active", adminPetItem.archived ? "warning" : "success") },
 { label: "Owner ID", value: escapeHtml(adminPetItem.clientId) },
 {
 label: "Owner Profile",
@@ -15717,14 +15850,26 @@ value: latestForm == null
 ? "No linked forms"
 : `<a href="/admin/forms/${encodeURIComponent(latestForm.id)}">${escapeHtml(getAdminFormSubmissionTitle(latestForm))}</a>`
 }
-]),
-"</section>",
-              '<section class="surface-block">',
-              "<h2>Care Notes</h2>",
-              renderLongTextBlock(adminPetItem.petSittingNotes, "No care notes have been recorded for this pet yet."),
-              "</section>",
-              '<section class="surface-block">',
-              "<h2>Edit Pet</h2>",
+                ]),
+                "</section>",
+                '<section class="surface-block">',
+                "<h2>Care Notes</h2>",
+                renderLongTextBlock(adminPetItem.petSittingNotes, "No care notes have been recorded for this pet yet."),
+                "</section>",
+                '<section class="surface-block">',
+                "<h2>Behavior Notes</h2>",
+                renderLongTextBlock(adminPetItem.behaviorNotes, "No behavior notes have been recorded for this pet yet."),
+                "</section>",
+                '<section class="surface-block">',
+                "<h2>Training Notes</h2>",
+                renderLongTextBlock(adminPetItem.trainingNotes, "No training notes have been recorded for this pet yet."),
+                "</section>",
+                '<section class="surface-block">',
+                "<h2>Medical Notes</h2>",
+                renderLongTextBlock(adminPetItem.medicalNotes, "No medical notes have been recorded for this pet yet."),
+                "</section>",
+                '<section class="surface-block">',
+                "<h2>Edit Pet</h2>",
               [
                 `<form class="form-grid" method="post" action="/admin/pets/${encodeURIComponent(adminPetItem.id)}">`,
                 '<div class="form-grid form-grid--two">',
@@ -15737,10 +15882,19 @@ value: latestForm == null
                   placeholder: "Search by client name or email",
                   helpText: "Reassign the pet to a different client if needed."
                 }),
-                `<label>Name<input type="text" name="name" value="${escapeAttribute(adminPetItem.name)}" required></label>`,
-                `<label>Species<input type="text" name="species" value="${escapeAttribute(adminPetItem.species)}" required></label>`,
-                '</div>',
-                `<label>Care Notes<textarea name="petSittingNotes" rows="5">${escapeHtml(adminPetItem.petSittingNotes)}</textarea></label>`,
+                renderAdminPetFormFields({
+                  name: adminPetItem.name,
+                  species: adminPetItem.species,
+                  breed: adminPetItem.breed,
+                  age: adminPetItem.age,
+                  gender: adminPetItem.gender,
+                  spayNeuterStatus: adminPetItem.spayNeuterStatus,
+                  vaccineStatus: adminPetItem.vaccineStatus,
+                  behaviorNotes: adminPetItem.behaviorNotes,
+                  trainingNotes: adminPetItem.trainingNotes,
+                  medicalNotes: adminPetItem.medicalNotes,
+                  petSittingNotes: adminPetItem.petSittingNotes
+                }),
                 `<label><input type="checkbox" name="archived"${adminPetItem.archived ? " checked" : ""}> Archive this pet</label>`,
                 '<div class="form-actions"><button type="submit">Save Pet</button></div>',
                 '</form>',
@@ -17256,7 +17410,121 @@ return;
           return;
         }
 
-        if (url.pathname === "/admin/email-templates" || url.pathname === "/client/email_templates_list.php") {
+if (url.pathname === "/admin/emails") {
+const adminResources = resolved.api?.adminResources ?? null;
+const [clients, outboundEmails, inboundEmails, unmatchedEmails] = adminResources == null
+? [[], [], [], []]
+: await Promise.all([
+adminResources.listAdminClients(),
+adminResources.listAdminOutboundEmails(50),
+adminResources.listAdminInboundEmails(50),
+adminResources.listAdminUnmatchedEmails(50)
+]);
+const clientPickerOptions = buildAdminClientPickerOptions(clients);
+const clientById = new Map(clients.map((client) => [client.id, client]));
+const selectedClientId = readAdminClientPickerQueryValue(url.searchParams, "client_id") ?? "";
+const prefilledRecipient = (url.searchParams.get("reply_to") ?? "").trim();
+const prefilledSubject = (url.searchParams.get("reply_subject") ?? "").trim();
+const queuedFeedback = (url.searchParams.get("queued") ?? "").trim() === "1";
+
+writeHtml(response, 200, renderLayout({
+title: "Admin Emails",
+body: [
+'<article class="content-stack">',
+renderSectionIntro({
+eyebrow: "Communications",
+title: "Emails",
+description: "Compose outgoing email, review delivery queue activity, and watch inbound mailbox traffic from one place."
+}),
+adminNav,
+'<section id="compose-email" class="surface-block">',
+'<h2>Compose Email</h2>',
+queuedFeedback ? `<p>${renderStatusPill("Queued", "success")} Email queued for delivery.</p>` : "",
+'<form class="form-grid" method="post" action="/admin/emails">',
+'<div class="form-grid form-grid--two">',
+renderAdminClientPickerField({
+label: "Client",
+name: "clientId",
+options: clientPickerOptions,
+selectedId: selectedClientId,
+placeholder: "Search by client name or email",
+helpText: "Optional. Leave recipient blank to use the selected client's email on file."
+}),
+`<label>To Email<input type="email" name="recipientEmail" value="${escapeAttribute(prefilledRecipient)}" placeholder="client@example.com"></label>`,
+`<label>Subject<input type="text" name="subject" value="${escapeAttribute(prefilledSubject)}" required></label>`,
+'<div class="meta">Manual emails are queued through the same outbox and worker used by reminders and workflow messages.</div>',
+'</div>',
+'<label>Message<textarea name="bodyText" rows="10" required placeholder="Write the email body here."></textarea></label>',
+'<div class="form-actions"><button type="submit">Queue Email</button></div>',
+'</form>',
+'</section>',
+'<section id="email-outbox" class="surface-block">',
+'<h2>Outgoing Queue</h2>',
+renderDataTable({
+headers: ["Recipient", "Subject", "Template", "Status", "Created", "Processed"],
+rows: outboundEmails.map((email) => [
+escapeHtml(email.recipient),
+escapeHtml(email.subject),
+escapeHtml(email.templateKey),
+renderStatusPill(email.status, email.status === "sent" ? "success" : email.status === "failed" ? "danger" : email.status === "processing" ? "warning" : "default"),
+renderLocalizedDateTime(email.createdAt),
+escapeHtml(email.processedAt == null ? "Pending" : formatAdminDateTime(email.processedAt))
+]),
+emptyMessage: "No outgoing email activity yet."
+}),
+'</section>',
+'<section class="surface-block">',
+'<h2>Incoming Mailbox</h2>',
+renderDataTable({
+headers: ["Received", "From", "Subject", "Matched Client", "Provider", "Actions"],
+rows: inboundEmails.map((email) => {
+const matchedClient = email.matchedClientId == null ? null : clientById.get(email.matchedClientId) ?? null;
+const replySubject = email.subject.toLowerCase().startsWith("re:") ? email.subject : `Re: ${email.subject}`;
+return [
+renderLocalizedDateTime(email.receivedAt),
+escapeHtml(email.fromEmail),
+escapeHtml(email.subject),
+matchedClient == null
+? '<span class="meta">Unmatched</span>'
+: `<a href="/admin/clients/${encodeURIComponent(matchedClient.id)}/profile">${escapeHtml(renderAdminClientDisplayName(matchedClient))}</a>`,
+renderStatusPill(email.provider === "imap" ? "IMAP" : "Mail Provider", "info"),
+renderTableActionLinks([
+{ href: `/admin/emails?reply_to=${encodeURIComponent(email.fromEmail)}&reply_subject=${encodeURIComponent(replySubject)}#compose-email`, label: "Reply" }
+])
+];
+}),
+emptyMessage: "No inbound emails have been captured yet."
+}),
+'</section>',
+'<section class="surface-block">',
+'<h2>Unmatched Incoming Emails</h2>',
+renderDataTable({
+headers: ["Detected", "From", "Subject", "Reason", "Status", "Actions"],
+rows: unmatchedEmails.map((email) => {
+const replySubject = (email.subject ?? "").toLowerCase().startsWith("re:") ? email.subject ?? "" : `Re: ${email.subject ?? "Incoming message"}`;
+return [
+renderLocalizedDateTime(email.detectedAt),
+escapeHtml(email.fromEmail ?? "Unknown sender"),
+escapeHtml(email.subject ?? "No subject"),
+escapeHtml(toTitleCase(email.reason)),
+email.resolvedAt == null ? renderStatusPill("Needs Review", "warning") : renderStatusPill("Resolved", "success"),
+email.fromEmail == null
+? '<span class="meta">No reply address</span>'
+: renderTableActionLinks([
+{ href: `/admin/emails?reply_to=${encodeURIComponent(email.fromEmail)}&reply_subject=${encodeURIComponent(replySubject)}#compose-email`, label: "Reply" }
+])
+];
+}),
+emptyMessage: "No unmatched inbound emails."
+}),
+'</section>',
+'</article>'
+].join("")
+}));
+return;
+}
+
+if (url.pathname === "/admin/email-templates" || url.pathname === "/client/email_templates_list.php") {
 const emailTemplates = await handlers.handleAdminEmailTemplates(session);
 if ("error" in emailTemplates.body) {
 await handleProtectedRouteFailure({
@@ -17789,15 +18057,15 @@ return;
               "</section>",
               '<section class="surface-block">',
               "<h2>Contact Information</h2>",
-              renderDetailGrid([
+              renderSubmittedFormSheet([
                 { label: "Name", value: escapeHtml(form.body.item.contactName ?? "Not provided") },
                 { label: "Email", value: escapeHtml(form.body.item.contactEmail ?? "Not provided") },
                 { label: "Phone", value: escapeHtml(form.body.item.contactPhone ?? "Not provided") }
-              ]),
+              ], "No contact information was submitted."),
               "</section>",
               '<section class="surface-block">',
               "<h2>Responses</h2>",
-              renderLegacyPublicFormResponses(form.body.item),
+              renderAdminFormSubmissionResponses(form.body.item),
               "</section>",
               "</article>"
             ].join("")

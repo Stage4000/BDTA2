@@ -27,7 +27,7 @@ import {
   quoteCollectionSchema,
   quoteDetailSchema
 } from "@bdta/contracts";
-import type { Booking, Client, Contract, Credit, Expense, FormSubmission, Invoice, Notification, Package, Pet, PetFile, Quote } from "@bdta/domain";
+import type { Booking, Client, Contract, Credit, Expense, FormSubmission, Invoice, InboundEmail, Notification, Package, Pet, PetFile, Quote, UnmatchedEmail } from "@bdta/domain";
 import {
   bookingSchema,
   clientSchema,
@@ -88,25 +88,29 @@ export type PortalResourceReadDependencies = {
   findPortalCreditById(clientId: string, creditId: string): Promise<Credit | null>;
 };
 
+export type AdminPetMutationInput = {
+  clientId: string;
+  name: string;
+  species: string;
+  breed: string;
+  age: string;
+  gender: string;
+  spayNeuterStatus: string;
+  vaccineStatus: string;
+  behaviorNotes: string;
+  trainingNotes: string;
+  medicalNotes: string;
+  petSittingNotes: string;
+  archived: boolean;
+};
+
 export type AdminResourceReadDependencies = {
   listAdminClients(): Promise<Client[]>;
   findAdminClientById(clientId: string): Promise<Client | null>;
   listAdminPets(): Promise<Pet[]>;
   findAdminPetById(petId: string): Promise<Pet | null>;
-  createAdminPet(input: {
-    clientId: string;
-    name: string;
-    species: string;
-    petSittingNotes: string;
-    archived: boolean;
-  }): Promise<Pet>;
-  updateAdminPet(petId: string, input: {
-    clientId: string;
-    name: string;
-    species: string;
-    petSittingNotes: string;
-    archived: boolean;
-  }): Promise<Pet | null>;
+  createAdminPet(input: AdminPetMutationInput): Promise<Pet>;
+  updateAdminPet(petId: string, input: AdminPetMutationInput): Promise<Pet | null>;
   deleteAdminPet(petId: string): Promise<boolean>;
   listAdminPetFiles(petId: string): Promise<PetFile[]>;
   findAdminPetFileById(petId: string, fileId: string): Promise<PetFile | null>;
@@ -156,6 +160,49 @@ export type AdminResourceReadDependencies = {
       referenceId?: string | null;
     }>;
   }): Promise<Quote>;
+  listAdminOutboundEmails(limit?: number): Promise<Array<{
+    id: string;
+    recipient: string;
+    subject: string;
+    templateKey: string;
+    status: "queued" | "processing" | "sent" | "failed";
+    createdAt: string;
+    processedAt: string | null;
+  }>>;
+  queueAdminOutboundEmail(input: {
+    clientId: string | null;
+    recipientEmail: string | null;
+    subject: string;
+    html: string;
+    templateKey?: string | null;
+  }): Promise<{
+    id: string;
+    recipient: string;
+    subject: string;
+    templateKey: string;
+    status: "queued";
+    createdAt: string;
+    processedAt: null;
+  }>;
+  listAdminInboundEmails(limit?: number): Promise<Array<{
+    id: string;
+    provider: InboundEmail["provider"];
+    mailbox: string;
+    messageId: string;
+    receivedAt: string;
+    fromEmail: string;
+    subject: string;
+    matchedClientId: string | null;
+  }>>;
+  listAdminUnmatchedEmails(limit?: number): Promise<Array<{
+    id: string;
+    inboundEmailId: string;
+    reason: UnmatchedEmail["reason"];
+    detectedAt: string;
+    resolvedAt: string | null;
+    fromEmail: string | null;
+    subject: string | null;
+  }>>;
   listAdminContracts(): Promise<Contract[]>;
   findAdminContractById(contractId: string): Promise<Contract | null>;
   listAdminForms(): Promise<FormSubmission[]>;

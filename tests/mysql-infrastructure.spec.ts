@@ -2030,41 +2030,53 @@ expect(executor.calls[7]?.sql).toContain("ORDER BY MAX(b.created_at) DESC, b.id 
     expect(executor.calls[12]?.sql).toContain("FROM client_contacts");
   });
 
-  it("creates pet reads against legacy pet tables", async () => {
-    const executor = new FakeSqlExecutor([
-      rows([{
-        id: 51,
-        client_id: 12,
-        name: "Buddy",
-        species: "Dog",
-        pet_sitting_notes: "Use the side gate and towel paws before re-entry.",
-        is_active: 1
-      }]),
-      rows([{
-        id: 51,
-        client_id: 12,
-        name: "Buddy",
-        species: "Dog",
-        pet_sitting_notes: "Use the side gate and towel paws before re-entry.",
-        is_active: 1
-      }]),
-      rows([{
-        id: 51,
-        client_id: 12,
-        name: "Buddy",
-        species: "Dog",
-        pet_sitting_notes: "Use the side gate and towel paws before re-entry.",
-        is_active: 1
-      }]),
-      rows([{
-        id: 51,
-        client_id: 12,
-        name: "Buddy",
-        species: "Dog",
-        pet_sitting_notes: "Use the side gate and towel paws before re-entry.",
-        is_active: 1
-      }])
-    ]);
+it("creates pet reads against legacy pet tables", async () => {
+  const structuredPetNotes = JSON.stringify({
+    _schema: "bdta-pet-v1",
+    petSittingNotes: "Use the side gate and towel paws before re-entry.",
+    breed: "Labrador Retriever",
+    age: "4 years",
+    gender: "Male",
+    spayNeuterStatus: "Neutered",
+    vaccineStatus: "Current on core vaccines",
+    behaviorNotes: "Excited greeter with new visitors.",
+    trainingNotes: "Practicing place cue and calm door exits.",
+    medicalNotes: "Takes allergy medication with breakfast."
+  });
+  const executor = new FakeSqlExecutor([
+    rows([{
+      id: 51,
+      client_id: 12,
+      name: "Buddy",
+      species: "Dog",
+      pet_sitting_notes: "Use the side gate and towel paws before re-entry.",
+      is_active: 1
+    }]),
+    rows([{
+      id: 51,
+      client_id: 12,
+      name: "Buddy",
+      species: "Dog",
+      pet_sitting_notes: structuredPetNotes,
+      is_active: 1
+    }]),
+    rows([{
+      id: 51,
+      client_id: 12,
+      name: "Buddy",
+      species: "Dog",
+      pet_sitting_notes: structuredPetNotes,
+      is_active: 1
+    }]),
+    rows([{
+      id: 51,
+      client_id: 12,
+      name: "Buddy",
+      species: "Dog",
+      pet_sitting_notes: structuredPetNotes,
+      is_active: 1
+    }])
+  ]);
 
     const runtime = buildApiRuntime(createMySqlApiDependencies(executor, {
       now: () => "2026-05-27T18:00:00.000Z",
@@ -2098,12 +2110,15 @@ expect(executor.calls[7]?.sql).toContain("ORDER BY MAX(b.created_at) DESC, b.id 
     expect(adminPet.status).toBe(200);
     if ("error" in portalPets.body || "error" in portalPet.body || "error" in adminPets.body || "error" in adminPet.body) {
       throw new Error("Expected successful pet responses.");
-    }
-    expect(portalPets.body.items[0]?.petSittingNotes).toBe("Use the side gate and towel paws before re-entry.");
-    expect(portalPet.body.item.petSittingNotes).toBe("Use the side gate and towel paws before re-entry.");
-    expect(adminPets.body.items[0]?.petSittingNotes).toBe("Use the side gate and towel paws before re-entry.");
-    expect(adminPet.body.item.petSittingNotes).toBe("Use the side gate and towel paws before re-entry.");
-    expect(executor.calls[0]?.sql).toContain("FROM pets");
+  }
+  expect(portalPets.body.items[0]?.petSittingNotes).toBe("Use the side gate and towel paws before re-entry.");
+  expect(portalPet.body.item.petSittingNotes).toBe("Use the side gate and towel paws before re-entry.");
+  expect(portalPet.body.item.breed).toBe("Labrador Retriever");
+  expect(adminPets.body.items[0]?.petSittingNotes).toBe("Use the side gate and towel paws before re-entry.");
+  expect(adminPets.body.items[0]?.age).toBe("4 years");
+  expect(adminPet.body.item.petSittingNotes).toBe("Use the side gate and towel paws before re-entry.");
+  expect(adminPet.body.item.medicalNotes).toBe("Takes allergy medication with breakfast.");
+  expect(executor.calls[0]?.sql).toContain("FROM pets");
     expect(executor.calls[0]?.sql).toContain("pet_sitting_notes");
     expect(executor.calls[0]?.sql).toContain("WHERE client_id = ?");
     expect(executor.calls[1]?.sql).toContain("WHERE client_id = ? AND id = ?");

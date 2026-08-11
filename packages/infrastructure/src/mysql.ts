@@ -390,6 +390,223 @@ function buildPortalUrl(baseUrl: string, clientId: string, requestedReturnTo: st
   return `${baseUrl}?client=${encodeURIComponent(clientId)}`;
 }
 
+type AdminQueuedEmailRecord = {
+  id: string;
+  recipient: string;
+  subject: string;
+  templateKey: string;
+  status: "queued" | "processing" | "sent" | "failed";
+  createdAt: string;
+  processedAt: string | null;
+};
+
+function escapeEmailHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function formatEmailCurrency(amount: number): string {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD"
+  }).format(Number.isFinite(amount) ? amount : 0);
+}
+
+function normalizeQueuedEmailStatus(value: string | null | undefined): AdminQueuedEmailRecord["status"] {
+  switch ((value ?? "").trim().toLowerCase()) {
+    case "processing":
+      return "processing";
+    case "sent":
+      return "sent";
+    case "failed":
+      return "failed";
+    case "queued":
+    default:
+      return "queued";
+  }
+}
+
+function toAdminQueuedEmailRecord(row: {
+  id: number | string | bigint;
+  recipient: string;
+  subject: string;
+  template_key: string;
+  status: string | null;
+  created_at: string | Date | null;
+  processed_at: string | Date | null;
+}): AdminQueuedEmailRecord {
+  return {
+    id: String(row.id),
+    recipient: row.recipient.trim(),
+    subject: row.subject.trim(),
+    templateKey: row.template_key.trim(),
+    status: normalizeQueuedEmailStatus(row.status),
+    createdAt: normalizeLegacyTimestampValue(row.created_at) ?? defaultNow(),
+    processedAt: normalizeLegacyTimestampValue(row.processed_at) ?? null
+  };
+}
+
+function toAdminInboundEmailListRecord(row: {
+  inbound_email_id: string;
+  provider: "imap" | "mail_provider";
+  mailbox: string;
+  message_id: string;
+  received_at: string | Date;
+  from_email: string;
+  subject: string;
+  matched_client_id: string | number | bigint | null;
+}) {
+  return {
+    id: row.inbound_email_id,
+    provider: row.provider,
+    mailbox: row.mailbox.trim(),
+    messageId: row.message_id.trim(),
+    receivedAt: normalizeLegacyTimestampValue(row.received_at) ?? defaultNow(),
+    fromEmail: row.from_email.trim(),
+    subject: row.subject.trim(),
+    matchedClientId: row.matched_client_id == null ? null : String(row.matched_client_id)
+  };
+}
+
+function toAdminUnmatchedEmailListRecord(row: {
+  unmatched_email_id: string;
+  inbound_email_id: string;
+  reason: "no_client_match" | "multiple_client_matches";
+  detected_at: string | Date;
+  resolved_at: string | Date | null;
+  from_email: string | null;
+  subject: string | null;
+}) {
+  return {
+    id: row.unmatched_email_id,
+    inboundEmailId: row.inbound_email_id,
+    reason: row.reason,
+    detectedAt: normalizeLegacyTimestampValue(row.detected_at) ?? defaultNow(),
+    resolvedAt: normalizeLegacyTimestampValue(row.resolved_at) ?? null,
+    fromEmail: row.from_email?.trim() ?? null,
+    subject: row.subject?.trim() ?? null
+  };
+}
+
+async function insertQueuedEmailMessage(executor: SqlExecutor, message: OutboundEmailMessage): Promise<string> {
+  const normalizedMessage = outboundEmailSchema.parse(message);
+  const [, result] = await executor.execute(
+    [
+      "INSERT INTO email_outbox (recipient, subject, html_body, template_key, status, created_at)",
+      "VALUES (?, ?, ?, ?, 'queued', CURRENT_TIMESTAMP)"
+    ].join(" "),
+    [normalizedMessage.to[0] ?? "", normalizedMessage.subject, normalizedMessage.html, normalizedMessage.templateKey]
+  );
+  return String(result.insertId ?? 0);
+}
+
+async function loadAdminClientEmailProfile(
+  executor: SqlExecutor,
+  clientId: string
+): Promise<{ id: string; name: string; email: string } | null> {
+  const [rows] = await executor.execute<Array<{
+    id: number | string | bigint;
+    name: string | null;
+    email: string | null;
+  }>>(
+    [
+      "SELECT id, name, email",
+      "FROM clients",
+      "WHERE id = ?",
+      "LIMIT 1"
+    ].join(" "),
+    [clientId]
+  );
+
+  const row = rows[0];
+  const email = row?.email?.trim() ?? "";
+  if (row == null || email === "") {
+    return null;
+  }
+
+  return {
+    id: String(row.id),
+    name: row.name?.trim() || "there",
+    email
+  };
+}
+
+function buildAdminQuoteEmailUrl(portalBaseUrl: string, quoteId: string, accessToken: string | null): string {
+  const origin = new URL(portalBaseUrl).origin;
+  const url = new URL("/backend/public/quote.php", origin);
+  url.searchParams.set("id", quoteId);
+  if (accessToken != null && accessToken.trim() !== "") {
+    url.searchParams.set("token", accessToken);
+  }
+  return url.toString();
+}
+
+function buildAdminInvoiceEmailUrl(portalBaseUrl: string, invoiceId: string): string {
+  return `${normalizeWebsiteBaseUrl(portalBaseUrl)}/invoices/${encodeURIComponent(invoiceId)}`;
+}
+
+async function queueAdminInvoiceCreatedEmail(executor: SqlExecutor, input: {
+  clientId: string;
+  invoiceId: string;
+  totalAmount: number;
+  dueAt: string | null;
+}): Promise<void> {
+  const client = await loadAdminClientEmailProfile(executor, input.clientId);
+  if (client == null) {
+    return;
+  }
+
+  const portalBaseUrl = await resolveMySqlPortalBaseUrl(executor);
+  const invoiceUrl = buildAdminInvoiceEmailUrl(portalBaseUrl, input.invoiceId);
+  const dueDate = normalizeLegacyDateValue(input.dueAt) ?? "";
+  await insertQueuedEmailMessage(executor, {
+    to: [client.email],
+    subject: `Invoice ${input.invoiceId} is ready`,
+    templateKey: "admin_invoice_created",
+    html: [
+      `<p>Hello ${escapeEmailHtml(client.name)},</p>`,
+      `<p>Your invoice <strong>${escapeEmailHtml(input.invoiceId)}</strong> is ready.</p>`,
+      `<p>Total due: <strong>${escapeEmailHtml(formatEmailCurrency(input.totalAmount))}</strong>${dueDate === "" ? "" : ` by <strong>${escapeEmailHtml(dueDate)}</strong>`}.</p>`,
+      `<p><a href="${escapeEmailHtml(invoiceUrl)}">Open invoice in your portal</a></p>`
+    ].join("")
+  });
+}
+
+async function queueAdminQuoteCreatedEmail(executor: SqlExecutor, input: {
+  clientId: string;
+  quoteId: string;
+  quoteNumber: string | null;
+  title: string | null;
+  totalAmount: number;
+  accessToken: string | null;
+}): Promise<void> {
+  const client = await loadAdminClientEmailProfile(executor, input.clientId);
+  if (client == null) {
+    return;
+  }
+
+  const portalBaseUrl = await resolveMySqlPortalBaseUrl(executor);
+  const quoteUrl = buildAdminQuoteEmailUrl(portalBaseUrl, input.quoteId, input.accessToken);
+  const quoteLabel = input.quoteNumber?.trim() || input.quoteId;
+  const titleLine = input.title?.trim() ? `<p>Quote title: <strong>${escapeEmailHtml(input.title)}</strong></p>` : "";
+  await insertQueuedEmailMessage(executor, {
+    to: [client.email],
+    subject: `Quote ${quoteLabel} is ready to review`,
+    templateKey: "admin_quote_created",
+    html: [
+      `<p>Hello ${escapeEmailHtml(client.name)},</p>`,
+      `<p>Your quote <strong>${escapeEmailHtml(quoteLabel)}</strong> is ready to review.</p>`,
+      titleLine,
+      `<p>Total amount: <strong>${escapeEmailHtml(formatEmailCurrency(input.totalAmount))}</strong></p>`,
+      `<p><a href="${escapeEmailHtml(quoteUrl)}">Review your quote</a></p>`
+    ].join("")
+  });
+}
+
 function toAppointmentDate(timestamp: string): string {
   return timestamp.slice(0, 10);
 }
@@ -1358,6 +1575,109 @@ function toPackageRecord(row: {
   };
 }
 
+const PET_METADATA_FORMAT = "bdta-pet-v1";
+
+type PetMetadataFields = Pick<Pet, "age" | "behaviorNotes" | "breed" | "gender" | "medicalNotes" | "petSittingNotes" | "spayNeuterStatus" | "trainingNotes" | "vaccineStatus">;
+
+function normalizePetMetadataValue(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed === "" ? undefined : trimmed;
+}
+
+function buildPetMetadataFields(input: PetMetadataFields): PetMetadataFields {
+  return {
+    age: normalizePetMetadataValue(input.age),
+    behaviorNotes: normalizePetMetadataValue(input.behaviorNotes),
+    breed: normalizePetMetadataValue(input.breed),
+    gender: normalizePetMetadataValue(input.gender),
+    medicalNotes: normalizePetMetadataValue(input.medicalNotes),
+    petSittingNotes: normalizePetMetadataValue(input.petSittingNotes) ?? "",
+    spayNeuterStatus: normalizePetMetadataValue(input.spayNeuterStatus),
+    trainingNotes: normalizePetMetadataValue(input.trainingNotes),
+    vaccineStatus: normalizePetMetadataValue(input.vaccineStatus)
+  };
+}
+
+function parsePetMetadata(value: string | null): PetMetadataFields {
+  const legacyNotes = value ?? "";
+  const trimmed = legacyNotes.trim();
+  if (trimmed === "" || !trimmed.startsWith("{")) {
+    return {
+      petSittingNotes: legacyNotes
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (typeof parsed !== "object" || parsed == null || Array.isArray(parsed)) {
+      return {
+        petSittingNotes: legacyNotes
+      };
+    }
+
+    const record = parsed as Record<string, unknown>;
+    if (record._schema !== PET_METADATA_FORMAT) {
+      return {
+        petSittingNotes: legacyNotes
+      };
+    }
+
+    return buildPetMetadataFields({
+      age: typeof record.age === "string" ? record.age : undefined,
+      behaviorNotes: typeof record.behaviorNotes === "string" ? record.behaviorNotes : undefined,
+      breed: typeof record.breed === "string" ? record.breed : undefined,
+      gender: typeof record.gender === "string" ? record.gender : undefined,
+      medicalNotes: typeof record.medicalNotes === "string" ? record.medicalNotes : undefined,
+      petSittingNotes: typeof record.petSittingNotes === "string" ? record.petSittingNotes : "",
+      spayNeuterStatus: typeof record.spayNeuterStatus === "string" ? record.spayNeuterStatus : undefined,
+      trainingNotes: typeof record.trainingNotes === "string" ? record.trainingNotes : undefined,
+      vaccineStatus: typeof record.vaccineStatus === "string" ? record.vaccineStatus : undefined
+    });
+  } catch {
+    return {
+      petSittingNotes: legacyNotes
+    };
+  }
+}
+
+function serializePetMetadata(input: PetMetadataFields): string {
+  const metadata = buildPetMetadataFields(input);
+  const hasExtendedMetadata = [
+    metadata.age,
+    metadata.behaviorNotes,
+    metadata.breed,
+    metadata.gender,
+    metadata.medicalNotes,
+    metadata.spayNeuterStatus,
+    metadata.trainingNotes,
+    metadata.vaccineStatus
+  ].some((value) => value != null);
+
+  if (!hasExtendedMetadata) {
+    return metadata.petSittingNotes;
+  }
+
+  return JSON.stringify({
+    _schema: PET_METADATA_FORMAT,
+    ...metadata
+  });
+}
+
+function buildPetRecordFromInput(id: string, input: Omit<Pet, "id">): Pet {
+  return {
+    id,
+    clientId: input.clientId,
+    name: input.name,
+    species: input.species,
+    archived: input.archived,
+    ...buildPetMetadataFields(input)
+  };
+}
+
 function toPetRecord(row: {
   id: number;
   client_id: number;
@@ -1371,8 +1691,8 @@ function toPetRecord(row: {
     clientId: String(row.client_id),
     name: row.name,
     species: row.species,
-    petSittingNotes: row.pet_sitting_notes ?? "",
-    archived: Number(row.is_active) !== 1
+    archived: Number(row.is_active) !== 1,
+    ...parsePetMetadata(row.pet_sitting_notes)
   };
 }
 
@@ -5853,31 +6173,24 @@ function buildQuotesSelectSql(input: { limit?: number; whereClause?: string; leg
       const row = rows[0];
       return row == null ? null : toPetRecord(row);
     },
-    async createAdminPet(input) {
-      const [, result] = await executor.execute(
+async createAdminPet(input) {
+  const [, result] = await executor.execute(
         [
           "INSERT INTO pets (client_id, name, species, pet_sitting_notes, is_active)",
           "VALUES (?, ?, ?, ?, ?)"
         ].join(" "),
-        [
-          input.clientId,
-          input.name,
-          input.species,
-          input.petSittingNotes,
-          input.archived ? 0 : 1
-        ]
-      );
+    [
+      input.clientId,
+      input.name,
+      input.species,
+      serializePetMetadata(input),
+      input.archived ? 0 : 1
+    ]
+  );
 
-      return (await adminResources.findAdminPetById(String(result.insertId ?? 0))) ?? {
-        id: String(result.insertId ?? 0),
-        clientId: input.clientId,
-        name: input.name,
-        species: input.species,
-        petSittingNotes: input.petSittingNotes,
-        archived: input.archived
-      };
-    },
-    async updateAdminPet(petId, input) {
+  return (await adminResources.findAdminPetById(String(result.insertId ?? 0))) ?? buildPetRecordFromInput(String(result.insertId ?? 0), input);
+},
+async updateAdminPet(petId, input) {
       const [, result] = await executor.execute(
         [
           "UPDATE pets",
@@ -5885,29 +6198,22 @@ function buildQuotesSelectSql(input: { limit?: number; whereClause?: string; leg
           "WHERE id = ?",
           "LIMIT 1"
         ].join(" "),
-        [
-          input.clientId,
-          input.name,
-          input.species,
-          input.petSittingNotes,
-          input.archived ? 0 : 1,
-          petId
-        ]
-      );
+    [
+      input.clientId,
+      input.name,
+      input.species,
+      serializePetMetadata(input),
+      input.archived ? 0 : 1,
+      petId
+    ]
+  );
 
       if (Number(result.affectedRows ?? 0) === 0) {
         return null;
       }
 
-      return (await adminResources.findAdminPetById(petId)) ?? {
-        id: petId,
-        clientId: input.clientId,
-        name: input.name,
-        species: input.species,
-        petSittingNotes: input.petSittingNotes,
-        archived: input.archived
-      };
-    },
+  return (await adminResources.findAdminPetById(petId)) ?? buildPetRecordFromInput(petId, input);
+},
     async deleteAdminPet(petId) {
       const [fileRows] = await executor.execute<Array<{ id: number; file_name: string }>>(
         [
@@ -6262,7 +6568,7 @@ function buildQuotesSelectSql(input: { limit?: number; whereClause?: string; leg
           paymentDate
         ]
       );
-      return (await adminResources.findAdminInvoiceById(String(result.insertId ?? 0))) ?? {
+      const createdInvoice = (await adminResources.findAdminInvoiceById(String(result.insertId ?? 0))) ?? {
         id: String(result.insertId ?? 0),
         clientId: input.clientId,
         status: input.status,
@@ -6270,6 +6576,15 @@ function buildQuotesSelectSql(input: { limit?: number; whereClause?: string; leg
         outstandingAmount,
         dueAt: input.dueAt
       };
+      if (input.status === "sent") {
+        await queueAdminInvoiceCreatedEmail(executor, {
+          clientId: input.clientId,
+          invoiceId: createdInvoice.id,
+          totalAmount: createdInvoice.totalAmount,
+          dueAt: createdInvoice.dueAt
+        });
+      }
+      return createdInvoice;
     },
     async listAdminQuotes() {
       let rows: Array<{
@@ -6509,7 +6824,7 @@ function buildQuotesSelectSql(input: { limit?: number; whereClause?: string; leg
         }
       }
 
-      return (await adminResources.findAdminQuoteById(quoteId)) ?? toQuoteRecord({
+      const createdQuote = (await adminResources.findAdminQuoteById(quoteId)) ?? toQuoteRecord({
         id: Number.parseInt(quoteId, 10) || 0,
         client_id: Number.parseInt(input.clientId, 10) || null,
         status: input.status,
@@ -6530,6 +6845,100 @@ function buildQuotesSelectSql(input: { limit?: number; whereClause?: string; leg
           referenceId: item.referenceId
         }))
       });
+      if (input.status === "sent") {
+        await queueAdminQuoteCreatedEmail(executor, {
+          clientId: input.clientId,
+          quoteId: createdQuote.id,
+          quoteNumber: createdQuote.quoteNumber ?? null,
+          title: createdQuote.title ?? null,
+          totalAmount: createdQuote.totalAmount,
+          accessToken: createdQuote.publicAccess?.token ?? accessToken
+        });
+      }
+      return createdQuote;
+    },
+    async listAdminOutboundEmails(limit = 100) {
+      const [rows] = await executor.execute<Array<{
+        id: number | string | bigint;
+        recipient: string;
+        subject: string;
+        template_key: string;
+        status: string | null;
+        created_at: string | Date | null;
+        processed_at: string | Date | null;
+      }>>(
+        [
+          "SELECT id, recipient, subject, template_key, status, created_at, processed_at",
+          "FROM email_outbox",
+          "ORDER BY created_at DESC, id DESC",
+          "LIMIT ?"
+        ].join(" "),
+        [Math.max(1, Math.trunc(limit))]
+      );
+      return rows.map((row) => toAdminQueuedEmailRecord(row));
+    },
+    async queueAdminOutboundEmail(input) {
+      const client = input.clientId == null ? null : await loadAdminClientEmailProfile(executor, input.clientId);
+      const recipientEmail = input.recipientEmail?.trim() ?? "";
+      const resolvedRecipient = recipientEmail === "" ? client?.email ?? "" : recipientEmail;
+      const message = outboundEmailSchema.parse({
+        to: [resolvedRecipient],
+        subject: input.subject,
+        html: input.html,
+        templateKey: input.templateKey?.trim() === "" ? "admin_compose" : input.templateKey ?? "admin_compose"
+      });
+      const emailId = await insertQueuedEmailMessage(executor, message);
+      return {
+        id: emailId,
+        recipient: message.to[0] ?? "",
+        subject: message.subject,
+        templateKey: message.templateKey,
+        status: "queued" as const,
+        createdAt: now(),
+        processedAt: null
+      };
+    },
+    async listAdminInboundEmails(limit = 100) {
+      const [rows] = await executor.execute<Array<{
+        inbound_email_id: string;
+        provider: "imap" | "mail_provider";
+        mailbox: string;
+        message_id: string;
+        received_at: string | Date;
+        from_email: string;
+        subject: string;
+        matched_client_id: string | number | bigint | null;
+      }>>(
+        [
+          "SELECT inbound_email_id, provider, mailbox, message_id, received_at, from_email, subject, matched_client_id",
+          "FROM inbound_emails",
+          "ORDER BY received_at DESC, id DESC",
+          "LIMIT ?"
+        ].join(" "),
+        [Math.max(1, Math.trunc(limit))]
+      );
+      return rows.map((row) => toAdminInboundEmailListRecord(row));
+    },
+    async listAdminUnmatchedEmails(limit = 100) {
+      const [rows] = await executor.execute<Array<{
+        unmatched_email_id: string;
+        inbound_email_id: string;
+        reason: "no_client_match" | "multiple_client_matches";
+        detected_at: string | Date;
+        resolved_at: string | Date | null;
+        from_email: string | null;
+        subject: string | null;
+      }>>(
+        [
+          "SELECT ue.unmatched_email_id, ue.inbound_email_id, ue.reason, ue.detected_at, ue.resolved_at, ie.from_email, ie.subject",
+          "FROM unmatched_emails ue",
+          "LEFT JOIN inbound_emails ie ON ie.inbound_email_id = ue.inbound_email_id",
+          "ORDER BY ue.detected_at DESC, ue.id DESC",
+          "LIMIT ?"
+        ].join(" "),
+        [Math.max(1, Math.trunc(limit))]
+      );
+      return rows.map((row) => toAdminUnmatchedEmailListRecord(row));
     },
     async listAdminContracts() {
       const [rows] = await executor.execute<Array<{

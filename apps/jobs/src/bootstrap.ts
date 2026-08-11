@@ -32,6 +32,7 @@ import {
 import type { Booking, Contract, FormSubmission, OutboundEmailMessage, Quote, UnmatchedEmail, Workflow, WorkflowEnrollment, WorkflowStep, WorkflowStepExecution } from "@bdta/domain";
 import type { JobEnvelope, SupportedJobKind } from "@bdta/contracts";
 import { randomUUID } from "node:crypto";
+import nodemailer from "nodemailer";
 
 type BootstrapOptions = {
   executor: SqlExecutor;
@@ -69,6 +70,127 @@ function createQueuedEmailWriter(executor: SqlExecutor) {
       ].join(" "),
       [message.to[0] ?? "", message.subject, message.html, message.templateKey]
     );
+  };
+}
+
+type SmtpDeliverySettings = {
+  host: string;
+  port: number;
+  encryption: "ssl" | "tls" | "none";
+  username: string;
+  password: string;
+  fromEmail: string;
+  debug: boolean;
+};
+
+const smtpSettingsKeys = [
+  "business_email",
+  "smtp_host",
+  "smtp_port",
+  "smtp_encryption",
+  "smtp_username",
+  "smtp_password",
+  "smtp_debug"
+] as const;
+
+function readBooleanSettingValue(value: string): boolean {
+  return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+}
+
+function readTextSetting(
+  values: Map<string, string>,
+  settingKey: (typeof smtpSettingsKeys)[number],
+  envKey: string,
+  options: { trim?: boolean } = {}
+): string {
+  const trim = options.trim ?? true;
+  const envValue = process.env[envKey];
+  if (envValue != null && envValue !== "") {
+    return trim ? envValue.trim() : envValue;
+  }
+  const storedValue = values.get(settingKey) ?? "";
+  return trim ? storedValue.trim() : storedValue;
+}
+
+async function loadSmtpDeliverySettings(executor: SqlExecutor): Promise<SmtpDeliverySettings> {
+  const [rows] = await executor.execute<Array<{ setting_key: string; setting_value: string | null }>>(
+    [
+      "SELECT setting_key, setting_value",
+      "FROM settings",
+      `WHERE setting_key IN (${smtpSettingsKeys.map(() => "?").join(", ")})`
+    ].join(" "),
+    [...smtpSettingsKeys]
+  );
+  const values = new Map(rows.map((row) => [row.setting_key, row.setting_value ?? ""]));
+  const host = readTextSetting(values, "smtp_host", "SMTP_HOST");
+  if (host === "") {
+    throw new Error("SMTP host is not configured.");
+  }
+
+  const encryptionValue = readTextSetting(values, "smtp_encryption", "SMTP_ENCRYPTION").toLowerCase();
+  const encryption = encryptionValue === "ssl" || encryptionValue === "none" ? encryptionValue : "tls";
+  const portValue = readTextSetting(values, "smtp_port", "SMTP_PORT");
+  const portNumber = Number.parseInt(portValue, 10);
+  const port = Number.isFinite(portNumber) && portNumber > 0
+    ? portNumber
+    : encryption === "ssl"
+      ? 465
+      : 587;
+  const username = readTextSetting(values, "smtp_username", "SMTP_USERNAME");
+  const password = readTextSetting(values, "smtp_password", "SMTP_PASSWORD", { trim: false });
+  const fromEmail = readTextSetting(values, "business_email", "BUSINESS_EMAIL") || username;
+  if (fromEmail === "") {
+    throw new Error("Business email or SMTP username must be configured for outgoing mail.");
+  }
+
+  return {
+    host,
+    port,
+    encryption,
+    username,
+    password,
+    fromEmail,
+    debug: readBooleanSettingValue(readTextSetting(values, "smtp_debug", "SMTP_DEBUG"))
+  };
+}
+
+function createSmtpEmailSender(executor: SqlExecutor) {
+  let cachedSignature = "";
+  let cachedFromAddress = "";
+  let cachedTransporter: ReturnType<typeof nodemailer.createTransport> | null = null;
+
+  return async (message: OutboundEmailMessage): Promise<void> => {
+    const settings = await loadSmtpDeliverySettings(executor);
+    const signature = JSON.stringify(settings);
+
+    if (cachedTransporter == null || cachedSignature !== signature) {
+      cachedTransporter = nodemailer.createTransport({
+        host: settings.host,
+        port: settings.port,
+        secure: settings.encryption === "ssl",
+        requireTLS: settings.encryption === "tls",
+        auth: settings.username === "" && settings.password === ""
+          ? undefined
+          : {
+              user: settings.username,
+              pass: settings.password
+            },
+        logger: settings.debug,
+        debug: settings.debug
+      });
+      cachedSignature = signature;
+      cachedFromAddress = `Brook's Dog Training Academy <${settings.fromEmail}>`;
+    }
+
+    await cachedTransporter.sendMail({
+      from: cachedFromAddress,
+      to: message.to.join(", "),
+      subject: message.subject,
+      html: message.html,
+      headers: {
+        "X-BDTA-Template-Key": message.templateKey
+      }
+    });
   };
 }
 
@@ -785,6 +907,7 @@ export async function buildProductionJobRuntime(options: BootstrapOptions) {
 
   return buildJobRuntime(createMySqlJobProcessorDependencies(options.executor, {
     now,
+    sendEmail: createSmtpEmailSender(options.executor),
     handlers: createDefaultJobHandlers({
       bookingReminder: createMySqlBookingReminderDependencies(options.executor, portalBaseUrl),
       quoteReminder: createMySqlQuoteReminderDependencies(options.executor, portalBaseUrl, now),
