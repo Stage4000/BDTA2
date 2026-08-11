@@ -380,7 +380,7 @@ const PUBLIC_SOCIAL_LINK_SETTINGS = [
 
 const PUBLIC_ASSET_ROOT = resolve(process.cwd(), "public", "assets");
 const PUBLIC_ASSET_PREFIX = "/assets/";
-const BUILT_IN_PUBLIC_PAGE_SLUGS = new Set(["services", "directory"]);
+const BUILT_IN_PUBLIC_PAGE_SLUGS = new Set(["home", "services", "directory"]);
 const NEWSLETTER_EMBED_MARKUP_CACHE = new Map<string, Promise<string>>();
 
 const SETTINGS_CATEGORY_LABELS = new Map<string, string>([
@@ -1112,6 +1112,14 @@ function resolveCurrentPublicNavContext(requestPath: string | undefined): "home"
   const requestUrl = parsePublicRequestUrl(requestPath);
   if (requestUrl == null) {
     return "";
+  }
+
+  if (requestUrl.pathname === "/home") {
+    return "home";
+  }
+
+  if (requestUrl.pathname === "/page.php" && requestUrl.searchParams.get("slug")?.trim() === "home") {
+    return "home";
   }
 
   if (requestUrl.pathname === "/services") {
@@ -3541,7 +3549,7 @@ async function listLegacyPublicEvents(
   }> = [];
 
   for (const appointmentType of appointmentTypes) {
-    if (!appointmentType.active || appointmentType.scheduleType !== "specific_date" || (!appointmentType.isGroupClass && !appointmentType.isMiniSession)) {
+    if (!appointmentType.active || !appointmentType.publicAvailable || appointmentType.scheduleType !== "specific_date" || (!appointmentType.isGroupClass && !appointmentType.isMiniSession)) {
       continue;
     }
 
@@ -5103,10 +5111,10 @@ async function resolveLegacyBookingAppointmentType(
 
   const appointmentTypes = await api.adminConfiguration.listAdminAppointmentTypes();
   if (uniqueLink !== "") {
-    return appointmentTypes.find((item) => item.active && item.uniqueLink === uniqueLink) ?? null;
+    return appointmentTypes.find((item) => item.active && item.publicAvailable && item.uniqueLink === uniqueLink) ?? null;
   }
 
-  return appointmentTypes.find((item) => item.active && item.id === appointmentTypeId) ?? null;
+  return appointmentTypes.find((item) => item.active && item.publicAvailable && item.id === appointmentTypeId) ?? null;
 }
 
 function renderLegacyBookingPage(
@@ -5565,6 +5573,16 @@ function buildBuiltInPublicPageFallback(slug: string): Pick<SitePage, "slug" | "
     return null;
   }
 
+  if (slug === "home") {
+    return {
+      slug,
+      title: "Brook's Dog Training Academy",
+      htmlContent: "<section><h1>Practical dog training for real family life.</h1><p>Private lessons, board-and-train support, workshops, and clear follow-through at home.</p></section>",
+      cssContent: "",
+      metaDescription: "Private lessons, board-and-train support, workshops, and clear follow-through at home."
+    };
+  }
+
   if (slug === "services") {
     return {
       slug,
@@ -5588,19 +5606,13 @@ async function getPublicSitePageForRender(
   slug: string,
   content: ContentManagementDependencies
 ): Promise<Pick<SitePage, "slug" | "title" | "htmlContent" | "cssContent" | "metaDescription">> {
-  try {
-    const page = await getPublicSitePage(slug, content);
-    return page.item;
-  } catch (error) {
-    if (error instanceof ContentError && error.code === "not_found") {
-      const fallbackPage = buildBuiltInPublicPageFallback(slug);
-      if (fallbackPage != null) {
-        return fallbackPage;
-      }
-    }
-
-    throw error;
+  const normalizedSlug = slug.trim().toLowerCase();
+  const fallbackPage = buildBuiltInPublicPageFallback(normalizedSlug);
+  if (fallbackPage != null) {
+    return fallbackPage;
   }
+
+  return (await getPublicSitePage(normalizedSlug, content)).item;
 }
 
 function toSafeInlineJson(value: unknown): string {
@@ -8569,7 +8581,7 @@ function renderAdminAppointmentTypeEditor(appointmentType: {
     `<fieldset><legend>Location Types</legend>${renderCheckboxGroup("locationTypes", APPOINTMENT_LOCATION_OPTIONS.map((value) => ({ value, label: toTitleCase(value.replaceAll("_", " ")) })), item.locationTypes)}</fieldset>`,
     "</div>",
     `<label><input type="checkbox" name="active"${item.active ? " checked" : ""}> Active</label>`,
-    `<label><input type="checkbox" name="publicAvailable"${item.publicAvailable ? " checked" : ""}> Public Available</label>`,
+    `<label><input type="checkbox" name="publicAvailable"${item.publicAvailable ? " checked" : ""}> Display on Front End</label>`,
     `<label><input type="checkbox" name="portalAvailable"${item.portalAvailable ? " checked" : ""}> Portal Available</label>`,
     `<label><input type="checkbox" name="useTravelTimeBuffer"${item.useTravelTimeBuffer ? " checked" : ""}> Use Travel Time Buffer</label>`,
     `<label><input type="checkbox" name="requiresForms"${item.requiresForms ? " checked" : ""}> Requires Forms</label>`,
@@ -17140,7 +17152,7 @@ return;
                   escapeHtml(`${item.durationMinutes} min`),
                   escapeHtml(item.scheduleType),
                   escapeHtml([
-                    item.publicAvailable ? "Public" : "",
+          item.publicAvailable ? "Front End" : "",
                     item.portalAvailable ? "Portal" : ""
                   ].filter((value) => value !== "").join(" / ") || "Internal"),
                   renderStatusPill(item.active ? "Active" : "Inactive", item.active ? "success" : "warning"),
@@ -18127,21 +18139,21 @@ return;
       }
 
       if (url.pathname === "/" || url.pathname === "/index.php" || url.pathname === "/index.html") {
-        const page = await getPublicSitePage(null, resolved.content);
-        writeHtml(response, 200, renderPublicPageLayout({
-          title: page.item.title,
-          description: page.item.metaDescription,
-          css: page.item.cssContent,
-          publicRenderAssets: await getPublicRenderAssets(),
-          includeNewsletterEmbed: true,
-          requestPath,
-          body: renderPublicPageContent({
-            slug: "home",
-            title: page.item.title,
-            htmlContent: page.item.htmlContent,
-            metaDescription: page.item.metaDescription
-          })
-        }));
+    const page = await getPublicSitePageForRender("home", resolved.content);
+    writeHtml(response, 200, renderPublicPageLayout({
+      title: page.title,
+      description: page.metaDescription,
+      css: page.cssContent,
+      publicRenderAssets: await getPublicRenderAssets(),
+      includeNewsletterEmbed: true,
+      requestPath,
+      body: renderPublicPageContent({
+        slug: "home",
+        title: page.title,
+        htmlContent: page.htmlContent,
+        metaDescription: page.metaDescription
+      })
+    }));
         return;
       }
 

@@ -15,7 +15,7 @@ function toCookieHeader(...cookies: Array<string | null>): string {
 }
 
 describe("web server", () => {
-  it("renders homepage, site pages, and blog routes from content state", async () => {
+it("renders built-in marketing pages and blog routes from content state", async () => {
     const state = createInMemoryPlatformState({
       blogPosts: [
         {
@@ -101,8 +101,10 @@ describe("web server", () => {
       const blogIndexHtml = await blogIndex.text();
       const blogPostHtml = await blogPost.text();
 
-      expect(homeHtml).toContain("Train the dog in front of you.");
-      expect(servicesHtml).toContain("Private lessons and board-and-train.");
+      expect(homeHtml).toContain("Balanced Training For Real Family Life");
+      expect(homeHtml).toContain("Practical dog training for real family life.");
+      expect(servicesHtml).toContain("Service Menu");
+      expect(servicesHtml).toContain("Single Booking Services");
       expect(blogIndexHtml).toContain("Loose Leash Training Tips");
       expect(blogIndexHtml).toContain("data-enhanced-collection");
       expect(blogIndexHtml).toContain("data-enhanced-collection-search");
@@ -184,7 +186,7 @@ describe("web server", () => {
     }
   });
 
-it("renders public content when migrated blog and page metadata uses blank strings", async () => {
+it("renders built-in public pages instead of legacy saved page markup", async () => {
   const state = createInMemoryPlatformState({
     blogPosts: [
       {
@@ -264,8 +266,13 @@ it("renders public content when migrated blog and page metadata uses blank strin
     expect(blogIndex.status).toBe(200);
     expect(blogPost.status).toBe(200);
 
-    expect(await home.text()).toContain("Legacy homepage content");
-    expect(await directory.text()).toContain("Legacy directory copy.");
+    const homeHtml = await home.text();
+    const directoryHtml = await directory.text();
+
+    expect(homeHtml).toContain("Balanced Training For Real Family Life");
+    expect(homeHtml).not.toContain("Legacy homepage content");
+    expect(directoryHtml).toContain("Training Prep");
+    expect(directoryHtml).not.toContain("Legacy directory copy.");
     expect(await blogIndex.text()).toContain("Legacy Training Notes");
     expect(await blogPost.text()).toContain("Legacy migration content still needs to render.");
   } finally {
@@ -881,7 +888,7 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
       const blogAliasHtml = await blogAlias.text();
       const blogPostAliasHtml = await blogPostAlias.text();
 
-      expect(homeAliasHtml).toContain("Train the dog in front of you.");
+      expect(homeAliasHtml).toContain("Practical dog training for real family life.");
       expect(manualHtml).toContain('data-public-notice');
       expect(manualHtml).toContain("Scheduled maintenance Thursday.<br>&lt;script&gt;alert(1)&lt;/script&gt;");
       expect(manualHtml).toContain("data-public-notice-dismiss");
@@ -935,9 +942,9 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
           updatedAt: "2026-05-28T12:00:00.000Z"
         },
         {
-          id: "page-services",
-          slug: "services",
-          title: "Services",
+        id: "page-custom-programs",
+        slug: "custom-programs",
+        title: "Custom Programs",
           htmlContent: [
             '<section class="bdta-services-module py-5">',
             '<div class="container">',
@@ -948,7 +955,7 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
             "</section>"
           ].join(""),
           cssContent: "",
-          metaDescription: "Training services",
+        metaDescription: "Custom marketing modules.",
           metaKeywords: "",
           ogTitle: null,
           ogDescription: null,
@@ -972,7 +979,7 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
     }
 
     try {
-      const response = await fetch(`http://127.0.0.1:${address.port}/services`);
+      const response = await fetch(`http://127.0.0.1:${address.port}/custom-programs`);
       expect(response.status).toBe(200);
 
       const html = await response.text();
@@ -1221,7 +1228,7 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
     }
 
     try {
-      const response = await fetch(`http://127.0.0.1:${crashingAddress.port}/`);
+      const response = await fetch(`http://127.0.0.1:${crashingAddress.port}/broken-page`);
       expect(response.status).toBe(500);
       expect(response.headers.get("x-request-id")).toBe("web-request-1");
       const html = await response.text();
@@ -1233,7 +1240,7 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
       expect(reportedErrors).toHaveLength(1);
       expect(reportedErrors[0]?.requestId).toBe("web-request-1");
       expect(reportedErrors[0]?.method).toBe("GET");
-      expect(reportedErrors[0]?.path).toBe("/");
+      expect(reportedErrors[0]?.path).toBe("/broken-page");
       expect(reportedErrors[0]?.error).toBeInstanceOf(Error);
     } finally {
       await new Promise<void>((resolve, reject) => {
@@ -2163,6 +2170,22 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
           isFieldRental: false,
           fieldRentalLocation: "",
           active: true
+        },
+        {
+          id: "appointment-type-hidden",
+          name: "Internal Evaluation",
+          description: "Should stay off the public site.",
+          bulletPoints: ["Internal only"],
+          durationMinutes: 60,
+          defaultAmount: 150,
+          uniqueLink: "internal-evaluation-link",
+          publicAvailable: false,
+          portalAvailable: true,
+          isGroupClass: false,
+          isMiniSession: false,
+          isFieldRental: false,
+          fieldRentalLocation: "",
+          active: true
         }
       ] as never,
       captchaVerifier: async (token) => token === "turnstile-ok"
@@ -2197,14 +2220,20 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
 
       const bookingByLink = await fetch(`${baseUrl}/backend/public/book.php?link=private-coaching-link`);
       const bookingByType = await fetch(`${baseUrl}/backend/public/book.php?type=appointment-type-1`);
+      const hiddenBookingByLink = await fetch(`${baseUrl}/backend/public/book.php?link=internal-evaluation-link`);
+      const hiddenBookingByType = await fetch(`${baseUrl}/backend/public/book.php?type=appointment-type-hidden`);
       const invalidBooking = await fetch(`${baseUrl}/backend/public/book.php?link=missing-link`);
 
       expect(bookingByLink.status).toBe(200);
       expect(bookingByType.status).toBe(200);
+      expect(hiddenBookingByLink.status).toBe(200);
+      expect(hiddenBookingByType.status).toBe(200);
       expect(invalidBooking.status).toBe(200);
 
       const bookingByLinkHtml = await bookingByLink.text();
       const bookingByTypeHtml = await bookingByType.text();
+      const hiddenBookingByLinkHtml = await hiddenBookingByLink.text();
+      const hiddenBookingByTypeHtml = await hiddenBookingByType.text();
       const invalidBookingHtml = await invalidBooking.text();
 
       expect(bookingByLinkHtml).toContain("Private Coaching");
@@ -2212,6 +2241,8 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
       expect(bookingByLinkHtml).toContain("Behavior assessment");
       expect(bookingByLinkHtml).toContain('value="appointment-type-1"');
       expect(bookingByTypeHtml).toContain("Private Coaching");
+      expect(hiddenBookingByLinkHtml).toContain("Invalid Booking Link");
+      expect(hiddenBookingByTypeHtml).toContain("Invalid Booking Link");
       expect(invalidBookingHtml).toContain("Invalid Booking Link");
 
       const legacyBookingSubmit = await fetch(`${baseUrl}/backend/public/book.php?link=private-coaching-link`, {
@@ -2249,6 +2280,7 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
           bulletPoints: ["Structured drills", "Coach feedback"],
           durationMinutes: 60,
           defaultAmount: 95,
+          publicAvailable: true,
           isGroupClass: true,
           maxParticipants: 1,
           groupClassLocation: "Training Barn",
@@ -2268,6 +2300,7 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
           bulletPoints: ["Leash mechanics", "Handler timing"],
           durationMinutes: 30,
           defaultAmount: 45,
+          publicAvailable: true,
           isMiniSession: true,
           miniSessionLocation: "Community Park",
           miniSessionTopic: "Loose leash walking",
@@ -2284,6 +2317,26 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
           availableEndTime: "14:00",
           timeSlotInterval: 30,
           uniqueLink: "loose-leash-mini-link",
+          active: true
+        },
+        {
+          id: "appointment-type-hidden-event",
+          name: "Hidden Workshop",
+          description: "Internal-only event.",
+          bulletPoints: ["Should stay hidden"],
+          durationMinutes: 45,
+          defaultAmount: 65,
+          publicAvailable: false,
+          isGroupClass: true,
+          maxParticipants: 4,
+          groupClassLocation: "Back Field",
+          scheduleType: "specific_date",
+          specificDate: "2026-06-12",
+          specificDates: [],
+          availableStartTime: "11:00",
+          availableEndTime: "11:45",
+          timeSlotInterval: 45,
+          uniqueLink: "hidden-workshop-link",
           active: true
         }
       ] as never,
@@ -2331,6 +2384,7 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
       };
 
       expect(eventsPayload.events).toHaveLength(2);
+      expect(eventsPayload.events.some((event) => event.id === "appointment-type-hidden-event")).toBe(false);
       expect(eventsPayload.events[0]).toMatchObject({
         id: "appointment-type-group",
         name: "Reactive Dog Workshop",
