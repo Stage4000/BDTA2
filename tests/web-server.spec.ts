@@ -5827,9 +5827,15 @@ expect(settingsHtml).toContain("settings-summary-grid");
       const legacyScheduledTaskDetailHtml = await legacyScheduledTaskDetail.text();
 
       expect(appointmentTypesHtml).toContain("Appointment Types");
+      expect(appointmentTypesHtml).toContain("Weekly Regular Schedule");
       expect(appointmentTypesHtml).toContain("/admin/appointment-types/appointment-type-1/delete");
       expect(appointmentTypesHtml).toContain("/admin/appointment-types/appointment-type-1/duplicate");
       expect(appointmentTypeDetailHtml).toContain("Private Coaching");
+      expect(appointmentTypeDetailHtml).toContain("Specific Date(s) and Time(s)");
+      expect(appointmentTypeDetailHtml).toContain("Class Series");
+      expect(appointmentTypeDetailHtml).toContain("Location / Contact Modes");
+      expect(appointmentTypeDetailHtml).not.toContain("Specific Dates JSON");
+      expect(appointmentTypeDetailHtml).not.toContain("Per-Day Schedule JSON");
       expect(appointmentTypeDetailHtml).toContain("/admin/appointment-types/appointment-type-1/delete");
       expect(appointmentTypeDetailHtml).toContain('/client/form_requests_create.php?form_type=booking_form&appointment_type_id=appointment-type-1');
       expect(legacyAppointmentTypesHtml).toContain("Appointment Types");
@@ -5876,21 +5882,16 @@ expect(settingsHtml).toContain("settings-summary-grid");
           invoiceDueDays: "3",
           invoiceDueTiming: "before",
           defaultAmount: "95",
-          creditCount: "1",
-          scheduleType: "specific_date",
-          specificDate: "2026-06-21",
-          availableStartTime: "10:00",
-          availableEndTime: "14:00",
+          scheduleMode: "specific_dates",
+          specificDateEntries: "2026-09-15 10:00\n2026-09-19 18:00",
           timeSlotInterval: "30",
-          miniSessionLocation: "Downtown Park",
-          miniSessionTopic: "Recall refresh",
+          locationTypes: "custom_address",
+          customAddress: "Downtown Park",
           resourceCapacity: "1",
-          resourceAllocation: "per_appointment",
           uniqueLink: "mini-session-june-21",
           portalAvailable: "on",
           autoInvoice: "on",
           requiresAdminConfirmation: "on",
-          isMiniSession: "on",
           active: "on"
         })
       });
@@ -5915,14 +5916,52 @@ expect(settingsHtml).toContain("settings-summary-grid");
           invoiceDueDays: "7",
           invoiceDueTiming: "after",
           defaultAmount: "175",
-          creditCount: "1",
-          scheduleType: "recurring",
-          availableStartTime: "08:00",
-          availableEndTime: "12:00",
+          scheduleMode: "weekly",
+          "weeklyDayEnabled-1": "on",
+          "weeklyDayStart-1": "08:00",
+          "weeklyDayEnd-1": "12:00",
+          "weeklyDayEnabled-2": "on",
+          "weeklyDayStart-2": "09:00",
+          "weeklyDayEnd-2": "12:00",
+          "weeklyDayEnabled-3": "on",
+          "weeklyDayStart-3": "10:00",
+          "weeklyDayEnd-3": "14:00",
           timeSlotInterval: "30",
           resourceCapacity: "1",
-          resourceAllocation: "per_appointment",
           uniqueLink: "private-coaching-updated",
+          publicAvailable: "on",
+          portalAvailable: "on",
+          active: "on"
+        })
+      });
+      const createClassSeriesAppointmentType = await fetch(`${baseUrl}/admin/appointment-types`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          cookie: adminCookie ?? ""
+        },
+        redirect: "manual",
+        body: new URLSearchParams({
+          name: "Puppy Basics Series",
+          description: "Six-week puppy class.",
+          bulletPoints: "Weekly homework\nSocial exposure",
+          durationMinutes: "60",
+          bufferBeforeMinutes: "15",
+          bufferAfterMinutes: "15",
+          advanceBookingMinDays: "2",
+          advanceBookingMaxDays: "90",
+          cancellationNoticeHours: "24",
+          defaultAmount: "240",
+          scheduleMode: "class_series",
+          classSeriesStartDate: "2026-09-03",
+          classSeriesStartTime: "18:00",
+          classSeriesSessionCount: "6",
+          classSeriesCapacity: "8",
+          classSeriesAllowIndividualSessionCancellation: "on",
+          timeSlotInterval: "60",
+          locationTypes: "custom_address",
+          customAddress: "Training Barn",
+          uniqueLink: "puppy-basics-series",
           publicAvailable: "on",
           portalAvailable: "on",
           active: "on"
@@ -6000,13 +6039,34 @@ expect(settingsHtml).toContain("settings-summary-grid");
 
       expect(createAppointmentType.status).toBe(302);
       expect(updateAppointmentType.status).toBe(302);
+      expect(createClassSeriesAppointmentType.status).toBe(302);
       expect(createFormTemplate.status).toBe(302);
       expect(updateFormTemplate.status).toBe(302);
       expect(createEmailTemplate.status).toBe(302);
       expect(updateScheduledTask.status).toBe(302);
       const createdAppointmentType = state.appointmentTypes.find((item) => item.uniqueLink === "mini-session-june-21");
+      const createdClassSeriesAppointmentType = state.appointmentTypes.find((item) => item.uniqueLink === "puppy-basics-series");
+      const updatedAppointmentType = state.appointmentTypes.find((item) => item.id === "appointment-type-1");
       const createdFormTemplate = state.formTemplates.find((item) => item.name === "Follow-Up Survey");
       expect(createdAppointmentType).toBeDefined();
+      expect(createdAppointmentType?.scheduleType).toBe("specific_date");
+      expect(createdAppointmentType?.isMiniSession).toBe(true);
+      expect(createdAppointmentType?.specificDates).toHaveLength(2);
+      expect(createdAppointmentType?.miniSessionLocation).toBe("Downtown Park");
+      expect(createdAppointmentType?.fieldRentalLocation).toContain('"scheduleMode":"specific_dates"');
+      expect(createdClassSeriesAppointmentType).toBeDefined();
+      expect(createdClassSeriesAppointmentType?.isGroupClass).toBe(true);
+      expect(createdClassSeriesAppointmentType?.maxParticipants).toBe(8);
+      expect(createdClassSeriesAppointmentType?.specificDates).toHaveLength(6);
+      expect(createdClassSeriesAppointmentType?.groupClassLocation).toBe("Training Barn");
+      expect(createdClassSeriesAppointmentType?.fieldRentalLocation).toContain('"scheduleMode":"class_series"');
+      expect(updatedAppointmentType?.scheduleType).toBe("recurring");
+      expect(updatedAppointmentType?.availableDays).toEqual([1, 2, 3]);
+      expect(updatedAppointmentType?.perDaySchedule).toEqual({
+        1: { start: "08:00", end: "12:00" },
+        2: { start: "09:00", end: "12:00" },
+        3: { start: "10:00", end: "14:00" }
+      });
       expect(createdFormTemplate).toBeDefined();
 
       const duplicateAppointmentType = await fetch(`${baseUrl}/admin/appointment-types/appointment-type-1/duplicate`, {

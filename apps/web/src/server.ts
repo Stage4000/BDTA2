@@ -3453,7 +3453,7 @@ async function listLegacyPublicServices(
         bullet_points: item.bulletPoints,
         price: item.defaultAmount,
         duration_minutes: item.durationMinutes,
-        location: item.isFieldRental ? item.fieldRentalLocation : "",
+      location: resolveAppointmentTypeLocationText(item),
         type_label: item.isFieldRental ? "Field Rental" : "",
         booking_url: origin === "" ? bookingPath : `${origin}${bookingPath}`
       };
@@ -3611,7 +3611,7 @@ async function listLegacyPublicEvents(
           booking_url: bookingUrl,
           type: "group_class",
           max_participants: capacity,
-          location: appointmentType.groupClassLocation
+        location: resolveAppointmentTypeLocationText(appointmentType)
         });
         continue;
       }
@@ -3629,7 +3629,7 @@ async function listLegacyPublicEvents(
         fully_booked: candidateMinutes.length > 0 && !anyAvailable,
         booking_url: bookingUrl,
         type: "mini_session",
-        location: appointmentType.miniSessionLocation,
+      location: resolveAppointmentTypeLocationText(appointmentType),
         topic: appointmentType.miniSessionTopic
       });
     }
@@ -5141,13 +5141,7 @@ function renderLegacyBookingPage(
   const bulletPoints = appointmentType.bulletPoints.length === 0
     ? ""
     : `<ul class="detail-list">${appointmentType.bulletPoints.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`;
-  const location = appointmentType.isFieldRental
-    ? appointmentType.fieldRentalLocation
-    : appointmentType.isGroupClass
-      ? appointmentType.groupClassLocation
-      : appointmentType.isMiniSession
-        ? appointmentType.miniSessionLocation
-        : "";
+  const location = resolveAppointmentTypeLocationText(appointmentType);
   const priceText = appointmentType.defaultAmount > 0
     ? formatCurrency(appointmentType.defaultAmount)
     : "Contact for pricing";
@@ -7100,9 +7094,24 @@ function renderLayout(input: {
 ".quote-line-item__header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.8rem; margin-bottom: 0.9rem; }",
 ".quote-line-item__title { font-size: 0.95rem; font-weight: 700; color: #334155; }",
 ".form-grid { display: grid; gap: 1rem; }",
-    ".form-grid--two { grid-template-columns: repeat(2, minmax(0, 1fr)); }",
-    ".form-actions { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; }",
-    ".table-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; }",
+".form-grid--two { grid-template-columns: repeat(2, minmax(0, 1fr)); }",
+".appointment-type-editor { gap: 1.25rem; }",
+".appointment-type-editor__section { padding: 1.2rem; border-radius: 1rem; border: 1px solid rgba(148, 163, 184, 0.18); background: #f8fafc; }",
+".appointment-type-editor__section h3 { margin-bottom: 0.45rem; }",
+".appointment-type-editor__hint { margin: 0 0 1rem; color: #64748b; line-height: 1.6; }",
+".appointment-type-editor__schedule-choice { display: grid; gap: 0.85rem; }",
+".appointment-type-editor__schedule-option { display: grid; grid-template-columns: auto 1fr; gap: 0.85rem; align-items: start; padding: 1rem; border-radius: 1rem; border: 1px solid rgba(148, 163, 184, 0.22); background: #ffffff; cursor: pointer; }",
+".appointment-type-editor__schedule-option[data-selected='true'] { border-color: rgba(14, 116, 144, 0.32); box-shadow: inset 0 0 0 1px rgba(14, 116, 144, 0.14); background: #ecfeff; }",
+".appointment-type-editor__schedule-option input { margin-top: 0.2rem; }",
+".appointment-type-editor__schedule-copy { display: grid; gap: 0.25rem; }",
+".appointment-type-editor__schedule-title { font-weight: 700; color: #0f172a; }",
+".appointment-type-editor__schedule-description { color: #475569; line-height: 1.5; }",
+".appointment-type-editor__weekly-grid { display: grid; gap: 0.75rem; }",
+".appointment-type-editor__weekly-row { display: grid; grid-template-columns: minmax(0, 140px) repeat(2, minmax(0, 1fr)); gap: 0.75rem; align-items: end; }",
+".appointment-type-editor__weekly-day { display: flex; align-items: center; gap: 0.5rem; min-height: 2.8rem; font-weight: 600; color: #1f2937; }",
+".appointment-type-editor__toggle-panel[hidden], .appointment-type-editor__schedule-panel[hidden] { display: none; }",
+".form-actions { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; }",
+".table-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; }",
     ".table-actions form { margin: 0; }",
     ".table-actions button { box-shadow: none; padding: 0.65rem 0.95rem; }",
     ".site-header { position: sticky; top: 0; z-index: 20; border-bottom: 1px solid rgba(148, 163, 184, 0.18); background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(12px); }",
@@ -8214,12 +8223,48 @@ const APPOINTMENT_DAY_OPTIONS = [
 ] as const;
 
 const APPOINTMENT_LOCATION_OPTIONS = [
-  "client_address",
-  "custom_address",
-  "phone_inbound",
-  "phone_outbound",
-  "webcall"
+  { value: "client_address", label: "Client address from profile" },
+  { value: "custom_address", label: "Custom address" },
+  { value: "phone_inbound", label: "Client calls us" },
+  { value: "phone_outbound", label: "We call the client" },
+  { value: "client_calls_phone", label: "Client calls provided number" },
+  { value: "webcall", label: "Webcall link" }
 ] as const;
+
+type AppointmentTypeEditorScheduleMode = "weekly" | "specific_dates" | "class_series";
+
+type AppointmentTypeEditorMeta = {
+  scheduleMode?: AppointmentTypeEditorScheduleMode;
+  customAddress?: string;
+  outboundPhoneNumber?: string;
+  clientCallNumber?: string;
+  webcallLink?: string;
+  allowIndividualSessionCancellation?: boolean;
+  allowResourceOverlapWhenAvailable?: boolean;
+  resourceUnitsPerBooking?: number;
+};
+
+const APPOINTMENT_SCHEDULE_MODE_OPTIONS: ReadonlyArray<{
+  value: AppointmentTypeEditorScheduleMode;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "weekly",
+    label: "Weekly Regular Schedule",
+    description: "Use recurring weekly availability with separate windows by day."
+  },
+  {
+    value: "specific_dates",
+    label: "Specific Date(s) and Time(s)",
+    description: "Use one-off sessions or special event dates under one appointment type."
+  },
+  {
+    value: "class_series",
+    label: "Class Series",
+    description: "Use weekly multi-session group classes booked as one series."
+  }
+];
 
 const FORM_TEMPLATE_TYPE_OPTIONS = [
   {
@@ -8417,62 +8462,234 @@ function renderCheckboxGroup(name: string, options: ReadonlyArray<{ value: strin
   )).join("");
 }
 
-function renderAdminAppointmentTypeEditor(appointmentType: {
-  id: string;
-  name: string;
-  description: string;
-  bulletPoints: string[];
-  adminUserId: string | null;
-  durationMinutes: number;
-  bufferBeforeMinutes: number;
-  bufferAfterMinutes: number;
-  useTravelTimeBuffer: boolean;
-  travelTimeMinutes: number;
-  advanceBookingMinDays: number;
-  advanceBookingMaxDays: number;
-  cancellationNoticeHours: number;
-  requiresForms: boolean;
-  formTemplateIds: string[];
-  requiresContract: boolean;
-  contractTemplateId: string | null;
-  autoInvoice: boolean;
-  invoiceDueDays: number;
-  invoiceDueTiming: string;
-  defaultAmount: number;
-  consumesCredits: boolean;
-  creditCount: number;
-  isGroupClass: boolean;
-  maxParticipants: number;
-  publicAvailable: boolean;
-  portalAvailable: boolean;
-  scheduleType: string;
-  specificDate: string | null;
-  specificDates: Array<Record<string, unknown>>;
-  availableDays: number[];
-  availableStartTime: string;
-  availableEndTime: string;
-  timeSlotInterval: number;
-  perDaySchedule: Record<string, { start: string; end: string }>;
-  isMiniSession: boolean;
-  miniSessionLocation: string;
-  miniSessionTopic: string;
-  isFieldRental: boolean;
-  fieldRentalLocation: string;
-  groupClassLocation: string;
-  locationTypes: string[];
-  confirmationTemplateId: string | null;
-  bookingRequestTemplateId: string | null;
-  invoiceTemplateId: string | null;
-  reminderTemplateId: string | null;
-  cancellationTemplateId: string | null;
-  requiresAdminConfirmation: boolean;
-  usesResource: boolean;
-  resourceName: string;
-  resourceCapacity: number;
-  resourceAllocation: string;
-  uniqueLink: string;
-  active: boolean;
-} | null, action: string): string {
+function isAppointmentTypeEditorScheduleMode(value: unknown): value is AppointmentTypeEditorScheduleMode {
+  return value === "weekly" || value === "specific_dates" || value === "class_series";
+}
+
+function parseAppointmentTypeEditorMeta(appointmentType: Pick<AppointmentType, "fieldRentalLocation" | "isFieldRental">): AppointmentTypeEditorMeta {
+  if (appointmentType.isFieldRental) {
+    return {};
+  }
+
+  const rawValue = appointmentType.fieldRentalLocation.trim();
+  if (rawValue === "" || !rawValue.startsWith("{")) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue) as Record<string, unknown>;
+    const meta: AppointmentTypeEditorMeta = {};
+
+    if (isAppointmentTypeEditorScheduleMode(parsed.scheduleMode)) {
+      meta.scheduleMode = parsed.scheduleMode;
+    }
+    if (typeof parsed.customAddress === "string") {
+      meta.customAddress = parsed.customAddress;
+    }
+    if (typeof parsed.outboundPhoneNumber === "string") {
+      meta.outboundPhoneNumber = parsed.outboundPhoneNumber;
+    }
+    if (typeof parsed.clientCallNumber === "string") {
+      meta.clientCallNumber = parsed.clientCallNumber;
+    }
+    if (typeof parsed.webcallLink === "string") {
+      meta.webcallLink = parsed.webcallLink;
+    }
+    if (typeof parsed.allowIndividualSessionCancellation === "boolean") {
+      meta.allowIndividualSessionCancellation = parsed.allowIndividualSessionCancellation;
+    }
+    if (typeof parsed.allowResourceOverlapWhenAvailable === "boolean") {
+      meta.allowResourceOverlapWhenAvailable = parsed.allowResourceOverlapWhenAvailable;
+    }
+    if (typeof parsed.resourceUnitsPerBooking === "number" && Number.isFinite(parsed.resourceUnitsPerBooking) && parsed.resourceUnitsPerBooking > 0) {
+      meta.resourceUnitsPerBooking = Math.max(1, Math.trunc(parsed.resourceUnitsPerBooking));
+    }
+
+    return meta;
+  } catch {
+    return {};
+  }
+}
+
+function stringifyAppointmentTypeEditorMeta(meta: AppointmentTypeEditorMeta): string {
+  const payload: Record<string, unknown> = {};
+
+  if (meta.scheduleMode != null) {
+    payload.scheduleMode = meta.scheduleMode;
+  }
+  if ((meta.customAddress ?? "").trim() !== "") {
+    payload.customAddress = meta.customAddress?.trim();
+  }
+  if ((meta.outboundPhoneNumber ?? "").trim() !== "") {
+    payload.outboundPhoneNumber = meta.outboundPhoneNumber?.trim();
+  }
+  if ((meta.clientCallNumber ?? "").trim() !== "") {
+    payload.clientCallNumber = meta.clientCallNumber?.trim();
+  }
+  if ((meta.webcallLink ?? "").trim() !== "") {
+    payload.webcallLink = meta.webcallLink?.trim();
+  }
+  if (meta.allowIndividualSessionCancellation === true) {
+    payload.allowIndividualSessionCancellation = true;
+  }
+  if (meta.allowResourceOverlapWhenAvailable === true) {
+    payload.allowResourceOverlapWhenAvailable = true;
+  }
+  if ((meta.resourceUnitsPerBooking ?? 1) > 1) {
+    payload.resourceUnitsPerBooking = Math.max(1, Math.trunc(meta.resourceUnitsPerBooking ?? 1));
+  }
+
+  return Object.keys(payload).length === 0 ? "" : JSON.stringify(payload);
+}
+
+function resolveAppointmentTypeEditorScheduleMode(appointmentType: AppointmentType, meta: AppointmentTypeEditorMeta): AppointmentTypeEditorScheduleMode {
+  if (meta.scheduleMode != null) {
+    return meta.scheduleMode;
+  }
+  if (appointmentType.isGroupClass) {
+    return "class_series";
+  }
+  if (appointmentType.scheduleType === "specific_date") {
+    return "specific_dates";
+  }
+  return "weekly";
+}
+
+function formatAppointmentTypeScheduleTypeLabel(appointmentType: Pick<AppointmentType, "scheduleType" | "isGroupClass">): string {
+  if (appointmentType.isGroupClass) {
+    return "Class Series";
+  }
+  if (appointmentType.scheduleType === "specific_date") {
+    return "Specific Date(s) and Time(s)";
+  }
+  if (appointmentType.scheduleType === "recurring") {
+    return "Weekly Regular Schedule";
+  }
+  return toTitleCase(appointmentType.scheduleType.replaceAll("_", " "));
+}
+
+function addDaysToDateString(date: string, days: number): string {
+  const [year, month, day] = date.split("-").map((part) => Number.parseInt(part, 10));
+  const parsedDate = new Date(Date.UTC(year ?? 0, (month ?? 1) - 1, day ?? 1));
+  parsedDate.setUTCDate(parsedDate.getUTCDate() + days);
+  return parsedDate.toISOString().slice(0, 10);
+}
+
+function formatAppointmentTypeSpecificDateEntries(
+  specificDates: AppointmentType["specificDates"],
+  specificDate: string | null,
+  availableStartTime: string,
+  availableEndTime: string
+): string {
+  if (specificDates.length > 0) {
+    return specificDates.flatMap((entry) => {
+      if (entry.timeslots.length === 0) {
+        return [`${entry.date} ${availableStartTime}`];
+      }
+
+      return entry.timeslots.map((timeslot) => timeslot.type === "range"
+        ? `${entry.date} ${timeslot.start}-${timeslot.end}`
+        : `${entry.date} ${timeslot.time}`);
+    }).join("\n");
+  }
+
+  if (specificDate == null || specificDate.trim() === "") {
+    return "";
+  }
+
+  return availableEndTime.trim() !== "" && availableEndTime !== availableStartTime
+    ? `${specificDate} ${availableStartTime}-${availableEndTime}`
+    : `${specificDate} ${availableStartTime}`;
+}
+
+function parseAppointmentTypeSpecificDateEntries(value: string): AppointmentType["specificDates"] {
+  const entryMap = new Map<string, AppointmentType["specificDates"][number]>();
+
+  for (const rawLine of value.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line === "") {
+      continue;
+    }
+
+    const match = /^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})(?:\s*-\s*(\d{2}:\d{2}))?$/.exec(line);
+    if (match == null) {
+      continue;
+    }
+
+    const date = match[1] ?? "";
+    const start = match[2] ?? "";
+    const end = match[3] ?? "";
+    const entry = entryMap.get(date) ?? { date, timeslots: [] };
+
+    entry.timeslots.push(end === ""
+      ? { type: "point", time: start }
+      : { type: "range", start, end });
+
+    entryMap.set(date, entry);
+  }
+
+  return [...entryMap.values()];
+}
+
+function getAppointmentTypeFirstSpecificDateTime(appointmentType: AppointmentType): string {
+  const firstTimeslot = appointmentType.specificDates.flatMap((entry) => entry.timeslots).at(0);
+  if (firstTimeslot == null) {
+    return appointmentType.availableStartTime;
+  }
+  return firstTimeslot.type === "range" ? firstTimeslot.start : firstTimeslot.time;
+}
+
+function buildAppointmentTypeClassSeriesDates(startDate: string, sessionCount: number, startTime: string): AppointmentType["specificDates"] {
+  if (startDate.trim() === "") {
+    return [];
+  }
+
+  const totalSessions = Math.max(1, Math.trunc(sessionCount));
+  return Array.from({ length: totalSessions }, (_, index) => ({
+    date: addDaysToDateString(startDate, index * 7),
+    timeslots: [{ type: "point" as const, time: startTime }]
+  }));
+}
+
+function buildAppointmentTypeLocationSummary(locationTypes: string[], meta: AppointmentTypeEditorMeta, fallback = ""): string {
+  const selected = new Set(locationTypes);
+
+  if (selected.has("custom_address") && (meta.customAddress ?? "").trim() !== "") {
+    return meta.customAddress?.trim() ?? "";
+  }
+  if (selected.has("client_calls_phone") && (meta.clientCallNumber ?? "").trim() !== "") {
+    return meta.clientCallNumber?.trim() ?? "";
+  }
+  if (selected.has("webcall") && (meta.webcallLink ?? "").trim() !== "") {
+    return meta.webcallLink?.trim() ?? "";
+  }
+  if (selected.has("phone_outbound") && (meta.outboundPhoneNumber ?? "").trim() !== "") {
+    return `We call ${meta.outboundPhoneNumber?.trim() ?? ""}`;
+  }
+  if (selected.has("phone_inbound")) {
+    return "Client calls the training team";
+  }
+  if (selected.has("client_address")) {
+    return "Client address on file";
+  }
+
+  return fallback.trim();
+}
+
+function resolveAppointmentTypeLocationText(appointmentType: AppointmentType): string {
+  const editorMeta = parseAppointmentTypeEditorMeta(appointmentType);
+  const legacyLocation = appointmentType.isFieldRental
+    ? appointmentType.fieldRentalLocation
+    : appointmentType.isGroupClass
+      ? appointmentType.groupClassLocation
+      : appointmentType.isMiniSession
+        ? appointmentType.miniSessionLocation
+        : "";
+
+  return buildAppointmentTypeLocationSummary(appointmentType.locationTypes, editorMeta, legacyLocation);
+}
+
+function renderAdminAppointmentTypeEditor(appointmentType: AppointmentType | null, action: string): string {
   const item = appointmentType ?? {
     id: "",
     name: "",
@@ -8495,7 +8712,7 @@ function renderAdminAppointmentTypeEditor(appointmentType: {
     invoiceDueDays: 7,
     invoiceDueTiming: "after",
     defaultAmount: 0,
-    consumesCredits: false,
+    consumesCredits: true,
     creditCount: 1,
     isGroupClass: false,
     maxParticipants: 1,
@@ -8504,7 +8721,7 @@ function renderAdminAppointmentTypeEditor(appointmentType: {
     scheduleType: "recurring",
     specificDate: null,
     specificDates: [],
-    availableDays: [0, 1, 2, 3, 4, 5, 6],
+    availableDays: [1, 2, 3, 4, 5],
     availableStartTime: "09:00",
     availableEndTime: "17:00",
     timeSlotInterval: 30,
@@ -8530,77 +8747,258 @@ function renderAdminAppointmentTypeEditor(appointmentType: {
     active: true
   };
 
+  const editorMeta = parseAppointmentTypeEditorMeta(item);
+  const scheduleMode = resolveAppointmentTypeEditorScheduleMode(item, editorMeta);
+  const specificDateEntries = formatAppointmentTypeSpecificDateEntries(
+    item.specificDates,
+    item.specificDate,
+    item.availableStartTime,
+    item.availableEndTime
+  );
+  const classSeriesStartDate = item.specificDates[0]?.date ?? item.specificDate ?? "";
+  const classSeriesStartTime = getAppointmentTypeFirstSpecificDateTime(item);
+  const classSeriesSessionCount = Math.max(item.specificDates.length, 1);
+  const defaultLocationSummary = item.isFieldRental
+    ? item.fieldRentalLocation
+    : item.isGroupClass
+      ? item.groupClassLocation
+      : item.isMiniSession
+        ? item.miniSessionLocation
+        : "";
+  const customAddressValue = editorMeta.customAddress
+    ?? (item.isFieldRental || item.locationTypes.includes("custom_address") ? defaultLocationSummary : "");
+  const outboundPhoneNumberValue = editorMeta.outboundPhoneNumber ?? "";
+  const clientCallNumberValue = editorMeta.clientCallNumber ?? "";
+  const webcallLinkValue = editorMeta.webcallLink ?? "";
+  const allowIndividualSessionCancellation = editorMeta.allowIndividualSessionCancellation === true;
+  const allowResourceOverlapWhenAvailable = editorMeta.allowResourceOverlapWhenAvailable === true;
+  const resourceUnitsPerBooking = Math.max(1, editorMeta.resourceUnitsPerBooking ?? 1);
+  const weeklyScheduleRows = APPOINTMENT_DAY_OPTIONS.map((day) => {
+    const perDaySchedule = item.perDaySchedule[String(day.value)];
+    const enabled = item.scheduleType === "recurring" && (item.availableDays.includes(day.value) || perDaySchedule != null);
+    const start = perDaySchedule?.start ?? item.availableStartTime;
+    const end = perDaySchedule?.end ?? item.availableEndTime;
+
+    return [
+      '<div class="appointment-type-editor__weekly-row">',
+      `<label class="appointment-type-editor__weekly-day"><input type="checkbox" name="weeklyDayEnabled-${day.value}"${enabled ? " checked" : ""}> ${escapeHtml(day.label)}</label>`,
+      `<label>Start<input type="time" name="weeklyDayStart-${day.value}" value="${escapeAttribute(start)}"></label>`,
+      `<label>End<input type="time" name="weeklyDayEnd-${day.value}" value="${escapeAttribute(end)}"></label>`,
+      "</div>"
+    ].join("");
+  }).join("");
+  const scheduleModeChoices = APPOINTMENT_SCHEDULE_MODE_OPTIONS.map((option) => [
+    `<label class="appointment-type-editor__schedule-option"${option.value === scheduleMode ? ' data-selected="true"' : ""}>`,
+    `<input type="radio" name="scheduleMode" value="${option.value}"${option.value === scheduleMode ? " checked" : ""}>`,
+    '<span class="appointment-type-editor__schedule-copy">',
+    `<span class="appointment-type-editor__schedule-title">${escapeHtml(option.label)}</span>`,
+    `<span class="appointment-type-editor__schedule-description">${escapeHtml(option.description)}</span>`,
+    "</span>",
+    "</label>"
+  ].join("")).join("");
+
   return [
-    '<section class="surface-block">',
+    '<section class="surface-block" data-appointment-type-editor>',
     `<h2>${appointmentType == null ? "Create Appointment Type" : "Edit Appointment Type"}</h2>`,
-    `<form class="form-grid" method="post" action="${escapeAttribute(action)}">`,
+    `<form class="form-grid appointment-type-editor" method="post" action="${escapeAttribute(action)}">`,
+    '<section class="appointment-type-editor__section">',
+    "<h3>Basics</h3>",
+    '<p class="appointment-type-editor__hint">Set the public-facing service details and booking link first.</p>',
     '<div class="form-grid form-grid--two">',
     `<label>Name<input type="text" name="name" value="${escapeAttribute(item.name)}" required></label>`,
     `<label>Unique Link<input type="text" name="uniqueLink" value="${escapeAttribute(item.uniqueLink)}" required></label>`,
     `<label>Assigned Admin ID<input type="text" name="adminUserId" value="${escapeAttribute(item.adminUserId ?? "")}"></label>`,
-    `<label>Schedule Type<select name="scheduleType"><option value="recurring"${item.scheduleType === "recurring" ? " selected" : ""}>Recurring</option><option value="specific_date"${item.scheduleType === "specific_date" ? " selected" : ""}>Specific Date</option></select></label>`,
-    `<label>Duration Minutes<input type="number" name="durationMinutes" value="${item.durationMinutes}" min="1" required></label>`,
-    `<label>Default Amount<input type="number" name="defaultAmount" value="${item.defaultAmount}" min="0" step="0.01"></label>`,
-    `<label>Buffer Before<input type="number" name="bufferBeforeMinutes" value="${item.bufferBeforeMinutes}" min="0"></label>`,
-    `<label>Buffer After<input type="number" name="bufferAfterMinutes" value="${item.bufferAfterMinutes}" min="0"></label>`,
-    `<label>Travel Time Minutes<input type="number" name="travelTimeMinutes" value="${item.travelTimeMinutes}" min="0"></label>`,
-    `<label>Advance Min Days<input type="number" name="advanceBookingMinDays" value="${item.advanceBookingMinDays}" min="0"></label>`,
-    `<label>Advance Max Days<input type="number" name="advanceBookingMaxDays" value="${item.advanceBookingMaxDays}" min="0"></label>`,
-    `<label>Cancellation Notice Hours<input type="number" name="cancellationNoticeHours" value="${item.cancellationNoticeHours}" min="0"></label>`,
-    `<label>Invoice Due Days<input type="number" name="invoiceDueDays" value="${item.invoiceDueDays}" min="0"></label>`,
-    `<label>Invoice Timing<select name="invoiceDueTiming"><option value="after"${item.invoiceDueTiming === "after" ? " selected" : ""}>After</option><option value="before"${item.invoiceDueTiming === "before" ? " selected" : ""}>Before</option></select></label>`,
-    `<label>Credit Count<input type="number" name="creditCount" value="${item.creditCount}" min="1"></label>`,
-    `<label>Max Participants<input type="number" name="maxParticipants" value="${item.maxParticipants}" min="1"></label>`,
-    `<label>Specific Date<input type="date" name="specificDate" value="${escapeAttribute(item.specificDate ?? "")}"></label>`,
-    `<label>Available Start<input type="time" name="availableStartTime" value="${escapeAttribute(item.availableStartTime)}"></label>`,
-    `<label>Available End<input type="time" name="availableEndTime" value="${escapeAttribute(item.availableEndTime)}"></label>`,
-    `<label>Time Slot Interval<input type="number" name="timeSlotInterval" value="${item.timeSlotInterval}" min="1"></label>`,
-    `<label>Resource Capacity<input type="number" name="resourceCapacity" value="${item.resourceCapacity}" min="1"></label>`,
-    `<label>Resource Allocation<select name="resourceAllocation"><option value="per_appointment"${item.resourceAllocation === "per_appointment" ? " selected" : ""}>Per Appointment</option><option value="per_pet"${item.resourceAllocation === "per_pet" ? " selected" : ""}>Per Pet</option></select></label>`,
+    `<label>Default Price<input type="number" name="defaultAmount" value="${item.defaultAmount}" min="0" step="0.01"></label>`,
     "</div>",
     `<label>Description<textarea name="description">${escapeHtml(item.description)}</textarea></label>`,
     `<label>Bullet Points<textarea name="bulletPoints">${escapeHtml(item.bulletPoints.join("\n"))}</textarea></label>`,
-    `<label>Form Template IDs<textarea name="formTemplateIds">${escapeHtml(item.formTemplateIds.join("\n"))}</textarea></label>`,
-    `<label>Specific Dates JSON<textarea name="specificDates">${escapeHtml(JSON.stringify(item.specificDates, null, 2))}</textarea></label>`,
-    `<label>Per-Day Schedule JSON<textarea name="perDaySchedule">${escapeHtml(JSON.stringify(item.perDaySchedule, null, 2))}</textarea></label>`,
+    "</section>",
+    '<section class="appointment-type-editor__section">',
+    "<h3>Schedule Model</h3>",
+    '<p class="appointment-type-editor__hint">Choose the scheduling pattern early. The matching fields below stay visible and the rest stay out of the way.</p>',
+    '<div class="appointment-type-editor__schedule-choice">',
+    scheduleModeChoices,
+    "</div>",
+    "</section>",
+    '<section class="appointment-type-editor__section">',
+    "<h3>Availability Rules</h3>",
+    '<p class="appointment-type-editor__hint">These rules apply to every schedule model and drive the booking windows clients see.</p>',
     '<div class="form-grid form-grid--two">',
-    `<label>Contract Template ID<input type="text" name="contractTemplateId" value="${escapeAttribute(item.contractTemplateId ?? "")}"></label>`,
+    `<label>Duration Minutes<input type="number" name="durationMinutes" value="${item.durationMinutes}" min="1" required></label>`,
+    `<label>Appointment Slot Interval<input type="number" name="timeSlotInterval" value="${item.timeSlotInterval}" min="1" required></label>`,
+    `<label>Buffer Before (Minutes)<input type="number" name="bufferBeforeMinutes" value="${item.bufferBeforeMinutes}" min="0"></label>`,
+    `<label>Buffer After (Minutes)<input type="number" name="bufferAfterMinutes" value="${item.bufferAfterMinutes}" min="0"></label>`,
+    `<label>Minimum Booking Notice (Days)<input type="number" name="advanceBookingMinDays" value="${item.advanceBookingMinDays}" min="0"></label>`,
+    `<label>Maximum Booking Window (Days)<input type="number" name="advanceBookingMaxDays" value="${item.advanceBookingMaxDays}" min="0"></label>`,
+    `<label>Cancellation / Reschedule Cutoff (Hours)<input type="number" name="cancellationNoticeHours" value="${item.cancellationNoticeHours}" min="0"></label>`,
+    `<label><input type="checkbox" name="useTravelTimeBuffer" data-appointment-toggle-input="travelBuffer"${item.useTravelTimeBuffer ? " checked" : ""}> Use Travel Time Buffer</label>`,
+    "</div>",
+    `<div class="form-grid form-grid--two appointment-type-editor__toggle-panel" data-appointment-toggle-section="travelBuffer"${item.useTravelTimeBuffer ? "" : " hidden"}>`,
+    `<label>Travel Time Minutes<input type="number" name="travelTimeMinutes" value="${item.travelTimeMinutes}" min="0"${item.useTravelTimeBuffer ? "" : " disabled"}></label>`,
+    "</div>",
+    "</section>",
+    '<section class="appointment-type-editor__section appointment-type-editor__schedule-panel" data-appointment-schedule-section="weekly">',
+    "<h3>Weekly Regular Schedule</h3>",
+    '<p class="appointment-type-editor__hint">Enable the days you want open for booking and set the time window for each selected day.</p>',
+    '<div class="appointment-type-editor__weekly-grid">',
+    weeklyScheduleRows,
+    "</div>",
+    "</section>",
+    `<section class="appointment-type-editor__section appointment-type-editor__schedule-panel" data-appointment-schedule-section="specific_dates"${scheduleMode === "specific_dates" ? "" : " hidden"}>`,
+    "<h3>Specific Date(s) and Time(s)</h3>",
+    '<p class="appointment-type-editor__hint">Enter one date per line using <code>YYYY-MM-DD HH:MM</code> or <code>YYYY-MM-DD HH:MM-HH:MM</code>.</p>',
+    `<label>Date and Time Entries<textarea name="specificDateEntries"${scheduleMode === "specific_dates" ? "" : " disabled"}>${escapeHtml(specificDateEntries)}</textarea></label>`,
+    "</section>",
+    `<section class="appointment-type-editor__section appointment-type-editor__schedule-panel" data-appointment-schedule-section="class_series"${scheduleMode === "class_series" ? "" : " hidden"}>`,
+    "<h3>Class Series</h3>",
+    '<p class="appointment-type-editor__hint">Set the first class date, start time, number of sessions, and capacity. The rest of the series repeats weekly from the first session.</p>',
+    '<div class="form-grid form-grid--two">',
+    `<label>First Class Date<input type="date" name="classSeriesStartDate" value="${escapeAttribute(classSeriesStartDate)}"${scheduleMode === "class_series" ? "" : " disabled"}></label>`,
+    `<label>Class Start Time<input type="time" name="classSeriesStartTime" value="${escapeAttribute(classSeriesStartTime)}"${scheduleMode === "class_series" ? "" : " disabled"}></label>`,
+    `<label>Number of Sessions<input type="number" name="classSeriesSessionCount" value="${classSeriesSessionCount}" min="1"${scheduleMode === "class_series" ? "" : " disabled"}></label>`,
+    `<label>Class Capacity<input type="number" name="classSeriesCapacity" value="${Math.max(item.maxParticipants, 1)}" min="1"${scheduleMode === "class_series" ? "" : " disabled"}></label>`,
+    "</div>",
+    `<label><input type="checkbox" name="classSeriesAllowIndividualSessionCancellation"${allowIndividualSessionCancellation ? " checked" : ""}${scheduleMode === "class_series" ? "" : " disabled"}> Allow clients cancel individual sessions</label>`,
+    "</section>",
+    '<section class="appointment-type-editor__section">',
+    "<h3>Booking Controls</h3>",
+    '<p class="appointment-type-editor__hint">Toggle visibility, approval, requirements, and billing behavior here. Credits stay enabled automatically for every appointment type in this flow.</p>',
+    '<div class="form-grid form-grid--two">',
+    `<label><input type="checkbox" name="active"${item.active ? " checked" : ""}> Active</label>`,
+    `<label><input type="checkbox" name="publicAvailable"${item.publicAvailable ? " checked" : ""}> Display on Front End</label>`,
+    `<label><input type="checkbox" name="portalAvailable"${item.portalAvailable ? " checked" : ""}> Show in Client Portal</label>`,
+    `<label><input type="checkbox" name="requiresAdminConfirmation"${item.requiresAdminConfirmation ? " checked" : ""}> Require Admin Approval</label>`,
+    `<label><input type="checkbox" name="requiresForms" data-appointment-toggle-input="requiresForms"${item.requiresForms ? " checked" : ""}> Require Forms</label>`,
+    `<label><input type="checkbox" name="requiresContract" data-appointment-toggle-input="requiresContract"${item.requiresContract ? " checked" : ""}> Require Contract</label>`,
+    `<label><input type="checkbox" name="autoInvoice" data-appointment-toggle-input="autoInvoice"${item.autoInvoice ? " checked" : ""}> Auto Invoice</label>`,
+    "</div>",
+    `<div class="form-grid appointment-type-editor__toggle-panel" data-appointment-toggle-section="requiresForms"${item.requiresForms ? "" : " hidden"}>`,
+    `<label>Required Form Template IDs<textarea name="formTemplateIds"${item.requiresForms ? "" : " disabled"}>${escapeHtml(item.formTemplateIds.join("\n"))}</textarea></label>`,
+    "</div>",
+    `<div class="form-grid form-grid--two appointment-type-editor__toggle-panel" data-appointment-toggle-section="requiresContract"${item.requiresContract ? "" : " hidden"}>`,
+    `<label>Contract Template ID<input type="text" name="contractTemplateId" value="${escapeAttribute(item.contractTemplateId ?? "")}"${item.requiresContract ? "" : " disabled"}></label>`,
+    "</div>",
+    `<div class="form-grid form-grid--two appointment-type-editor__toggle-panel" data-appointment-toggle-section="autoInvoice"${item.autoInvoice ? "" : " hidden"}>`,
+    `<label>Invoice Send Offset (Days)<input type="number" name="invoiceDueDays" value="${item.invoiceDueDays}" min="0"${item.autoInvoice ? "" : " disabled"}></label>`,
+    `<label>Invoice Timing<select name="invoiceDueTiming"${item.autoInvoice ? "" : " disabled"}><option value="after"${item.invoiceDueTiming === "after" ? " selected" : ""}>After appointment date</option><option value="before"${item.invoiceDueTiming === "before" ? " selected" : ""}>Before appointment date</option></select></label>`,
+    "</div>",
+    "</section>",
+    '<section class="appointment-type-editor__section">',
+    "<h3>Location and Contact Modes</h3>",
+    '<p class="appointment-type-editor__hint">Select every location or contact mode this appointment type supports. Add any supporting address, number, or link details below.</p>',
+    `<fieldset><legend>Location / Contact Modes</legend>${renderCheckboxGroup("locationTypes", APPOINTMENT_LOCATION_OPTIONS, item.locationTypes)}</fieldset>`,
+    '<div class="form-grid form-grid--two">',
+    `<label>Custom Address<input type="text" name="customAddress" value="${escapeAttribute(customAddressValue)}"></label>`,
+    `<label>Outbound Call Number<input type="text" name="outboundPhoneNumber" value="${escapeAttribute(outboundPhoneNumberValue)}"></label>`,
+    `<label>Client Call Number<input type="text" name="clientCallNumber" value="${escapeAttribute(clientCallNumberValue)}"></label>`,
+    `<label>Webcall Link<input type="text" name="webcallLink" value="${escapeAttribute(webcallLinkValue)}"></label>`,
+    "</div>",
+    "</section>",
+    '<section class="appointment-type-editor__section">',
+    "<h3>Resource Dependency</h3>",
+    '<p class="appointment-type-editor__hint">Overlap is blocked by default. Enable resource dependency only when resource capacity should control exceptions.</p>',
+    `<label><input type="checkbox" name="usesResource" data-appointment-toggle-input="usesResource"${item.usesResource ? " checked" : ""}> Depends on Resource Capacity</label>`,
+    `<div class="form-grid form-grid--two appointment-type-editor__toggle-panel" data-appointment-toggle-section="usesResource"${item.usesResource ? "" : " hidden"}>`,
+    `<label>Resource Name<input type="text" name="resourceName" value="${escapeAttribute(item.resourceName)}"${item.usesResource ? "" : " disabled"}></label>`,
+    `<label>Total Quantity Available<input type="number" name="resourceCapacity" value="${item.resourceCapacity}" min="1"${item.usesResource ? "" : " disabled"}></label>`,
+    `<label>Quantity Consumed Per Booking<input type="number" name="resourceUnitsPerBooking" value="${resourceUnitsPerBooking}" min="1"${item.usesResource ? "" : " disabled"}></label>`,
+    `<label><input type="checkbox" name="allowResourceOverlapWhenAvailable"${allowResourceOverlapWhenAvailable ? " checked" : ""}${item.usesResource ? "" : " disabled"}> Allow overlap while resource remains available</label>`,
+    "</div>",
+    "</section>",
+    '<section class="appointment-type-editor__section">',
+    "<h3>Email Template IDs</h3>",
+    '<p class="appointment-type-editor__hint">Keep the current template IDs if you already have matching email templates configured.</p>',
+    '<div class="form-grid form-grid--two">',
     `<label>Confirmation Template ID<input type="text" name="confirmationTemplateId" value="${escapeAttribute(item.confirmationTemplateId ?? "")}"></label>`,
-    `<label>Booking Request Template ID<input type="text" name="bookingRequestTemplateId" value="${escapeAttribute(item.bookingRequestTemplateId ?? "")}"></label>`,
+    `<label>Approval Request Template ID<input type="text" name="bookingRequestTemplateId" value="${escapeAttribute(item.bookingRequestTemplateId ?? "")}"></label>`,
     `<label>Invoice Template ID<input type="text" name="invoiceTemplateId" value="${escapeAttribute(item.invoiceTemplateId ?? "")}"></label>`,
     `<label>Reminder Template ID<input type="text" name="reminderTemplateId" value="${escapeAttribute(item.reminderTemplateId ?? "")}"></label>`,
     `<label>Cancellation Template ID<input type="text" name="cancellationTemplateId" value="${escapeAttribute(item.cancellationTemplateId ?? "")}"></label>`,
-    `<label>Mini Session Location<input type="text" name="miniSessionLocation" value="${escapeAttribute(item.miniSessionLocation)}"></label>`,
-    `<label>Mini Session Topic<input type="text" name="miniSessionTopic" value="${escapeAttribute(item.miniSessionTopic)}"></label>`,
-    `<label>Field Rental Location<input type="text" name="fieldRentalLocation" value="${escapeAttribute(item.fieldRentalLocation)}"></label>`,
-    `<label>Group Class Location<input type="text" name="groupClassLocation" value="${escapeAttribute(item.groupClassLocation)}"></label>`,
-    `<label>Resource Name<input type="text" name="resourceName" value="${escapeAttribute(item.resourceName)}"></label>`,
     "</div>",
-    '<div class="form-grid form-grid--two">',
-    `<fieldset><legend>Available Days</legend>${renderCheckboxGroup("availableDays", APPOINTMENT_DAY_OPTIONS, item.availableDays)}</fieldset>`,
-    `<fieldset><legend>Location Types</legend>${renderCheckboxGroup("locationTypes", APPOINTMENT_LOCATION_OPTIONS.map((value) => ({ value, label: toTitleCase(value.replaceAll("_", " ")) })), item.locationTypes)}</fieldset>`,
-    "</div>",
-    `<label><input type="checkbox" name="active"${item.active ? " checked" : ""}> Active</label>`,
-    `<label><input type="checkbox" name="publicAvailable"${item.publicAvailable ? " checked" : ""}> Display on Front End</label>`,
-    `<label><input type="checkbox" name="portalAvailable"${item.portalAvailable ? " checked" : ""}> Portal Available</label>`,
-    `<label><input type="checkbox" name="useTravelTimeBuffer"${item.useTravelTimeBuffer ? " checked" : ""}> Use Travel Time Buffer</label>`,
-    `<label><input type="checkbox" name="requiresForms"${item.requiresForms ? " checked" : ""}> Requires Forms</label>`,
-    `<label><input type="checkbox" name="requiresContract"${item.requiresContract ? " checked" : ""}> Requires Contract</label>`,
-    `<label><input type="checkbox" name="autoInvoice"${item.autoInvoice ? " checked" : ""}> Auto Invoice</label>`,
-    `<label><input type="checkbox" name="consumesCredits"${item.consumesCredits ? " checked" : ""}> Consumes Credits</label>`,
-    `<label><input type="checkbox" name="isGroupClass"${item.isGroupClass ? " checked" : ""}> Group Class</label>`,
-    `<label><input type="checkbox" name="isMiniSession"${item.isMiniSession ? " checked" : ""}> Mini Session</label>`,
-    `<label><input type="checkbox" name="isFieldRental"${item.isFieldRental ? " checked" : ""}> Field Rental</label>`,
-    `<label><input type="checkbox" name="requiresAdminConfirmation"${item.requiresAdminConfirmation ? " checked" : ""}> Requires Admin Confirmation</label>`,
-    `<label><input type="checkbox" name="usesResource"${item.usesResource ? " checked" : ""}> Uses Resource</label>`,
+    "</section>",
     `<div class="form-actions"><button type="submit">${appointmentType == null ? "Create Appointment Type" : "Save Appointment Type"}</button></div>`,
     "</form>",
+    "<script>(function(){const root=document.currentScript?.closest('[data-appointment-type-editor]')??document.querySelector('[data-appointment-type-editor]');if(root==null){return;}const scheduleInputs=Array.from(root.querySelectorAll('input[name=\"scheduleMode\"]'));const toggleInputs=Array.from(root.querySelectorAll('[data-appointment-toggle-input]'));const syncSchedule=()=>{const mode=scheduleInputs.find((input)=>input.checked)?.value??'weekly';for(const section of root.querySelectorAll('[data-appointment-schedule-section]')){const active=section.getAttribute('data-appointment-schedule-section')===mode;section.hidden=!active;for(const field of section.querySelectorAll('input, select, textarea')){field.disabled=!active;}}for(const option of root.querySelectorAll('.appointment-type-editor__schedule-option')){const input=option.querySelector('input[name=\"scheduleMode\"]');option.toggleAttribute('data-selected',input instanceof HTMLInputElement&&input.checked);}};const syncToggles=()=>{for(const section of root.querySelectorAll('[data-appointment-toggle-section]')){const toggleName=section.getAttribute('data-appointment-toggle-section');const input=toggleName==null?null:root.querySelector(`[data-appointment-toggle-input=\"${toggleName}\"]`);const active=input instanceof HTMLInputElement&&input.checked;section.hidden=!active;for(const field of section.querySelectorAll('input, select, textarea')){field.disabled=!active;}}};const sync=()=>{syncSchedule();syncToggles();};for(const input of scheduleInputs){input.addEventListener('change',sync);}for(const input of toggleInputs){input.addEventListener('change',sync);}sync();})();</script>",
     "</section>"
   ].join("");
 }
 
 function readAdminAppointmentTypeFormInput(form: URLSearchParams) {
-  const availableDays = readIntegerListFormValues(form, "availableDays");
+  const scheduleModeValue = form.get("scheduleMode");
+  const scheduleMode = isAppointmentTypeEditorScheduleMode(scheduleModeValue)
+    ? scheduleModeValue
+    : "weekly";
+  const legacyAvailableDays = readIntegerListFormValues(form, "availableDays");
+  const legacyPerDaySchedule = readJsonRecordFormValue(form, "perDaySchedule");
+  const hasWeeklyScheduleFields = APPOINTMENT_DAY_OPTIONS.some((day) =>
+    form.has(`weeklyDayEnabled-${day.value}`)
+    || form.has(`weeklyDayStart-${day.value}`)
+    || form.has(`weeklyDayEnd-${day.value}`)
+  );
+  const weeklySchedule = APPOINTMENT_DAY_OPTIONS.reduce<{
+    availableDays: number[];
+    perDaySchedule: Record<string, { start: string; end: string }>;
+  }>((result, day) => {
+    const enabled = readCheckedFormValue(form, `weeklyDayEnabled-${day.value}`);
+    if (!enabled) {
+      return result;
+    }
+
+    const start = readRequiredFormValue(form, `weeklyDayStart-${day.value}`) || "09:00";
+    const end = readRequiredFormValue(form, `weeklyDayEnd-${day.value}`) || "17:00";
+    result.availableDays.push(day.value);
+    result.perDaySchedule[String(day.value)] = { start, end };
+    return result;
+  }, { availableDays: [], perDaySchedule: {} });
+  const normalizedWeeklySchedule = hasWeeklyScheduleFields
+    ? weeklySchedule
+    : {
+        availableDays: legacyAvailableDays.length > 0 ? legacyAvailableDays : [1, 2, 3, 4, 5],
+        perDaySchedule: legacyPerDaySchedule
+      };
+  const weeklyFallbackStart = normalizedWeeklySchedule.availableDays
+    .map((day) => normalizedWeeklySchedule.perDaySchedule[String(day)]?.start)
+    .find((value) => value != null && value.trim() !== "") ?? "09:00";
+  const weeklyFallbackEnd = normalizedWeeklySchedule.availableDays
+    .map((day) => normalizedWeeklySchedule.perDaySchedule[String(day)]?.end)
+    .find((value) => value != null && value.trim() !== "") ?? "17:00";
+  const specificDates = scheduleMode === "class_series"
+    ? buildAppointmentTypeClassSeriesDates(
+        readOptionalFormValue(form, "classSeriesStartDate") ?? "",
+        readIntegerFormValue(form, "classSeriesSessionCount", 1),
+        readRequiredFormValue(form, "classSeriesStartTime") || "09:00"
+      )
+    : scheduleMode === "specific_dates"
+      ? parseAppointmentTypeSpecificDateEntries(form.get("specificDateEntries") ?? "")
+      : [];
+  const locationTypes = readDelimitedFormValues(form, "locationTypes");
+  const editorMeta: AppointmentTypeEditorMeta = {
+    scheduleMode,
+    customAddress: readOptionalFormValue(form, "customAddress") ?? "",
+    outboundPhoneNumber: readOptionalFormValue(form, "outboundPhoneNumber") ?? "",
+    clientCallNumber: readOptionalFormValue(form, "clientCallNumber") ?? "",
+    webcallLink: readOptionalFormValue(form, "webcallLink") ?? "",
+    allowIndividualSessionCancellation: scheduleMode === "class_series" && readCheckedFormValue(form, "classSeriesAllowIndividualSessionCancellation"),
+    allowResourceOverlapWhenAvailable: readCheckedFormValue(form, "allowResourceOverlapWhenAvailable"),
+    resourceUnitsPerBooking: readIntegerFormValue(form, "resourceUnitsPerBooking", 1)
+  };
+  const locationSummary = buildAppointmentTypeLocationSummary(locationTypes, editorMeta);
+  const firstSpecificDate = specificDates[0] ?? null;
+  const firstSpecificTimeslot = firstSpecificDate?.timeslots[0] ?? null;
+  const specificStartTime = firstSpecificTimeslot == null
+    ? "09:00"
+    : firstSpecificTimeslot.type === "range"
+      ? firstSpecificTimeslot.start
+      : firstSpecificTimeslot.time;
+  const specificEndTime = firstSpecificTimeslot == null
+    ? "17:00"
+    : firstSpecificTimeslot.type === "range"
+      ? firstSpecificTimeslot.end
+      : firstSpecificTimeslot.time;
+  const isClassSeries = scheduleMode === "class_series";
+  const isSpecificDates = scheduleMode === "specific_dates";
+  const maxParticipants = isClassSeries ? readIntegerFormValue(form, "classSeriesCapacity", 1) : 1;
+  const resourceCapacity = readIntegerFormValue(form, "resourceCapacity", 1);
 
   return {
     name: readRequiredFormValue(form, "name"),
@@ -8623,27 +9021,29 @@ function readAdminAppointmentTypeFormInput(form: URLSearchParams) {
     invoiceDueDays: readIntegerFormValue(form, "invoiceDueDays", 7),
     invoiceDueTiming: readRequiredFormValue(form, "invoiceDueTiming") || "after",
     defaultAmount: readFloatFormValue(form, "defaultAmount", 0),
-    consumesCredits: readCheckedFormValue(form, "consumesCredits"),
-    creditCount: readIntegerFormValue(form, "creditCount", 1),
-    isGroupClass: readCheckedFormValue(form, "isGroupClass"),
-    maxParticipants: readIntegerFormValue(form, "maxParticipants", 1),
+    consumesCredits: true,
+    creditCount: 1,
+    isGroupClass: isClassSeries,
+    maxParticipants,
     publicAvailable: readCheckedFormValue(form, "publicAvailable"),
     portalAvailable: readCheckedFormValue(form, "portalAvailable"),
-    scheduleType: readRequiredFormValue(form, "scheduleType") || "recurring",
-    specificDate: readOptionalFormValue(form, "specificDate"),
-    specificDates: readJsonArrayFormValue(form, "specificDates"),
-    availableDays: availableDays.length > 0 ? availableDays : [0, 1, 2, 3, 4, 5, 6],
-    availableStartTime: readRequiredFormValue(form, "availableStartTime") || "09:00",
-    availableEndTime: readRequiredFormValue(form, "availableEndTime") || "17:00",
+    scheduleType: scheduleMode === "weekly" ? "recurring" : "specific_date",
+    specificDate: firstSpecificDate?.date ?? null,
+    specificDates,
+    availableDays: scheduleMode === "weekly"
+      ? (normalizedWeeklySchedule.availableDays.length > 0 ? normalizedWeeklySchedule.availableDays : [1, 2, 3, 4, 5])
+      : (firstSpecificDate == null ? [] : [new Date(`${firstSpecificDate.date}T00:00:00Z`).getUTCDay()]),
+    availableStartTime: scheduleMode === "weekly" ? weeklyFallbackStart : specificStartTime,
+    availableEndTime: scheduleMode === "weekly" ? weeklyFallbackEnd : specificEndTime,
     timeSlotInterval: readIntegerFormValue(form, "timeSlotInterval", 30),
-    perDaySchedule: readJsonRecordFormValue(form, "perDaySchedule"),
-    isMiniSession: readCheckedFormValue(form, "isMiniSession"),
-    miniSessionLocation: form.get("miniSessionLocation") ?? "",
-    miniSessionTopic: form.get("miniSessionTopic") ?? "",
-    isFieldRental: readCheckedFormValue(form, "isFieldRental"),
-    fieldRentalLocation: form.get("fieldRentalLocation") ?? "",
-    groupClassLocation: form.get("groupClassLocation") ?? "",
-    locationTypes: readDelimitedFormValues(form, "locationTypes"),
+    perDaySchedule: scheduleMode === "weekly" ? normalizedWeeklySchedule.perDaySchedule : {},
+    isMiniSession: isSpecificDates,
+    miniSessionLocation: isSpecificDates ? locationSummary : "",
+    miniSessionTopic: "",
+    isFieldRental: false,
+    fieldRentalLocation: stringifyAppointmentTypeEditorMeta(editorMeta),
+    groupClassLocation: isClassSeries ? locationSummary : "",
+    locationTypes,
     confirmationTemplateId: readOptionalFormValue(form, "confirmationTemplateId"),
     bookingRequestTemplateId: readOptionalFormValue(form, "bookingRequestTemplateId"),
     invoiceTemplateId: readOptionalFormValue(form, "invoiceTemplateId"),
@@ -8652,12 +9052,13 @@ function readAdminAppointmentTypeFormInput(form: URLSearchParams) {
     requiresAdminConfirmation: readCheckedFormValue(form, "requiresAdminConfirmation"),
     usesResource: readCheckedFormValue(form, "usesResource"),
     resourceName: form.get("resourceName") ?? "",
-    resourceCapacity: readIntegerFormValue(form, "resourceCapacity", 1),
-    resourceAllocation: readRequiredFormValue(form, "resourceAllocation") || "per_appointment",
+    resourceCapacity: Math.max(1, resourceCapacity),
+    resourceAllocation: "per_appointment",
     uniqueLink: readRequiredFormValue(form, "uniqueLink"),
     active: readCheckedFormValue(form, "active")
   };
 }
+
 
 function renderAdminFormTemplateEditor(template: {
   id: string;
@@ -17150,7 +17551,7 @@ return;
                     : `<a href="/admin/appointment-types/${encodeURIComponent(item.id)}">${escapeHtml(item.name)}</a>`,
                   escapeHtml(item.uniqueLink),
                   escapeHtml(`${item.durationMinutes} min`),
-                  escapeHtml(item.scheduleType),
+                escapeHtml(formatAppointmentTypeScheduleTypeLabel(item)),
                   escapeHtml([
           item.publicAvailable ? "Front End" : "",
                     item.portalAvailable ? "Portal" : ""
@@ -17190,7 +17591,7 @@ return;
               renderDetailGrid([
                 { label: "Appointment Type ID", value: escapeHtml(appointmentType.body.item.id) },
                 { label: "Unique Link", value: escapeHtml(appointmentType.body.item.uniqueLink) },
-                { label: "Schedule Type", value: escapeHtml(appointmentType.body.item.scheduleType) },
+              { label: "Schedule Type", value: escapeHtml(formatAppointmentTypeScheduleTypeLabel(appointmentType.body.item)) },
                 { label: "Status", value: renderStatusPill(appointmentType.body.item.active ? "Active" : "Inactive", appointmentType.body.item.active ? "success" : "warning") }
               ]),
               '<section class="surface-block">',
