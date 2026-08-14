@@ -21,6 +21,7 @@ import {
   workflowStepExecutionStatusSchema,
   workflowTriggerSchema
 } from "./common.js";
+import { formFieldSchema } from "./forms.js";
 
 const blankStringToNull = (value: unknown) => value === "" ? null : value;
 const blankStringToUndefined = (value: unknown) => value === "" ? undefined : value;
@@ -207,10 +208,14 @@ export const petSchema = z.object({
   name: z.string().min(1),
   species: z.string().min(1),
   breed: z.string().optional(),
+  dateOfBirth: z.string().optional(),
+  weight: z.string().optional(),
   age: z.string().optional(),
   gender: z.string().optional(),
   spayNeuterStatus: z.string().optional(),
   vaccineStatus: z.string().optional(),
+  source: z.string().optional(),
+  acquiredAgo: z.string().optional(),
   behaviorNotes: z.string().optional(),
   trainingNotes: z.string().optional(),
   medicalNotes: z.string().optional(),
@@ -347,7 +352,7 @@ export const formTemplateSchema = z.object({
   name: z.string().min(1),
   active: z.boolean(),
   description: z.string().optional(),
-  fields: z.array(z.record(z.string(), z.unknown())).optional(),
+  fields: z.array(formFieldSchema).optional(),
   formType: z.string().min(1).optional(),
   requiredFrequency: z.preprocess(blankStringToNull, z.string().min(1).nullable().optional()),
   appointmentTypeId: idSchema.nullable().optional(),
@@ -366,7 +371,7 @@ export const formSubmissionSchema = z.object({
   petName: z.string().min(1).nullable().optional(),
   templateName: z.string().min(1).nullable().optional(),
   templateDescription: z.string().nullable().optional(),
-  templateFields: z.array(z.record(z.string(), z.unknown())).optional(),
+  templateFields: z.array(formFieldSchema).optional(),
   formType: z.string().min(1).optional(),
   templateIsInternal: z.boolean().nullable().optional(),
   templateShowInClientPortal: z.boolean().nullable().optional(),

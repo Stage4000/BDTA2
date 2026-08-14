@@ -1924,10 +1924,14 @@ function buildInMemoryPetRecord(id: string, input: Omit<Pet, "id">): Pet {
     name: input.name,
     species: input.species,
     breed: normalizePetMetadataValue(input.breed),
+    dateOfBirth: normalizePetMetadataValue(input.dateOfBirth),
+    weight: normalizePetMetadataValue(input.weight),
     age: normalizePetMetadataValue(input.age),
     gender: normalizePetMetadataValue(input.gender),
     spayNeuterStatus: normalizePetMetadataValue(input.spayNeuterStatus),
     vaccineStatus: normalizePetMetadataValue(input.vaccineStatus),
+    source: normalizePetMetadataValue(input.source),
+    acquiredAgo: normalizePetMetadataValue(input.acquiredAgo),
     behaviorNotes: normalizePetMetadataValue(input.behaviorNotes),
     trainingNotes: normalizePetMetadataValue(input.trainingNotes),
     medicalNotes: normalizePetMetadataValue(input.medicalNotes),
@@ -3154,6 +3158,13 @@ function createPublicDocumentAccessDependencies(
   state: InMemoryPlatformState,
   workflowRuntime: InMemoryWorkflowRuntime
 ): PublicDocumentAccessDependencies {
+  let petSequence = state.pets.length;
+
+  function nextPetId(): string {
+    petSequence += 1;
+    return `pet-${petSequence}`;
+  }
+
   return {
     now: state.now,
     findPublicQuoteById: async (quoteId) => state.quotes.find((quote) => quote.id === quoteId) ?? null,
@@ -3214,10 +3225,74 @@ function createPublicDocumentAccessDependencies(
       if (clientIndex >= 0) {
         state.portalUsers[clientIndex] = {
           ...state.portalUsers[clientIndex],
-          displayName: input.contactName,
-          email: input.contactEmail,
-          phone: input.contactPhone === "" ? undefined : input.contactPhone
+          displayName: input.clientProfilePatch?.name?.trim() || input.contactName,
+          email: input.clientProfilePatch?.email?.trim() || input.contactEmail,
+          phone: (input.clientProfilePatch?.phone?.trim() || input.contactPhone) === ""
+            ? undefined
+            : (input.clientProfilePatch?.phone?.trim() || input.contactPhone),
+          address: input.clientProfilePatch?.address?.trim() ?? state.portalUsers[clientIndex].address,
+          notes: input.clientProfilePatch?.notes?.trim() ?? state.portalUsers[clientIndex].notes
         };
+      }
+
+      let resolvedPetId: string | null = existing.petId ?? null;
+      let resolvedPetName: string | null = existing.petName ?? null;
+      if (input.petProfile != null) {
+        const selectedPetId = input.petProfile.petId?.trim() ?? "";
+        if (selectedPetId !== "") {
+          const currentPet = state.pets.find((pet) => pet.clientId === existing.clientId && pet.id === selectedPetId) ?? null;
+          if (currentPet != null) {
+            const updatedPet = buildInMemoryPetRecord(currentPet.id, {
+              ...currentPet,
+              clientId: existing.clientId,
+              name: input.petProfile.input.name?.trim() || currentPet.name,
+              species: input.petProfile.input.species?.trim() || currentPet.species,
+              breed: input.petProfile.input.breed?.trim() ?? currentPet.breed ?? "",
+              dateOfBirth: input.petProfile.input.dateOfBirth?.trim() ?? currentPet.dateOfBirth ?? "",
+              weight: input.petProfile.input.weight?.trim() ?? currentPet.weight ?? "",
+              age: input.petProfile.input.age?.trim() ?? currentPet.age ?? "",
+              gender: input.petProfile.input.gender?.trim() ?? currentPet.gender ?? "",
+              spayNeuterStatus: input.petProfile.input.spayNeuterStatus?.trim() ?? currentPet.spayNeuterStatus ?? "",
+              vaccineStatus: input.petProfile.input.vaccineStatus?.trim() ?? currentPet.vaccineStatus ?? "",
+              source: input.petProfile.input.source?.trim() ?? currentPet.source ?? "",
+              acquiredAgo: input.petProfile.input.acquiredAgo?.trim() ?? currentPet.acquiredAgo ?? "",
+              behaviorNotes: input.petProfile.input.behaviorNotes?.trim() ?? currentPet.behaviorNotes ?? "",
+              trainingNotes: input.petProfile.input.trainingNotes?.trim() ?? currentPet.trainingNotes ?? "",
+              medicalNotes: input.petProfile.input.medicalNotes?.trim() ?? currentPet.medicalNotes ?? "",
+              petSittingNotes: input.petProfile.input.petSittingNotes?.trim() ?? currentPet.petSittingNotes,
+              archived: currentPet.archived
+            });
+            state.pets = state.pets.map((pet) => pet.id === currentPet.id ? updatedPet : pet);
+            resolvedPetId = updatedPet.id;
+            resolvedPetName = updatedPet.name;
+          }
+        } else if (
+          (input.petProfile.input.name?.trim() ?? "") !== ""
+          && (input.petProfile.input.species?.trim() ?? "") !== ""
+        ) {
+          const createdPet = buildInMemoryPetRecord(nextPetId(), {
+            clientId: existing.clientId,
+            name: input.petProfile.input.name?.trim() ?? "",
+            species: input.petProfile.input.species?.trim() ?? "",
+            breed: input.petProfile.input.breed?.trim() ?? "",
+            dateOfBirth: input.petProfile.input.dateOfBirth?.trim() ?? "",
+            weight: input.petProfile.input.weight?.trim() ?? "",
+            age: input.petProfile.input.age?.trim() ?? "",
+            gender: input.petProfile.input.gender?.trim() ?? "",
+            spayNeuterStatus: input.petProfile.input.spayNeuterStatus?.trim() ?? "",
+            vaccineStatus: input.petProfile.input.vaccineStatus?.trim() ?? "",
+            source: input.petProfile.input.source?.trim() ?? "",
+            acquiredAgo: input.petProfile.input.acquiredAgo?.trim() ?? "",
+            behaviorNotes: input.petProfile.input.behaviorNotes?.trim() ?? "",
+            trainingNotes: input.petProfile.input.trainingNotes?.trim() ?? "",
+            medicalNotes: input.petProfile.input.medicalNotes?.trim() ?? "",
+            petSittingNotes: input.petProfile.input.petSittingNotes?.trim() ?? "",
+            archived: false
+          });
+          state.pets = [...state.pets, createdPet];
+          resolvedPetId = createdPet.id;
+          resolvedPetName = createdPet.name;
+        }
       }
 
       const updated: FormSubmission = {
@@ -3225,6 +3300,8 @@ function createPublicDocumentAccessDependencies(
         contactName: input.contactName,
         contactEmail: input.contactEmail,
         contactPhone: input.contactPhone === "" ? null : input.contactPhone,
+        petId: resolvedPetId,
+        petName: resolvedPetName,
         responses: input.responses,
         status: "submitted",
         submittedAt: state.now()

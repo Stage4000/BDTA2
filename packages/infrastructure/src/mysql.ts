@@ -45,6 +45,7 @@ import type {
   Contract,
   Credit,
   Expense,
+  FormField,
   FormSubmission,
   FormTemplate,
   Invoice,
@@ -63,7 +64,7 @@ import type {
   WorkflowEnrollment,
   WorkflowStep
 } from "@bdta/domain";
-import { outboundEmailSchema } from "@bdta/domain";
+import { formFieldSchema, outboundEmailSchema } from "@bdta/domain";
 import { jobEnvelopeSchema, type JobEnvelope, type SupportedJobKind } from "@bdta/contracts";
 import { managedSettingsCatalog } from "@bdta/platform";
 import { compare, hash } from "bcryptjs";
@@ -1268,6 +1269,13 @@ function parseArrayValue<T>(value: string | null): T[] {
   }
 }
 
+function parseStoredFormFieldArray(value: string | null): FormField[] {
+  return parseArrayValue<unknown>(value).flatMap((item) => {
+    const parsed = formFieldSchema.safeParse(item);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
+
 function parseLegacyIndexedArrayValue<T>(value: string | null): T[] {
   if (value == null || value.trim() === "") {
     return [];
@@ -1354,7 +1362,7 @@ function mapFormSubmissionRow(row: FormSubmissionRow, issuedAt: string): FormSub
     petName: row.pet_name ?? null,
     templateName: row.template_name ?? null,
     templateDescription: row.template_description ?? null,
-    templateFields: parseArrayValue<Record<string, unknown>>(row.template_fields ?? null),
+    templateFields: parseStoredFormFieldArray(row.template_fields ?? null),
     formType: row.form_type ?? undefined,
     templateIsInternal: row.template_is_internal == null ? undefined : row.template_is_internal !== 0,
     templateShowInClientPortal: row.template_show_in_client_portal == null ? undefined : row.template_show_in_client_portal !== 0,
@@ -1398,7 +1406,7 @@ function mapFormTemplateRow(row: FormTemplateRow): FormTemplate {
     name: row.name,
     active: Number(row.is_active ?? 0) === 1,
     description: row.description ?? "",
-    fields: parseArrayValue<Record<string, unknown>>(row.fields),
+    fields: parseStoredFormFieldArray(row.fields),
     formType: row.form_type ?? undefined,
     requiredFrequency: row.required_frequency ?? null,
     appointmentTypeId: row.appointment_type_id == null ? null : String(row.appointment_type_id),
@@ -1577,7 +1585,22 @@ function toPackageRecord(row: {
 
 const PET_METADATA_FORMAT = "bdta-pet-v1";
 
-type PetMetadataFields = Pick<Pet, "age" | "behaviorNotes" | "breed" | "gender" | "medicalNotes" | "petSittingNotes" | "spayNeuterStatus" | "trainingNotes" | "vaccineStatus">;
+type PetMetadataFields = Pick<
+  Pet,
+  | "age"
+  | "behaviorNotes"
+  | "breed"
+  | "dateOfBirth"
+  | "gender"
+  | "medicalNotes"
+  | "petSittingNotes"
+  | "source"
+  | "spayNeuterStatus"
+  | "trainingNotes"
+  | "vaccineStatus"
+  | "weight"
+  | "acquiredAgo"
+>;
 
 function normalizePetMetadataValue(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -1593,12 +1616,16 @@ function buildPetMetadataFields(input: PetMetadataFields): PetMetadataFields {
     age: normalizePetMetadataValue(input.age),
     behaviorNotes: normalizePetMetadataValue(input.behaviorNotes),
     breed: normalizePetMetadataValue(input.breed),
+    dateOfBirth: normalizePetMetadataValue(input.dateOfBirth),
     gender: normalizePetMetadataValue(input.gender),
     medicalNotes: normalizePetMetadataValue(input.medicalNotes),
     petSittingNotes: normalizePetMetadataValue(input.petSittingNotes) ?? "",
+    source: normalizePetMetadataValue(input.source),
     spayNeuterStatus: normalizePetMetadataValue(input.spayNeuterStatus),
     trainingNotes: normalizePetMetadataValue(input.trainingNotes),
-    vaccineStatus: normalizePetMetadataValue(input.vaccineStatus)
+    vaccineStatus: normalizePetMetadataValue(input.vaccineStatus),
+    weight: normalizePetMetadataValue(input.weight),
+    acquiredAgo: normalizePetMetadataValue(input.acquiredAgo)
   };
 }
 
@@ -1630,12 +1657,16 @@ function parsePetMetadata(value: string | null): PetMetadataFields {
       age: typeof record.age === "string" ? record.age : undefined,
       behaviorNotes: typeof record.behaviorNotes === "string" ? record.behaviorNotes : undefined,
       breed: typeof record.breed === "string" ? record.breed : undefined,
+      dateOfBirth: typeof record.dateOfBirth === "string" ? record.dateOfBirth : undefined,
       gender: typeof record.gender === "string" ? record.gender : undefined,
       medicalNotes: typeof record.medicalNotes === "string" ? record.medicalNotes : undefined,
       petSittingNotes: typeof record.petSittingNotes === "string" ? record.petSittingNotes : "",
+      source: typeof record.source === "string" ? record.source : undefined,
       spayNeuterStatus: typeof record.spayNeuterStatus === "string" ? record.spayNeuterStatus : undefined,
       trainingNotes: typeof record.trainingNotes === "string" ? record.trainingNotes : undefined,
-      vaccineStatus: typeof record.vaccineStatus === "string" ? record.vaccineStatus : undefined
+      vaccineStatus: typeof record.vaccineStatus === "string" ? record.vaccineStatus : undefined,
+      weight: typeof record.weight === "string" ? record.weight : undefined,
+      acquiredAgo: typeof record.acquiredAgo === "string" ? record.acquiredAgo : undefined
     });
   } catch {
     return {
@@ -1650,11 +1681,15 @@ function serializePetMetadata(input: PetMetadataFields): string {
     metadata.age,
     metadata.behaviorNotes,
     metadata.breed,
+    metadata.dateOfBirth,
     metadata.gender,
     metadata.medicalNotes,
+    metadata.source,
     metadata.spayNeuterStatus,
     metadata.trainingNotes,
-    metadata.vaccineStatus
+    metadata.vaccineStatus,
+    metadata.weight,
+    metadata.acquiredAgo
   ].some((value) => value != null);
 
   if (!hasExtendedMetadata) {
@@ -2851,7 +2886,7 @@ function buildQuotesSelectSql(input: { limit?: number; whereClause?: string; leg
         name: row.name,
         active: Number(row.is_active ?? 0) === 1,
         description: row.description ?? "",
-        fields: parseArrayValue<Record<string, unknown>>(row.fields),
+    fields: parseStoredFormFieldArray(row.fields),
         formType: row.form_type ?? undefined,
         requiredFrequency: row.required_frequency ?? null,
         appointmentTypeId: row.appointment_type_id == null ? null : String(row.appointment_type_id),
@@ -8627,20 +8662,22 @@ async updateAdminPet(petId, input) {
   }
 
   async function loadPublicFormSubmissionByWhere(whereClause: string, params: unknown[]): Promise<FormSubmission | null> {
-    const [rows] = await executor.execute<FormSubmissionRow[]>(
-      [
-        "SELECT fs.id, fs.template_id, fs.client_id, ft.name AS template_name,",
-        "ft.description AS template_description, ft.fields AS template_fields,",
-        "ft.form_type, ft.is_internal AS template_is_internal,",
-        "ft.show_in_client_portal AS template_show_in_client_portal,",
-        "c.name AS client_name, c.email AS client_email, c.phone AS client_phone,",
-        "fs.responses, fs.submitted_at, fs.access_token",
-        "FROM form_submissions fs",
-        "LEFT JOIN form_templates ft ON ft.id = fs.template_id",
-        "LEFT JOIN clients c ON c.id = fs.client_id",
-        `WHERE ${whereClause}`,
-        "LIMIT 1"
-      ].join(" "),
+  const [rows] = await executor.execute<FormSubmissionRow[]>(
+    [
+      "SELECT fs.id, fs.template_id, fs.client_id, fs.pet_id, ft.name AS template_name,",
+      "ft.description AS template_description, ft.fields AS template_fields,",
+      "ft.form_type, ft.is_internal AS template_is_internal,",
+      "ft.show_in_client_portal AS template_show_in_client_portal,",
+      "c.name AS client_name, c.email AS client_email, c.phone AS client_phone,",
+      "p.name AS pet_name,",
+      "fs.responses, fs.submitted_at, fs.access_token",
+      "FROM form_submissions fs",
+      "LEFT JOIN form_templates ft ON ft.id = fs.template_id",
+      "LEFT JOIN clients c ON c.id = fs.client_id",
+      "LEFT JOIN pets p ON p.id = fs.pet_id",
+      `WHERE ${whereClause}`,
+      "LIMIT 1"
+    ].join(" "),
       params
     );
 
@@ -8706,41 +8743,132 @@ async updateAdminPet(petId, input) {
     },
     findPublicFormSubmissionById: async (submissionId) => loadPublicFormSubmissionByWhere("fs.id = ?", [submissionId]),
     findPublicFormSubmissionByToken: async (token) => loadPublicFormSubmissionByWhere("fs.access_token = ?", [token]),
-    async submitPublicForm(input) {
-      await executor.execute("START TRANSACTION");
-      try {
-        await executor.execute(
-          [
-            "UPDATE form_submissions",
-            "SET responses = ?, status = 'submitted', submitted_at = CURRENT_TIMESTAMP",
-            "WHERE id = ? AND status = 'pending'"
-          ].join(" "),
-          [JSON.stringify(input.responses), input.submissionId]
-        );
-        await executor.execute(
-          [
-            "UPDATE clients",
-            "SET name = ?, email = ?, phone = ?, updated_at = CURRENT_TIMESTAMP",
-            "WHERE id = (SELECT client_id FROM form_submissions WHERE id = ? LIMIT 1)"
-          ].join(" "),
-          [input.contactName, input.contactEmail, input.contactPhone === "" ? null : input.contactPhone, input.submissionId]
-        );
-        const [submissionRows] = await executor.execute<Array<{ client_id: number | null; template_id: string | number | null }>>(
-          [
-            "SELECT client_id, template_id",
-            "FROM form_submissions",
-            "WHERE id = ?",
-            "LIMIT 1"
-          ].join(" "),
-          [input.submissionId]
-        );
-        const clientId = submissionRows[0]?.client_id;
-        const templateId = submissionRows[0]?.template_id;
-        if (clientId != null && templateId != null) {
-          await applyFormSubmissionTriggers({
+async submitPublicForm(input) {
+  await executor.execute("START TRANSACTION");
+  try {
+    const [submissionRows] = await executor.execute<Array<{ client_id: number | null; template_id: string | number | null; pet_id: number | null }>>(
+      [
+        "SELECT client_id, template_id, pet_id",
+        "FROM form_submissions",
+        "WHERE id = ?",
+        "LIMIT 1"
+      ].join(" "),
+      [input.submissionId]
+    );
+    const clientId = submissionRows[0]?.client_id;
+    const templateId = submissionRows[0]?.template_id;
+    let resolvedPetId: string | null = submissionRows[0]?.pet_id == null ? null : String(submissionRows[0].pet_id);
+
+    if (clientId != null) {
+      const [clientRows] = await executor.execute<Array<{
+        name: string | null;
+        email: string | null;
+        phone: string | null;
+        address: string | null;
+        notes: string | null;
+      }>>(
+        [
+          "SELECT name, email, phone, address, notes",
+          "FROM clients",
+          "WHERE id = ?",
+          "LIMIT 1"
+        ].join(" "),
+        [clientId]
+      );
+      const clientRow = clientRows[0];
+      const nextName = input.clientProfilePatch?.name?.trim() || input.contactName;
+      const nextEmail = input.clientProfilePatch?.email?.trim() || input.contactEmail;
+      const nextPhone = input.clientProfilePatch?.phone?.trim() || input.contactPhone;
+      const nextAddress = input.clientProfilePatch?.address?.trim() ?? (clientRow?.address ?? "");
+      const nextNotes = input.clientProfilePatch?.notes?.trim() ?? (clientRow?.notes ?? "");
+
+      await executor.execute(
+        [
+          "UPDATE clients",
+          "SET name = ?, email = ?, phone = ?, address = ?, notes = ?, updated_at = CURRENT_TIMESTAMP",
+          "WHERE id = ?"
+        ].join(" "),
+        [
+          nextName,
+          nextEmail,
+          nextPhone === "" ? null : nextPhone,
+          nextAddress,
+          nextNotes,
+          clientId
+        ]
+      );
+
+      if (input.petProfile != null) {
+        const petProfilePatch = Object.fromEntries(
+          Object.entries(input.petProfile.input).map(([key, value]) => [key, typeof value === "string" ? value.trim() : value])
+        ) as typeof input.petProfile.input;
+        const selectedPetId = input.petProfile.petId?.trim() ?? "";
+        if (selectedPetId !== "") {
+          const existingPet = await portalResources.findPortalPetById(String(clientId), selectedPetId);
+          if (existingPet != null) {
+            resolvedPetId = existingPet.id;
+            await adminResources.updateAdminPet(existingPet.id, {
+              clientId: String(clientId),
+              name: petProfilePatch.name ?? existingPet.name,
+              species: petProfilePatch.species ?? existingPet.species,
+              breed: petProfilePatch.breed ?? existingPet.breed ?? "",
+              dateOfBirth: petProfilePatch.dateOfBirth ?? existingPet.dateOfBirth ?? "",
+              weight: petProfilePatch.weight ?? existingPet.weight ?? "",
+              age: petProfilePatch.age ?? existingPet.age ?? "",
+              gender: petProfilePatch.gender ?? existingPet.gender ?? "",
+              spayNeuterStatus: petProfilePatch.spayNeuterStatus ?? existingPet.spayNeuterStatus ?? "",
+              vaccineStatus: petProfilePatch.vaccineStatus ?? existingPet.vaccineStatus ?? "",
+              source: petProfilePatch.source ?? existingPet.source ?? "",
+              acquiredAgo: petProfilePatch.acquiredAgo ?? existingPet.acquiredAgo ?? "",
+              behaviorNotes: petProfilePatch.behaviorNotes ?? existingPet.behaviorNotes ?? "",
+              trainingNotes: petProfilePatch.trainingNotes ?? existingPet.trainingNotes ?? "",
+              medicalNotes: petProfilePatch.medicalNotes ?? existingPet.medicalNotes ?? "",
+              petSittingNotes: petProfilePatch.petSittingNotes ?? existingPet.petSittingNotes,
+              archived: existingPet.archived
+            });
+          }
+        } else if (
+          (petProfilePatch.name?.trim() ?? "") !== ""
+          && (petProfilePatch.species?.trim() ?? "") !== ""
+        ) {
+          const createdPet = await adminResources.createAdminPet({
             clientId: String(clientId),
-            templateId: String(templateId)
+            name: petProfilePatch.name ?? "",
+            species: petProfilePatch.species ?? "",
+            breed: petProfilePatch.breed ?? "",
+            dateOfBirth: petProfilePatch.dateOfBirth ?? "",
+            weight: petProfilePatch.weight ?? "",
+            age: petProfilePatch.age ?? "",
+            gender: petProfilePatch.gender ?? "",
+            spayNeuterStatus: petProfilePatch.spayNeuterStatus ?? "",
+            vaccineStatus: petProfilePatch.vaccineStatus ?? "",
+            source: petProfilePatch.source ?? "",
+            acquiredAgo: petProfilePatch.acquiredAgo ?? "",
+            behaviorNotes: petProfilePatch.behaviorNotes ?? "",
+            trainingNotes: petProfilePatch.trainingNotes ?? "",
+            medicalNotes: petProfilePatch.medicalNotes ?? "",
+            petSittingNotes: petProfilePatch.petSittingNotes ?? "",
+            archived: false
           });
+          resolvedPetId = createdPet.id;
+        }
+      }
+    }
+
+    await executor.execute(
+      [
+        "UPDATE form_submissions",
+        "SET responses = ?, pet_id = ?, status = 'submitted', submitted_at = CURRENT_TIMESTAMP",
+        "WHERE id = ? AND status = 'pending'"
+      ].join(" "),
+      [JSON.stringify(input.responses), resolvedPetId, input.submissionId]
+    );
+
+    if (clientId != null && templateId != null) {
+      await applyFormSubmissionTriggers({
+        clientId: String(clientId),
+        templateId: String(templateId)
+      });
         }
         await executor.execute("COMMIT");
       } catch (error) {

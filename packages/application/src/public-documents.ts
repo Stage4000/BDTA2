@@ -5,10 +5,17 @@ import {
   formSubmissionDetailSchema,
   quoteDetailSchema
 } from "@bdta/contracts";
-import type { Booking, Contract, FormSubmission, Quote } from "@bdta/domain";
+import type { Booking, Contract, FormField, FormSubmission, Quote } from "@bdta/domain";
 import {
   contractSchema,
   formSubmissionSchema,
+  getFormFieldLabel,
+  getFormFieldOptions,
+  isDisplayOnlyFormFieldType,
+  isFileUploadFormFieldType,
+  isOptionListFormFieldType,
+  isPetInfoFormFieldType,
+  normalizeFormFieldType,
   quoteSchema
 } from "@bdta/domain";
 import { normalizeFormSubmissionPortalMetadata } from "./form-portal-visibility.js";
@@ -26,6 +33,53 @@ const optionalSessionSchema = z.object({
   roleRefreshedAt: z.string().datetime().optional()
 }).nullable();
 
+export type PublicFormClientProfilePatch = Partial<{
+  name: string;
+  email: string;
+  phone: string;
+  address: string;
+  notes: string;
+}>;
+
+export type PublicFormPetProfilePatch = Partial<{
+  name: string;
+  dateOfBirth: string;
+  species: string;
+  breed: string;
+  weight: string;
+  gender: string;
+  spayNeuterStatus: string;
+  vaccineStatus: string;
+  source: string;
+  acquiredAgo: string;
+  age: string;
+  behaviorNotes: string;
+  trainingNotes: string;
+  medicalNotes: string;
+  petSittingNotes: string;
+}>;
+
+export type PublicFormUploadedFileValue = {
+  originalName: string;
+  mimeType: string;
+  sizeBytes: number;
+  contentBase64: string;
+};
+
+type PublicFormPetInfoValue = {
+  petId: string;
+  name: string;
+  dateOfBirth: string;
+  species: string;
+  breed: string;
+  weight: string;
+  gender: string;
+  spayNeuterStatus: string;
+  vaccineStatus: string;
+  source: string;
+  acquiredAgo: string;
+};
+
 export type PublicDocumentAccessDependencies = {
   now(): string;
   findPublicQuoteById(quoteId: string): Promise<Quote | null>;
@@ -42,13 +96,18 @@ export type PublicDocumentAccessDependencies = {
   }): Promise<Contract | null>;
   findPublicFormSubmissionById(submissionId: string): Promise<FormSubmission | null>;
   findPublicFormSubmissionByToken(token: string): Promise<FormSubmission | null>;
-  submitPublicForm(input: {
-    submissionId: string;
-    contactName: string;
-    contactEmail: string;
-    contactPhone: string;
-    responses: Array<unknown>;
-  }): Promise<FormSubmission | null>;
+submitPublicForm(input: {
+  submissionId: string;
+  contactName: string;
+  contactEmail: string;
+  contactPhone: string;
+  responses: Array<unknown>;
+  clientProfilePatch?: PublicFormClientProfilePatch;
+  petProfile?: {
+    petId: string | null;
+    input: PublicFormPetProfilePatch;
+  } | null;
+}): Promise<FormSubmission | null>;
   findPublicBookingIcalById(bookingId: string): Promise<Booking | null>;
   findPublicBookingIcalByToken(token: string): Promise<Booking | null>;
   verifyCaptcha(turnstileToken: string): Promise<boolean>;
@@ -87,66 +146,138 @@ const publicFormSubmissionRequestSchema = z.object({
   contactName: z.string().trim().min(1),
   contactEmail: z.string().trim().email(),
   contactPhone: z.string().optional().default("").transform((value) => value.trim()),
-  responses: z.record(z.string(), z.union([z.string(), z.array(z.string())])).default({})
+  responses: z.record(z.string(), z.unknown()).default({})
 });
 
 type PublicFormField = {
   label: string;
   type: string;
   required: boolean;
+  options: string[];
+  profileMapping?: FormField["profileMapping"];
   newsletterCheckboxLabel: string;
 };
 
-function isDisplayOnlyFormField(type: string): boolean {
-  return ["text_block", "heading", "paragraph", "html", "divider"].includes(type);
+function isUploadedFormFileValue(value: unknown): value is PublicFormUploadedFileValue {
+  return typeof value === "object"
+    && value != null
+    && typeof (value as { originalName?: unknown }).originalName === "string"
+    && typeof (value as { mimeType?: unknown }).mimeType === "string"
+    && typeof (value as { sizeBytes?: unknown }).sizeBytes === "number"
+    && typeof (value as { contentBase64?: unknown }).contentBase64 === "string";
 }
 
-function normalizePublicFormField(rawField: Record<string, unknown>, index: number): PublicFormField {
-  const rawType = typeof rawField.type === "string" ? rawField.type.trim().toLowerCase() : "";
-  const label = typeof rawField.label === "string" && rawField.label.trim() !== ""
-    ? rawField.label.trim()
-    : rawType === "newsletter_opt_in"
-      ? "Newsletter Opt-In"
-      : `Field ${index + 1}`;
+function isEmailAddress(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
 
+function isIsoDate(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00.000Z`));
+}
+
+function normalizePublicFormField(rawField: FormField, index: number): PublicFormField {
   return {
-    label,
-    type: rawType === "" ? "text" : rawType,
+    label: getFormFieldLabel(rawField, index),
+    type: normalizeFormFieldType(rawField.type),
     required: rawField.required === true,
+    options: getFormFieldOptions(rawField),
+    profileMapping: rawField.profileMapping,
     newsletterCheckboxLabel: "Yes, I'd like to receive newsletters and updates."
   };
 }
 
+function normalizePetInfoValue(value: unknown): PublicFormPetInfoValue {
+  const source = typeof value === "object" && value != null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+  const readValue = (key: keyof PublicFormPetInfoValue): string => {
+    const raw = source[key];
+    return typeof raw === "string" ? raw.trim() : "";
+  };
+
+  return {
+    petId: readValue("petId"),
+    name: readValue("name"),
+    dateOfBirth: readValue("dateOfBirth"),
+    species: readValue("species"),
+    breed: readValue("breed"),
+    weight: readValue("weight"),
+    gender: readValue("gender"),
+    spayNeuterStatus: readValue("spayNeuterStatus"),
+    vaccineStatus: readValue("vaccineStatus"),
+    source: readValue("source"),
+    acquiredAgo: readValue("acquiredAgo")
+  };
+}
+
+function isEmptyPetInfoValue(value: PublicFormPetInfoValue): boolean {
+  return [
+    value.petId,
+    value.name,
+    value.dateOfBirth,
+    value.species,
+    value.breed,
+    value.weight,
+    value.gender,
+    value.spayNeuterStatus,
+    value.vaccineStatus,
+    value.source,
+    value.acquiredAgo
+  ].every((item) => item === "");
+}
+
+function getMissingPetInfoLabels(value: PublicFormPetInfoValue): string[] {
+  const labels: Array<[keyof PublicFormPetInfoValue, string]> = [
+    ["name", "Name"],
+    ["dateOfBirth", "DOB"],
+    ["species", "Species"],
+    ["breed", "Breed"],
+    ["weight", "Weight"],
+    ["gender", "Gender"],
+    ["spayNeuterStatus", "Neuter / Spay Status"],
+    ["vaccineStatus", "Vaccine Status"],
+    ["source", "Source"],
+    ["acquiredAgo", "How Long Ago Acquired"]
+  ];
+
+  return labels
+    .filter(([key]) => value[key] === "")
+    .map(([, label]) => label);
+}
+
 function validatePublicFormResponses(
-  templateFields: ReadonlyArray<Record<string, unknown>> | undefined,
-  postedValues: Record<string, string | string[]>
+  templateFields: ReadonlyArray<FormField> | undefined,
+  postedValues: Record<string, unknown>
 ): { responses: Array<unknown>; errors: string[] } {
   const responses: Array<unknown> = [];
   const errors: string[] = [];
 
   for (const [index, rawField] of (templateFields ?? []).entries()) {
     const field = normalizePublicFormField(rawField, index);
-    if (isDisplayOnlyFormField(field.type)) {
+    if (isDisplayOnlyFormFieldType(field.type)) {
       continue;
     }
 
     const rawValue = postedValues[String(index)];
     if (field.type === "checkbox") {
       const normalized = Array.isArray(rawValue)
-        ? rawValue.map((item) => item.trim()).filter((item) => item !== "")
+        ? rawValue.map((item) => String(item).trim()).filter((item) => item !== "")
         : typeof rawValue === "string" && rawValue.trim() !== ""
           ? [rawValue.trim()]
           : [];
-      if (field.required && normalized.length === 0) {
+      const filtered = field.options.length === 0
+        ? normalized
+        : normalized.filter((item) => field.options.includes(item));
+      if (field.required && filtered.length === 0) {
         errors.push(`${field.label} is required.`);
       }
-      responses[index] = normalized;
+      responses[index] = filtered;
       continue;
     }
 
     if (field.type === "newsletter_opt_in") {
       const normalized = Array.isArray(rawValue)
-        ? rawValue.find((item) => item.trim() !== "")?.trim() ?? ""
+        ? rawValue.find((item) => String(item).trim() !== "")?.toString().trim() ?? ""
         : typeof rawValue === "string" && rawValue.trim() !== ""
           ? field.newsletterCheckboxLabel
           : "";
@@ -154,14 +285,145 @@ function validatePublicFormResponses(
       continue;
     }
 
+    if (isPetInfoFormFieldType(field.type)) {
+      const normalized = normalizePetInfoValue(rawValue);
+      if (field.required && isEmptyPetInfoValue(normalized)) {
+        errors.push(`${field.label} is required.`);
+      } else if (field.required && !isEmptyPetInfoValue(normalized)) {
+        const missingLabels = getMissingPetInfoLabels(normalized);
+        if (missingLabels.length > 0) {
+          errors.push(`${field.label} is missing: ${missingLabels.join(", ")}.`);
+        }
+      }
+      responses[index] = normalized;
+      continue;
+    }
+
+    if (isFileUploadFormFieldType(field.type)) {
+      if (field.required && !isUploadedFormFileValue(rawValue)) {
+        errors.push(`${field.label} is required.`);
+      }
+      responses[index] = isUploadedFormFileValue(rawValue) ? rawValue : null;
+      continue;
+    }
+
     const normalized = typeof rawValue === "string" ? rawValue.trim() : "";
     if (field.required && normalized === "") {
       errors.push(`${field.label} is required.`);
+    } else if (field.type === "email" && normalized !== "" && !isEmailAddress(normalized)) {
+      errors.push(`${field.label} must be a valid email address.`);
+    } else if (field.type === "date" && normalized !== "" && !isIsoDate(normalized)) {
+      errors.push(`${field.label} must be a valid date.`);
+    } else if (
+      isOptionListFormFieldType(field.type)
+      && normalized !== ""
+      && field.options.length > 0
+      && !field.options.includes(normalized)
+    ) {
+      errors.push(`${field.label} contains an invalid option.`);
     }
     responses[index] = normalized;
   }
 
   return { responses, errors };
+}
+
+function normalizeProfileMappingValue(value: unknown): string {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item).trim()).filter((item) => item !== "").join(", ");
+  }
+
+  if (isUploadedFormFileValue(value)) {
+    return value.originalName.trim();
+  }
+
+  return "";
+}
+
+function resolvePublicFormProfileUpdates(input: {
+  submission: FormSubmission;
+  responses: ReadonlyArray<unknown>;
+}): {
+  clientProfilePatch: PublicFormClientProfilePatch;
+  petProfile: {
+    petId: string | null;
+    input: PublicFormPetProfilePatch;
+  } | null;
+} {
+  const clientProfilePatch: PublicFormClientProfilePatch = {};
+  const petProfilePatch: PublicFormPetProfilePatch = {};
+  let resolvedPetId = input.submission.petId ?? null;
+  let hasPetProfileSelection = false;
+  let hasPetProfileValues = false;
+
+  for (const [index, rawField] of (input.submission.templateFields ?? []).entries()) {
+    const response = input.responses[index];
+    const fieldType = normalizeFormFieldType(rawField.type);
+
+    if (isPetInfoFormFieldType(fieldType)) {
+      const petInfo = normalizePetInfoValue(response);
+      if (!isEmptyPetInfoValue(petInfo)) {
+        if (petInfo.petId !== "") {
+          resolvedPetId = petInfo.petId;
+          hasPetProfileSelection = true;
+        }
+
+        const petInfoPatch: PublicFormPetProfilePatch = {
+          name: petInfo.name,
+          dateOfBirth: petInfo.dateOfBirth,
+          species: petInfo.species,
+          breed: petInfo.breed,
+          weight: petInfo.weight,
+          gender: petInfo.gender,
+          spayNeuterStatus: petInfo.spayNeuterStatus,
+          vaccineStatus: petInfo.vaccineStatus,
+          source: petInfo.source,
+          acquiredAgo: petInfo.acquiredAgo
+        };
+
+        for (const [key, value] of Object.entries(petInfoPatch)) {
+          if ((value ?? "").trim() !== "") {
+            petProfilePatch[key as keyof PublicFormPetProfilePatch] = value;
+            hasPetProfileValues = true;
+          }
+        }
+      }
+    }
+
+    const mapping = rawField.profileMapping;
+    if (mapping == null) {
+      continue;
+    }
+
+    const normalizedValue = normalizeProfileMappingValue(response);
+    if (normalizedValue === "") {
+      continue;
+    }
+
+    if (mapping.target === "client") {
+      clientProfilePatch[mapping.field] = normalizedValue;
+      continue;
+    }
+
+    petProfilePatch[mapping.field] = normalizedValue;
+    hasPetProfileValues = true;
+  }
+
+  if (!hasPetProfileSelection && !hasPetProfileValues) {
+    return { clientProfilePatch, petProfile: null };
+  }
+
+  return {
+    clientProfilePatch,
+    petProfile: {
+      petId: resolvedPetId,
+      input: petProfilePatch
+    }
+  };
 }
 
 function resolveActorType(session: z.infer<typeof optionalSessionSchema>, resourceClientId: string): TokenizedPublicAccessInput["actorType"] {
@@ -452,7 +714,7 @@ export async function submitPublicForm(
     contactName: string | null;
     contactEmail: string | null;
     contactPhone: string | null;
-    responses: Record<string, string | string[]>;
+    responses: Record<string, unknown>;
     turnstileToken: string | null;
   },
   dependencies: PublicDocumentAccessDependencies
@@ -482,12 +744,19 @@ export async function submitPublicForm(
     throw new PublicDocumentMutationError("invalid_request", validation.errors.join(" "));
   }
 
+  const profileUpdates = resolvePublicFormProfileUpdates({
+    submission,
+    responses: validation.responses
+  });
+
   const updatedSubmission = await dependencies.submitPublicForm({
     submissionId: submission.id,
     contactName: request.contactName,
     contactEmail: request.contactEmail,
     contactPhone: request.contactPhone,
-    responses: validation.responses
+    responses: validation.responses,
+    clientProfilePatch: profileUpdates.clientProfilePatch,
+    petProfile: profileUpdates.petProfile
   });
   if (updatedSubmission == null) {
     throw new PublicDocumentMutationError("not_found", "Form submission not found.");

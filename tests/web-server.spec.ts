@@ -2677,20 +2677,24 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
           formType: "client_form",
           templateIsInternal: false,
           templateShowInClientPortal: true,
-          fields: [
-            {
-              label: "Dog Name",
-              type: "text",
-              required: true
-            },
-            {
-              label: "Training Goals",
-              type: "textarea",
-              required: false
-            }
-          ]
-        }
-      ]
+        fields: [
+          {
+            label: "Dog Name",
+            type: "text",
+            required: true
+          },
+          {
+            label: "Training Goals",
+            type: "textarea",
+            required: false
+          },
+          {
+            label: "Vaccination Records",
+            type: "file_upload"
+          }
+        ]
+      }
+    ]
     });
 
     const server = createHttpWebServer({ state });
@@ -2740,7 +2744,9 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
       expect(formHtml).toContain("form-1");
       expect(formHtml).toContain('name="contact_name"');
       expect(formHtml).toContain("Dog Name");
+      expect(formHtml).toContain('enctype="multipart/form-data"');
       expect(formHtml).toContain('name="field[0]"');
+      expect(formHtml).toContain('type="file" name="field[2]"');
 
       expect(bookingIcal.headers.get("content-type")).toContain("text/calendar");
       expect(bookingIcal.headers.get("content-disposition")).toContain('attachment; filename="booking-event.ics"');
@@ -2900,6 +2906,159 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
       expect(signedContractHtml).toContain("Casey Client");
       expect(submittedFormHtml).toContain("Thank you! Your form has been submitted successfully.");
       expect(submittedFormHtml).toContain("Rocket");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error?: Error) => error ? reject(error) : resolve());
+      });
+    }
+  });
+
+  it("renders pet info direct-submit controls for the matching logged-in client and links the selected pet on submit", async () => {
+    const state = createInMemoryPlatformState({
+      portalUsers: [
+        {
+          clientId: "client-portal-1",
+          email: "casey@example.com",
+          displayName: "Casey Client",
+          passwordHash: "portal-hash",
+          archived: false
+        }
+      ] as never,
+      pets: [
+        {
+          id: "pet-1",
+          clientId: "client-portal-1",
+          name: "Buddy",
+          species: "Dog",
+          breed: "Lab",
+          petSittingNotes: "",
+          archived: false
+        }
+      ] as never,
+      formSubmissions: [
+        {
+          id: "form-pet-1",
+          templateId: "template-pet-1",
+          clientId: "client-portal-1",
+          templateName: "Pet Intake",
+          formType: "client_form",
+          templateIsInternal: false,
+          templateShowInClientPortal: true,
+          clientReviewSubmission: false,
+          submittedAt: null,
+          publicAccess: {
+            token: "pet-form-token-123456",
+            issuedAt: "2026-05-27T18:00:00.000Z",
+            expiresAt: null,
+            legacySourceId: "form-pet-1"
+          }
+        }
+      ] as never,
+      formTemplates: [
+        {
+          id: "template-pet-1",
+          name: "Pet Intake",
+          description: "Update pet details before training.",
+          active: true,
+          formType: "client_form",
+          templateIsInternal: false,
+          templateShowInClientPortal: true,
+          fields: [
+            {
+              label: "Pet Profile",
+              type: "pet_info",
+              required: true
+            },
+            {
+              label: "Training Notes",
+              type: "textarea"
+            }
+          ]
+        }
+      ] as never,
+      captchaVerifier: async (token) => token === "turnstile-ok",
+      passwordVerifier: async (password, hash) => password === "portal-password" && hash === "portal-hash"
+    });
+
+    const server = createHttpWebServer({ state });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (address == null || typeof address === "string") {
+      throw new Error("Expected TCP server address.");
+    }
+
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    try {
+      const login = await fetch(`${baseUrl}/portal/login`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded"
+        },
+        redirect: "manual",
+        body: new URLSearchParams({
+          email: "casey@example.com",
+          password: "portal-password"
+        })
+      });
+      const cookie = login.headers.get("set-cookie");
+
+      const detail = await fetch(`${baseUrl}/backend/public/form.php?token=pet-form-token-123456`, {
+        headers: {
+          cookie: cookie ?? ""
+        }
+      });
+      expect(detail.status).toBe(200);
+      const detailHtml = await detail.text();
+      expect(detailHtml).toContain('name="field[0][petId]"');
+      expect(detailHtml).toContain("Add New Pet");
+      expect(detailHtml).toContain("Buddy - Dog - Lab");
+
+      const submit = await fetch(`${baseUrl}/backend/public/form.php?token=pet-form-token-123456`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          cookie: cookie ?? ""
+        },
+        redirect: "manual",
+        body: new URLSearchParams({
+          contact_name: "Casey Client",
+          contact_email: "casey@example.com",
+          contact_phone: "555-0110",
+          turnstileToken: "turnstile-ok",
+          "field[0][petId]": "pet-1",
+          "field[0][name]": "Buddy",
+          "field[0][dateOfBirth]": "2022-04-10",
+          "field[0][species]": "Dog",
+          "field[0][breed]": "Labrador Retriever",
+          "field[0][weight]": "62 lbs",
+          "field[0][gender]": "Male",
+          "field[0][spayNeuterStatus]": "Neutered",
+          "field[0][vaccineStatus]": "Up to date",
+          "field[0][source]": "Breeder",
+          "field[0][acquiredAgo]": "2 years ago",
+          "field[1]": "Needs help settling around guests."
+        })
+      });
+
+      expect(submit.status).toBe(303);
+      expect(submit.headers.get("location")).toContain("result=submitted");
+      expect(state.formSubmissions[0]?.petId).toBe("pet-1");
+      expect(state.formSubmissions[0]?.responses?.[0]).toEqual(expect.objectContaining({
+        petId: "pet-1",
+        name: "Buddy",
+        breed: "Labrador Retriever"
+      }));
+      expect(state.pets[0]).toMatchObject({
+        id: "pet-1",
+        breed: "Labrador Retriever",
+        weight: "62 lbs",
+        spayNeuterStatus: "Neutered",
+        vaccineStatus: "Up to date",
+        source: "Breeder",
+        acquiredAgo: "2 years ago"
+      });
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((error?: Error) => error ? reject(error) : resolve());
@@ -5845,7 +6004,10 @@ expect(settingsHtml).toContain("settings-summary-grid");
       expect(formTemplatesHtml).toContain("/admin/form-templates/form-template-1/delete");
       expect(formTemplatesHtml).toContain("/admin/form-templates/form-template-1/duplicate");
       expect(formTemplateDetailHtml).toContain("Boarding Intake");
-      expect(formTemplateDetailHtml).toContain("Fields JSON");
+      expect(formTemplateDetailHtml).toContain("Form Builder");
+      expect(formTemplateDetailHtml).toContain("data-admin-form-builder");
+      expect(formTemplateDetailHtml).toContain("Add Field");
+      expect(formTemplateDetailHtml).not.toContain("Fields JSON");
       expect(legacyFormTemplatesHtml).toContain("Form Templates");
       expect(legacyFormTemplatesHtml).toContain("/client/form_templates_duplicate.php");
       expect(legacyFormTemplateCreateHtml).toContain("Create Form Template");

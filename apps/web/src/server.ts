@@ -38,6 +38,7 @@ import {
   updateEnvFileValues
 } from "@bdta/platform";
 import type {
+  AdminFormBuilderField,
   AppointmentType,
   Booking,
   Client,
@@ -45,6 +46,7 @@ import type {
   ClientContact,
   ClientProfile,
   Contract,
+  FormField,
   FormSubmission,
   Invoice,
   Package,
@@ -53,6 +55,18 @@ import type {
   Quote,
   Setting,
   SitePage
+} from "@bdta/domain";
+import {
+  clientProfileMappingFieldValues,
+  getFormFieldLabel,
+  getFormFieldOptions,
+  hasFileUploadFormField,
+  isDisplayOnlyFormFieldType,
+  isFileUploadFormFieldType,
+  isOptionListFormFieldType,
+  isPetInfoFormFieldType,
+  normalizeFormFieldType,
+  petProfileMappingFieldValues
 } from "@bdta/domain";
 import { createInMemoryApiDependencies, createInMemorySessionStore, type InMemoryPlatformState } from "@bdta/infrastructure";
 
@@ -2187,10 +2201,14 @@ type AdminPetFormValues = {
   name: string;
   species: string;
   breed?: string;
+  dateOfBirth?: string;
+  weight?: string;
   age?: string;
   gender?: string;
   spayNeuterStatus?: string;
   vaccineStatus?: string;
+  source?: string;
+  acquiredAgo?: string;
   behaviorNotes?: string;
   trainingNotes?: string;
   medicalNotes?: string;
@@ -2203,10 +2221,14 @@ function renderAdminPetFormFields(input: AdminPetFormValues): string {
     `<label>Name<input type="text" name="name" value="${escapeAttribute(input.name)}" required></label>`,
     `<label>Species<input type="text" name="species" value="${escapeAttribute(input.species)}" required></label>`,
     `<label>Breed<input type="text" name="breed" value="${escapeAttribute(input.breed ?? "")}" placeholder="German Shepherd mix"></label>`,
+    `<label>DOB<input type="date" name="dateOfBirth" value="${escapeAttribute(input.dateOfBirth ?? "")}"></label>`,
+    `<label>Weight<input type="text" name="weight" value="${escapeAttribute(input.weight ?? "")}" placeholder="55 lb"></label>`,
     `<label>Age<input type="text" name="age" value="${escapeAttribute(input.age ?? "")}" placeholder="3 years"></label>`,
     `<label>Gender<input type="text" name="gender" value="${escapeAttribute(input.gender ?? "")}" placeholder="Female"></label>`,
     `<label>Spay / Neuter Status<input type="text" name="spayNeuterStatus" value="${escapeAttribute(input.spayNeuterStatus ?? "")}" placeholder="Spayed"></label>`,
     `<label>Vaccine Status<input type="text" name="vaccineStatus" value="${escapeAttribute(input.vaccineStatus ?? "")}" placeholder="Current on core vaccines"></label>`,
+    `<label>Source<input type="text" name="source" value="${escapeAttribute(input.source ?? "")}" placeholder="Rescue, breeder, friend, shelter"></label>`,
+    `<label>How Long Ago Acquired<input type="text" name="acquiredAgo" value="${escapeAttribute(input.acquiredAgo ?? "")}" placeholder="2 years ago"></label>`,
     "</div>",
     '<div class="form-grid form-grid--two">',
     `<label>Care Notes<textarea name="petSittingNotes" rows="4" placeholder="Medication, handling notes, feeding reminders, gate code, or household context.">${escapeHtml(input.petSittingNotes ?? "")}</textarea></label>`,
@@ -3442,10 +3464,6 @@ async function listLegacyPublicServices(
     .filter((item) => item.active && item.publicAvailable && !item.isGroupClass && !item.isMiniSession)
     .sort((left, right) => left.name.localeCompare(right.name))
     .map((item) => {
-      const bookingPath = item.uniqueLink.trim() !== ""
-        ? `/backend/public/book.php?link=${encodeURIComponent(item.uniqueLink)}`
-        : `/backend/public/book.php?type=${encodeURIComponent(item.id)}`;
-
       return {
         id: item.id,
         name: item.name,
@@ -3453,9 +3471,9 @@ async function listLegacyPublicServices(
         bullet_points: item.bulletPoints,
         price: item.defaultAmount,
         duration_minutes: item.durationMinutes,
-      location: resolveAppointmentTypeLocationText(item),
+        location: resolveAppointmentTypeLocationText(item),
         type_label: item.isFieldRental ? "Field Rental" : "",
-        booking_url: origin === "" ? bookingPath : `${origin}${bookingPath}`
+        booking_url: buildPublicBookingUrl(origin, item)
       };
     });
 }
@@ -3562,14 +3580,7 @@ async function listLegacyPublicEvents(
       });
     }
 
-    const bookingPath = appointmentType.uniqueLink.trim() === ""
-      ? null
-      : `/backend/public/book.php?link=${encodeURIComponent(appointmentType.uniqueLink)}`;
-    const bookingUrl = bookingPath == null
-      ? null
-      : origin === ""
-        ? bookingPath
-        : `${origin}${bookingPath}`;
+    const bookingUrl = buildPublicBookingUrl(origin, appointmentType);
     const duration = Math.max(appointmentType.durationMinutes, 1);
     const capacity = appointmentType.isGroupClass ? Math.max(appointmentType.maxParticipants, 1) : 1;
 
@@ -4167,22 +4178,24 @@ function extractLegacyPublicFormValues(form: URLSearchParams): Record<string, st
 }
 
 function getLegacyPublicFormFieldOptions(rawField: Record<string, unknown>): string[] {
-  if (!Array.isArray(rawField.options)) {
-    return [];
-  }
-
-  return rawField.options
-    .map((option) => typeof option === "string"
-      ? option
-      : typeof option?.label === "string"
-        ? option.label
-        : "")
-    .map((option) => option.trim())
-    .filter((option) => option !== "");
+  return getFormFieldOptions(rawField);
 }
 
 function isLegacyPublicDisplayOnlyField(type: string): boolean {
-  return ["text_block", "heading", "paragraph", "html", "divider"].includes(type);
+  return isDisplayOnlyFormFieldType(type);
+}
+
+function isPublicFormUploadedFileValue(value: unknown): value is PublicFormUploadedFileValue {
+  return typeof value === "object"
+    && value != null
+    && typeof (value as { originalName?: unknown }).originalName === "string"
+    && typeof (value as { mimeType?: unknown }).mimeType === "string"
+    && typeof (value as { sizeBytes?: unknown }).sizeBytes === "number"
+    && typeof (value as { contentBase64?: unknown }).contentBase64 === "string";
+}
+
+function isPublicFormPetInfoValue(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value != null && !Array.isArray(value);
 }
 
 function formatLegacyPublicFormResponseValue(value: unknown): string {
@@ -4204,6 +4217,34 @@ function formatLegacyPublicFormResponseValue(value: unknown): string {
 
   if (value == null) {
     return '<span class="meta">No response recorded.</span>';
+  }
+
+  if (isPublicFormUploadedFileValue(value)) {
+    const details = [`${value.originalName}`, `${value.sizeBytes} bytes`, value.mimeType]
+      .filter((item) => item.trim() !== "")
+      .join(" | ");
+    return `<span>${escapeHtml(details)}</span>`;
+  }
+
+  if (isPublicFormPetInfoValue(value)) {
+    const responseItems = [
+      ["Pet", typeof value.name === "string" ? value.name : ""],
+      ["DOB", typeof value.dateOfBirth === "string" ? value.dateOfBirth : ""],
+      ["Species", typeof value.species === "string" ? value.species : ""],
+      ["Breed", typeof value.breed === "string" ? value.breed : ""],
+      ["Weight", typeof value.weight === "string" ? value.weight : ""],
+      ["Gender", typeof value.gender === "string" ? value.gender : ""],
+      ["Spay / Neuter", typeof value.spayNeuterStatus === "string" ? value.spayNeuterStatus : ""],
+      ["Vaccines", typeof value.vaccineStatus === "string" ? value.vaccineStatus : ""],
+      ["Source", typeof value.source === "string" ? value.source : ""],
+      ["Acquired", typeof value.acquiredAgo === "string" ? value.acquiredAgo : ""]
+    ].filter(([, item]) => item !== "");
+    if (responseItems.length === 0) {
+      return '<span class="meta">No response recorded.</span>';
+    }
+    return responseItems
+      .map(([label, item]) => `<div><strong>${escapeHtml(label)}:</strong> ${escapeHtml(item)}</div>`)
+      .join("");
   }
 
   return `<pre>${escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
@@ -4794,8 +4835,280 @@ function renderLegacyPublicFormSubmissionForm(input: {
     renderLegacyPublicFormFields(input.submission, input.postedValues),
     '<div class="form-actions"><button type="submit">Submit Form</button></div>',
     "</form>",
+  "</section>"
+  ].join("");
+}
+
+function renderEnhancedPublicFormPetInfoScript(petOptions: Pet[]): string {
+  if (petOptions.length === 0) {
+    return "";
+  }
+
+  const petCatalog = petOptions.map((pet) => ({
+    id: pet.id,
+    name: pet.name,
+    dateOfBirth: pet.dateOfBirth ?? "",
+    species: pet.species,
+    breed: pet.breed ?? "",
+    weight: pet.weight ?? "",
+    gender: pet.gender ?? "",
+    spayNeuterStatus: pet.spayNeuterStatus ?? "",
+    vaccineStatus: pet.vaccineStatus ?? "",
+    source: pet.source ?? "",
+    acquiredAgo: pet.acquiredAgo ?? ""
+  }));
+
+  return [
+    "<script>",
+    "(function () {",
+    `  const petCatalog = ${JSON.stringify(petCatalog)};`,
+    "  const clearGroup = (group) => {",
+    "    group.querySelectorAll('[data-pet-info-field]').forEach((input) => {",
+    "      if (!(input instanceof HTMLInputElement)) return;",
+    "      input.value = '';",
+    "    });",
+    "  };",
+    "  const fillGroup = (group, selectedPetId) => {",
+    "    const pet = petCatalog.find((item) => item.id === selectedPetId);",
+    "    if (pet == null) {",
+    "      clearGroup(group);",
+    "      return;",
+    "    }",
+    "    group.querySelectorAll('[data-pet-info-field]').forEach((input) => {",
+    "      if (!(input instanceof HTMLInputElement)) return;",
+    "      const key = input.getAttribute('data-pet-info-field') || '';",
+    "      const nextValue = typeof pet[key] === 'string' ? pet[key] : '';",
+    "      input.value = nextValue;",
+    "    });",
+    "  };",
+    "  document.querySelectorAll('[data-pet-info-group]').forEach((group) => {",
+    "    if (!(group instanceof HTMLElement)) return;",
+    "    const select = group.querySelector('[data-pet-info-select]');",
+    "    if (!(select instanceof HTMLSelectElement)) return;",
+    "    if (select.value) fillGroup(group, select.value);",
+    "    select.addEventListener('change', () => {",
+    "      if (select.value === '') {",
+    "        clearGroup(group);",
+    "        return;",
+    "      }",
+    "      fillGroup(group, select.value);",
+    "    });",
+    "  });",
+    "}());",
+    "</script>"
+  ].join("");
+}
+
+function renderEnhancedPublicFormFields(
+  submission: FormSubmission,
+  postedValues: Record<string, unknown>,
+  petOptions: Pet[] = []
+): string {
+  const fields = submission.templateFields ?? [];
+  const fieldMarkup: string[] = [];
+  const renderPetInfoField = (index: number, label: string, description: string, required: boolean, value: Record<string, unknown>): string => {
+    const fieldName = `field[${index}]`;
+    const readValue = (key: string): string => typeof value[key] === "string" ? String(value[key] ?? "") : "";
+    return [
+      `<section class="surface-block" data-pet-info-group="${index}">`,
+      `<h4>${escapeHtml(label)}${required ? " *" : ""}</h4>`,
+      description === "" ? "" : `<p class="section-copy">${escapeHtml(description)}</p>`,
+      petOptions.length === 0 ? "" : `<label>Existing Pet<select name="${escapeAttribute(`${fieldName}[petId]`)}" data-pet-info-select><option value="">Add New Pet</option>${petOptions.map((pet) => `<option value="${escapeAttribute(pet.id)}"${readValue("petId") === pet.id ? " selected" : ""}>${escapeHtml(`${pet.name} - ${pet.species}${pet.breed ? ` - ${pet.breed}` : ""}`)}</option>`).join("")}</select></label>`,
+      '<div class="form-grid form-grid--two">',
+      `<label>Name<input type="text" name="${escapeAttribute(`${fieldName}[name]`)}" value="${escapeAttribute(readValue("name"))}"${required ? " required" : ""} data-pet-info-field="name"></label>`,
+      `<label>DOB<input type="date" name="${escapeAttribute(`${fieldName}[dateOfBirth]`)}" value="${escapeAttribute(readValue("dateOfBirth"))}"${required ? " required" : ""} data-pet-info-field="dateOfBirth"></label>`,
+      `<label>Species<input type="text" name="${escapeAttribute(`${fieldName}[species]`)}" value="${escapeAttribute(readValue("species"))}"${required ? " required" : ""} data-pet-info-field="species"></label>`,
+      `<label>Breed<input type="text" name="${escapeAttribute(`${fieldName}[breed]`)}" value="${escapeAttribute(readValue("breed"))}"${required ? " required" : ""} data-pet-info-field="breed"></label>`,
+      `<label>Weight<input type="text" name="${escapeAttribute(`${fieldName}[weight]`)}" value="${escapeAttribute(readValue("weight"))}"${required ? " required" : ""} data-pet-info-field="weight"></label>`,
+      `<label>Gender<input type="text" name="${escapeAttribute(`${fieldName}[gender]`)}" value="${escapeAttribute(readValue("gender"))}"${required ? " required" : ""} data-pet-info-field="gender"></label>`,
+      `<label>Neuter / Spay Status<input type="text" name="${escapeAttribute(`${fieldName}[spayNeuterStatus]`)}" value="${escapeAttribute(readValue("spayNeuterStatus"))}"${required ? " required" : ""} data-pet-info-field="spayNeuterStatus"></label>`,
+      `<label>Vaccine Status<input type="text" name="${escapeAttribute(`${fieldName}[vaccineStatus]`)}" value="${escapeAttribute(readValue("vaccineStatus"))}"${required ? " required" : ""} data-pet-info-field="vaccineStatus"></label>`,
+      `<label>Source<input type="text" name="${escapeAttribute(`${fieldName}[source]`)}" value="${escapeAttribute(readValue("source"))}"${required ? " required" : ""} data-pet-info-field="source"></label>`,
+      `<label>How Long Ago Acquired<input type="text" name="${escapeAttribute(`${fieldName}[acquiredAgo]`)}" value="${escapeAttribute(readValue("acquiredAgo"))}"${required ? " required" : ""} data-pet-info-field="acquiredAgo"></label>`,
+      "</div>",
+      "</section>"
+    ].join("");
+  };
+
+  for (const [index, rawField] of fields.entries()) {
+    const fieldType = normalizeFormFieldType(rawField.type);
+    const fieldLabel = getFormFieldLabel(rawField as FormField, index);
+    const fieldDescription = typeof rawField.description === "string" ? rawField.description.trim() : "";
+    const fieldPlaceholder = typeof rawField.placeholder === "string" ? rawField.placeholder : "";
+    const isRequired = rawField.required === true;
+    const fieldName = `field[${index}]`;
+    const rawValue = postedValues[String(index)] ?? submission.responses?.[index] ?? "";
+
+    if (isDisplayOnlyFormFieldType(fieldType)) {
+      fieldMarkup.push([
+        '<section class="surface-block">',
+        `<div class="detail-card__label">${escapeHtml(fieldLabel)}</div>`,
+        fieldDescription === "" ? "" : `<p class="section-copy">${escapeHtml(fieldDescription)}</p>`,
+        "</section>"
+      ].join(""));
+      continue;
+    }
+
+    if (fieldType === "textarea" || fieldType === "pet_info_group") {
+      const textValue = typeof rawValue === "string"
+        ? rawValue
+        : Array.isArray(rawValue)
+          ? JSON.stringify(rawValue, null, 2)
+          : rawValue == null
+            ? ""
+            : JSON.stringify(rawValue, null, 2);
+      fieldMarkup.push([
+        '<label>',
+        `${escapeHtml(fieldLabel)}${isRequired ? " *" : ""}`,
+        fieldDescription === "" ? "" : `<span class="meta">${escapeHtml(fieldDescription)}</span>`,
+        `<textarea name="${escapeAttribute(fieldName)}" rows="${fieldType === "pet_info_group" ? "6" : "4"}"${isRequired ? " required" : ""} placeholder="${escapeAttribute(fieldPlaceholder)}">${escapeHtml(textValue)}</textarea>`,
+        "</label>"
+      ].join(""));
+      continue;
+    }
+
+    if (isPetInfoFormFieldType(fieldType)) {
+      fieldMarkup.push(renderPetInfoField(
+        index,
+        fieldLabel,
+        fieldDescription,
+        isRequired,
+        typeof rawValue === "object" && rawValue != null && !Array.isArray(rawValue) ? rawValue as Record<string, unknown> : {}
+      ));
+      continue;
+    }
+
+    if (fieldType === "select") {
+      const selectedValue = typeof rawValue === "string" ? rawValue : "";
+      fieldMarkup.push([
+        '<label>',
+        `${escapeHtml(fieldLabel)}${isRequired ? " *" : ""}`,
+        fieldDescription === "" ? "" : `<span class="meta">${escapeHtml(fieldDescription)}</span>`,
+        `<select name="${escapeAttribute(fieldName)}"${isRequired ? " required" : ""}>`,
+        '<option value="">-- Select --</option>',
+        getFormFieldOptions(rawField).map((option) => `<option value="${escapeAttribute(option)}"${selectedValue === option ? " selected" : ""}>${escapeHtml(option)}</option>`).join(""),
+        "</select>",
+        "</label>"
+      ].join(""));
+      continue;
+    }
+
+    if (fieldType === "checkbox") {
+      const selectedValues = Array.isArray(rawValue)
+        ? rawValue.map((item) => String(item))
+        : typeof rawValue === "string" && rawValue.trim() !== ""
+          ? [rawValue]
+          : [];
+      const options = getFormFieldOptions(rawField);
+      fieldMarkup.push([
+        `<fieldset><legend>${escapeHtml(fieldLabel)}${isRequired ? " *" : ""}</legend>`,
+        fieldDescription === "" ? "" : `<p class="meta">${escapeHtml(fieldDescription)}</p>`,
+        options.length === 0
+          ? `<label><input type="checkbox" name="${escapeAttribute(fieldName)}[]" value="1"${selectedValues.includes("1") ? " checked" : ""}> ${escapeHtml(fieldLabel)}</label>`
+          : options.map((option) => `<label><input type="checkbox" name="${escapeAttribute(fieldName)}[]" value="${escapeAttribute(option)}"${selectedValues.includes(option) ? " checked" : ""}> ${escapeHtml(option)}</label>`).join(""),
+        "</fieldset>"
+      ].join(""));
+      continue;
+    }
+
+    if (fieldType === "newsletter_opt_in") {
+      const checked = Array.isArray(rawValue)
+        ? rawValue.some((item) => String(item).trim() !== "")
+        : typeof rawValue === "string" && rawValue.trim() !== "";
+      fieldMarkup.push([
+        `<input type="hidden" name="${escapeAttribute(fieldName)}" value="">`,
+        `<label><input type="checkbox" name="${escapeAttribute(fieldName)}" value="Yes, I'd like to receive newsletters and updates."${checked ? " checked" : ""}> ${escapeHtml(fieldLabel)}</label>`
+      ].join(""));
+      continue;
+    }
+
+    if (fieldType === "radio") {
+      const selectedValue = typeof rawValue === "string" ? rawValue : "";
+      fieldMarkup.push([
+        `<fieldset><legend>${escapeHtml(fieldLabel)}${isRequired ? " *" : ""}</legend>`,
+        fieldDescription === "" ? "" : `<p class="meta">${escapeHtml(fieldDescription)}</p>`,
+        getFormFieldOptions(rawField).map((option) => `<label><input type="radio" name="${escapeAttribute(fieldName)}" value="${escapeAttribute(option)}"${selectedValue === option ? " checked" : ""}${isRequired ? " required" : ""}> ${escapeHtml(option)}</label>`).join(""),
+        "</fieldset>"
+      ].join(""));
+      continue;
+    }
+
+    if (isFileUploadFormFieldType(fieldType)) {
+      fieldMarkup.push([
+        '<label>',
+        `${escapeHtml(fieldLabel)}${isRequired ? " *" : ""}`,
+        fieldDescription === "" ? "" : `<span class="meta">${escapeHtml(fieldDescription)}</span>`,
+        `<input type="file" name="${escapeAttribute(fieldName)}"${isRequired ? " required" : ""}>`,
+        isPublicFormUploadedFileValue(rawValue) ? `<span class="meta">Current file: ${escapeHtml(rawValue.originalName)}</span>` : "",
+        "</label>"
+      ].join(""));
+      continue;
+    }
+
+    const inputType = fieldType === "email"
+      ? "email"
+      : fieldType === "phone"
+        ? "tel"
+        : fieldType === "date"
+          ? "date"
+          : "text";
+    const textValue = typeof rawValue === "string" ? rawValue : "";
+    fieldMarkup.push([
+      '<label>',
+      `${escapeHtml(fieldLabel)}${isRequired ? " *" : ""}`,
+      fieldDescription === "" ? "" : `<span class="meta">${escapeHtml(fieldDescription)}</span>`,
+      `<input type="${escapeAttribute(inputType)}" name="${escapeAttribute(fieldName)}" value="${escapeAttribute(textValue)}" placeholder="${escapeAttribute(fieldPlaceholder)}"${isRequired ? " required" : ""}>`,
+      "</label>"
+    ].join(""));
+  }
+
+  return fieldMarkup.length === 0
+    ? '<p class="section-copy">No editable fields are configured for this form.</p>'
+    : fieldMarkup.join("");
+}
+
+function renderEnhancedPublicFormSubmissionForm(input: {
+  submission: FormSubmission;
+  currentPath: string;
+  contactName: string;
+  contactEmail: string;
+  contactPhone: string;
+  turnstileToken?: string;
+  postedValues: Record<string, unknown>;
+  petOptions?: Pet[];
+}): string {
+  const requiresMultipart = hasFileUploadFormField(input.submission.templateFields);
+  const hasPetInfoField = (input.submission.templateFields ?? []).some((field) => isPetInfoFormFieldType(normalizeFormFieldType(field.type)));
+  return [
+    '<section class="surface-block">',
+    "<h3>Complete Form</h3>",
+    `<form class="form-grid" method="post" action="${escapeAttribute(input.currentPath)}"${requiresMultipart ? ' enctype="multipart/form-data"' : ""}>`,
+    "<h4>Your Information</h4>",
+    '<div class="form-grid form-grid--two">',
+    `<label>Name *<input type="text" name="contact_name" value="${escapeAttribute(input.contactName)}" required></label>`,
+    `<label>Email *<input type="email" name="contact_email" value="${escapeAttribute(input.contactEmail)}" required></label>`,
+    "</div>",
+    `<label>Phone<input type="tel" name="contact_phone" value="${escapeAttribute(input.contactPhone)}"></label>`,
+    '<label>Turnstile Token<input type="text" name="turnstileToken" value="' + escapeAttribute(input.turnstileToken ?? "turnstile-ok") + '" required></label>',
+    "<h4>Form Questions</h4>",
+    renderEnhancedPublicFormFields(input.submission, input.postedValues, input.petOptions ?? []),
+    hasPetInfoField ? renderEnhancedPublicFormPetInfoScript(input.petOptions ?? []) : "",
+    '<div class="form-actions"><button type="submit">Submit Form</button></div>',
+    "</form>",
     "</section>"
   ].join("");
+}
+
+async function loadPublicFormSelectablePets(
+  api: ApiDependencies | null | undefined,
+  session: z.infer<typeof authSessionSchema> | null,
+  submission: FormSubmission
+): Promise<Pet[]> {
+  if (api == null || session == null || session.actorType !== "portal_user" || session.actorId !== submission.clientId) {
+    return [];
+  }
+
+  return await api.portalResources.listPortalPets(session.actorId);
 }
 
 function renderLegacyPublicFormDetailPage(input: {
@@ -7094,6 +7407,21 @@ function renderLayout(input: {
 ".quote-line-item__header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.8rem; margin-bottom: 0.9rem; }",
 ".quote-line-item__title { font-size: 0.95rem; font-weight: 700; color: #334155; }",
 ".form-grid { display: grid; gap: 1rem; }",
+".form-builder { display: grid; gap: 1rem; padding: 1rem 1.05rem; border-radius: 1rem; border: 1px solid rgba(148, 163, 184, 0.2); background: #f8fafc; }",
+".form-builder__header { display: flex; flex-wrap: wrap; align-items: start; justify-content: space-between; gap: 1rem; }",
+".form-builder__header h3 { margin: 0 0 0.35rem; }",
+".form-builder__list { display: grid; gap: 1rem; }",
+".form-builder__field { display: grid; gap: 1rem; padding: 1rem 1.05rem; border-radius: 1rem; border: 1px solid rgba(148, 163, 184, 0.22); background: #fff; box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05); }",
+".form-builder__field-header { display: flex; flex-wrap: wrap; align-items: start; justify-content: space-between; gap: 0.9rem; }",
+".form-builder__field-header h3 { margin: 0 0 0.35rem; font-size: 1rem; }",
+".form-builder__field-actions { display: flex; flex-wrap: wrap; gap: 0.65rem; }",
+".form-builder__required-toggle { display: inline-flex; align-items: center; gap: 0.55rem; font-weight: 600; }",
+".form-builder__section { display: grid; gap: 0.8rem; }",
+".form-builder__section--muted { padding: 0.9rem 1rem; border-radius: 0.9rem; background: rgba(226, 232, 240, 0.6); }",
+".form-builder__section-label { font-size: 0.76rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #64748b; }",
+".form-builder__options { display: grid; gap: 0.75rem; }",
+".form-builder__option-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.75rem; align-items: end; }",
+".form-builder__empty { padding: 1rem 1.05rem; border: 1px dashed rgba(148, 163, 184, 0.4); border-radius: 0.9rem; color: #64748b; background: rgba(255, 255, 255, 0.75); }",
 ".form-grid--two { grid-template-columns: repeat(2, minmax(0, 1fr)); }",
 ".appointment-type-editor { gap: 1.25rem; }",
 ".appointment-type-editor__section { padding: 1.2rem; border-radius: 1rem; border: 1px solid rgba(148, 163, 184, 0.18); background: #f8fafc; }",
@@ -8084,6 +8412,103 @@ async function readPetFileUploadInput(request: IncomingMessage): Promise<{
   };
 }
 
+type PublicFormUploadedFileValue = {
+  originalName: string;
+  mimeType: string;
+  sizeBytes: number;
+  contentBase64: string;
+};
+
+async function toSerializablePublicFormEntryValue(value: string | File): Promise<string | PublicFormUploadedFileValue | null> {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (!(value instanceof File) || (value.name.trim() === "" && value.size === 0)) {
+    return null;
+  }
+
+  return {
+    originalName: value.name,
+    mimeType: value.type.trim() === "" ? "application/octet-stream" : value.type,
+    sizeBytes: value.size,
+    contentBase64: Buffer.from(await value.arrayBuffer()).toString("base64")
+  };
+}
+
+async function extractStructuredPublicFormValues(form: URLSearchParams | FormData): Promise<Record<string, unknown>> {
+  const values: Record<string, unknown> = {};
+  for (const [key, rawEntry] of form.entries()) {
+    const arrayMatch = /^field\[(\d+)\]\[\]$/.exec(key);
+    if (arrayMatch != null) {
+      const entry = await toSerializablePublicFormEntryValue(rawEntry);
+      if (typeof entry !== "string") {
+        continue;
+      }
+      const fieldIndex = arrayMatch[1] ?? "";
+      const existing = Array.isArray(values[fieldIndex]) ? values[fieldIndex] as string[] : [];
+      values[fieldIndex] = [...existing, entry];
+      continue;
+    }
+
+    const nestedMatch = /^field\[(\d+)\]\[([^\]]+)\]$/.exec(key);
+    if (nestedMatch != null) {
+      const entry = await toSerializablePublicFormEntryValue(rawEntry);
+      if (entry == null) {
+        continue;
+      }
+      const fieldIndex = nestedMatch[1] ?? "";
+      const nestedKey = nestedMatch[2] ?? "";
+      const existing = typeof values[fieldIndex] === "object" && values[fieldIndex] != null && !Array.isArray(values[fieldIndex])
+        ? { ...(values[fieldIndex] as Record<string, unknown>) }
+        : {};
+      existing[nestedKey] = entry;
+      values[fieldIndex] = existing;
+      continue;
+    }
+
+    const scalarMatch = /^field\[(\d+)\]$/.exec(key);
+    if (scalarMatch == null) {
+      continue;
+    }
+
+    const entry = await toSerializablePublicFormEntryValue(rawEntry);
+    const fieldIndex = scalarMatch[1] ?? "";
+    values[fieldIndex] = entry;
+  }
+
+  return values;
+}
+
+async function readPublicFormSubmissionInput(request: IncomingMessage): Promise<{
+  contactName: string;
+  contactEmail: string;
+  contactPhone: string;
+  turnstileToken: string | null;
+  responses: Record<string, unknown>;
+}> {
+  const contentType = String(request.headers["content-type"] ?? "").toLowerCase();
+  if (contentType.includes("multipart/form-data")) {
+    const form = await readFormDataBody(request);
+    return {
+      contactName: typeof form.get("contact_name") === "string" ? String(form.get("contact_name") ?? "").trim() : "",
+      contactEmail: typeof form.get("contact_email") === "string" ? String(form.get("contact_email") ?? "").trim() : "",
+      contactPhone: typeof form.get("contact_phone") === "string" ? String(form.get("contact_phone") ?? "").trim() : "",
+      turnstileToken: typeof form.get("turnstileToken") === "string" ? String(form.get("turnstileToken") ?? "").trim() : null,
+      responses: await extractStructuredPublicFormValues(form)
+    };
+  }
+
+  const form = await readFormBody(request);
+  return {
+    contactName: form.get("contact_name")?.trim() ?? "",
+    contactEmail: form.get("contact_email")?.trim() ?? "",
+    contactPhone: form.get("contact_phone")?.trim() ?? "",
+    turnstileToken: form.get("turnstileToken")?.trim() ?? null,
+    responses: await extractStructuredPublicFormValues(form)
+  };
+}
+
 function readRequiredFormValue(form: URLSearchParams, key: string): string {
   return form.get(key)?.trim() ?? "";
 }
@@ -8140,10 +8565,14 @@ function readAdminPetFormInput(form: URLSearchParams): Omit<AdminPetMutationInpu
     name: readRequiredFormValue(form, "name"),
     species: readRequiredFormValue(form, "species"),
     breed: readOptionalFormValue(form, "breed") ?? "",
+    dateOfBirth: readOptionalFormValue(form, "dateOfBirth") ?? "",
+    weight: readOptionalFormValue(form, "weight") ?? "",
     age: readOptionalFormValue(form, "age") ?? "",
     gender: readOptionalFormValue(form, "gender") ?? "",
     spayNeuterStatus: readOptionalFormValue(form, "spayNeuterStatus") ?? "",
     vaccineStatus: readOptionalFormValue(form, "vaccineStatus") ?? "",
+    source: readOptionalFormValue(form, "source") ?? "",
+    acquiredAgo: readOptionalFormValue(form, "acquiredAgo") ?? "",
     behaviorNotes: readOptionalFormValue(form, "behaviorNotes") ?? "",
     trainingNotes: readOptionalFormValue(form, "trainingNotes") ?? "",
     medicalNotes: readOptionalFormValue(form, "medicalNotes") ?? "",
@@ -8390,8 +8819,15 @@ function formatAdminClientOptionLabel(client: { firstName: string; lastName: str
   return client.email.trim() === "" ? fullName : `${fullName} (${client.email})`;
 }
 
-function buildLegacyPublicBookingRequestUrl(origin: string, uniqueLink: string): string {
-  const path = `/backend/public/book.php?link=${encodeURIComponent(uniqueLink)}`;
+function buildPublicBookingPath(appointmentType: Pick<AppointmentType, "id" | "uniqueLink">): string {
+  const uniqueLink = appointmentType.uniqueLink.trim();
+  return uniqueLink === ""
+    ? `/backend/public/book.php?type=${encodeURIComponent(appointmentType.id)}`
+    : `/backend/public/book.php?link=${encodeURIComponent(uniqueLink)}`;
+}
+
+function buildPublicBookingUrl(origin: string, appointmentType: Pick<AppointmentType, "id" | "uniqueLink">): string {
+  const path = buildPublicBookingPath(appointmentType);
   return origin === "" ? path : `${origin}${path}`;
 }
 
@@ -9060,6 +9496,502 @@ function readAdminAppointmentTypeFormInput(form: URLSearchParams) {
 }
 
 
+const adminFormBuilderFieldTypeOptions: Array<{ value: AdminFormBuilderField["type"]; label: string }> = [
+  { value: "text", label: "Single-line Text" },
+  { value: "textarea", label: "Multi-line Text" },
+  { value: "radio", label: "Radio Buttons" },
+  { value: "checkbox", label: "Checkboxes" },
+  { value: "select", label: "Select List" },
+  { value: "file_upload", label: "File Upload" },
+  { value: "date", label: "Date" },
+  { value: "email", label: "Email" },
+  { value: "phone", label: "Phone" },
+  { value: "pet_info", label: "Pet Info" }
+];
+
+const adminFormBuilderClientProfileLabels: Record<(typeof clientProfileMappingFieldValues)[number], string> = {
+  name: "Client Name",
+  email: "Client Email",
+  phone: "Client Phone",
+  address: "Client Address",
+  notes: "Client Notes"
+};
+
+const adminFormBuilderPetProfileLabels: Record<(typeof petProfileMappingFieldValues)[number], string> = {
+  name: "Pet Name",
+  dateOfBirth: "DOB",
+  species: "Species",
+  breed: "Breed",
+  weight: "Weight",
+  gender: "Gender",
+  spayNeuterStatus: "Spay / Neuter Status",
+  vaccineStatus: "Vaccine Status",
+  source: "Source",
+  acquiredAgo: "How Long Ago Acquired",
+  age: "Age",
+  behaviorNotes: "Behavior Notes",
+  trainingNotes: "Training Notes",
+  medicalNotes: "Medical Notes",
+  petSittingNotes: "Care Notes"
+};
+
+const adminFormBuilderPetInfoFields = [
+  "Name",
+  "DOB",
+  "Species",
+  "Breed",
+  "Weight",
+  "Gender",
+  "Neuter / Spay Status",
+  "Vaccine Status",
+  "Source",
+  "How Long Ago Acquired"
+] as const;
+
+function createDefaultAdminFormBuilderField(type: AdminFormBuilderField["type"] = "text"): AdminFormBuilderField {
+  if (type === "radio" || type === "checkbox" || type === "select") {
+    return {
+      type,
+      label: "",
+      options: ["Option 1"]
+    };
+  }
+
+  return {
+    type,
+    label: ""
+  };
+}
+
+function normalizeAdminFormBuilderProfileMapping(value: unknown): AdminFormBuilderField["profileMapping"] | undefined {
+  if (typeof value !== "object" || value == null || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const mapping = value as { target?: unknown; field?: unknown };
+  const target = typeof mapping.target === "string" ? mapping.target.trim().toLowerCase() : "";
+  const field = typeof mapping.field === "string" ? mapping.field.trim() : "";
+  if (target === "client" && (clientProfileMappingFieldValues as readonly string[]).includes(field)) {
+    return {
+      target: "client",
+      field: field as (typeof clientProfileMappingFieldValues)[number]
+    };
+  }
+
+  if (target === "pet" && (petProfileMappingFieldValues as readonly string[]).includes(field)) {
+    return {
+      target: "pet",
+      field: field as (typeof petProfileMappingFieldValues)[number]
+    };
+  }
+
+  return undefined;
+}
+
+function normalizeAdminFormBuilderField(
+  rawField: Record<string, unknown>,
+  index: number
+): AdminFormBuilderField {
+  const normalizedType = normalizeFormFieldType(rawField.type);
+  const baseField = {
+    label: getFormFieldLabel(rawField as FormField, index),
+    placeholder: typeof rawField.placeholder === "string" ? rawField.placeholder : "",
+    description: typeof rawField.description === "string" ? rawField.description : "",
+    required: rawField.required === true,
+    profileMapping: normalizeAdminFormBuilderProfileMapping(rawField.profileMapping)
+  };
+
+  if (normalizedType === "pet_info") {
+    return {
+      type: "pet_info",
+      ...baseField,
+      profileMapping: undefined
+    };
+  }
+
+  if (normalizedType === "radio" || normalizedType === "checkbox" || normalizedType === "select") {
+    const options = getFormFieldOptions(rawField);
+    return {
+      type: normalizedType,
+      ...baseField,
+      options: options.length > 0 ? options : ["Option 1"]
+    };
+  }
+
+  if (normalizedType === "newsletter_opt_in") {
+    const newsletterLabel = typeof rawField.newsletterCheckboxLabel === "string"
+      ? rawField.newsletterCheckboxLabel.trim()
+      : "";
+    return {
+      type: "checkbox",
+      ...baseField,
+      options: [newsletterLabel === "" ? baseField.label : newsletterLabel]
+    };
+  }
+
+  if (normalizedType === "textarea" || normalizedType === "pet_info_group") {
+    return {
+      type: "textarea",
+      ...baseField
+    };
+  }
+
+  if (
+    normalizedType === "file_upload"
+    || normalizedType === "date"
+    || normalizedType === "email"
+    || normalizedType === "phone"
+  ) {
+    return {
+      type: normalizedType,
+      ...baseField
+    };
+  }
+
+  return {
+    type: "text",
+    ...baseField
+  };
+}
+
+function normalizeAdminFormBuilderFields(fields: ReadonlyArray<FormField> | Array<Record<string, unknown>> | undefined): AdminFormBuilderField[] {
+  return (fields ?? [])
+    .filter((field): field is Record<string, unknown> => typeof field === "object" && field != null)
+    .map((field, index) => normalizeAdminFormBuilderField(field, index));
+}
+
+function escapeJsonForScript(value: unknown): string {
+  return JSON.stringify(value)
+    .replace(/</g, "\\u003c")
+    .replace(/>/g, "\\u003e")
+    .replace(/&/g, "\\u0026");
+}
+
+function renderAdminFormBuilderScript(): string {
+  const clientProfileOptions = clientProfileMappingFieldValues.map((value) => ({
+    value,
+    label: adminFormBuilderClientProfileLabels[value]
+  }));
+  const petProfileOptions = petProfileMappingFieldValues.map((value) => ({
+    value,
+    label: adminFormBuilderPetProfileLabels[value]
+  }));
+
+  return [
+    "<script>",
+    "(function () {",
+    `  const fieldTypeOptions = ${escapeJsonForScript(adminFormBuilderFieldTypeOptions)};`,
+    `  const clientProfileOptions = ${escapeJsonForScript(clientProfileOptions)};`,
+    `  const petProfileOptions = ${escapeJsonForScript(petProfileOptions)};`,
+    `  const petInfoFields = ${escapeJsonForScript(adminFormBuilderPetInfoFields)};`,
+    "  const optionFieldTypes = new Set(['radio', 'checkbox', 'select']);",
+    "  const trimValue = (value) => typeof value === 'string' ? value.trim() : '';",
+    "  const escapeHtml = (value) => String(value ?? '')",
+    "    .replace(/&/g, '&amp;')",
+    "    .replace(/</g, '&lt;')",
+    "    .replace(/>/g, '&gt;')",
+    "    .replace(/\\\"/g, '&quot;')",
+    "    .replace(/'/g, '&#39;');",
+    "  const createField = (type = 'text') => optionFieldTypes.has(type)",
+    "    ? { type, label: '', placeholder: '', description: '', required: false, options: ['Option 1'] }",
+    "    : { type, label: '', placeholder: '', description: '', required: false };",
+    "  const normalizeField = (field) => {",
+    "    const normalizedType = fieldTypeOptions.some((item) => item.value === field?.type) ? field.type : 'text';",
+    "    const nextField = {",
+    "      type: normalizedType,",
+    "      label: typeof field?.label === 'string' ? field.label : '',",
+    "      placeholder: typeof field?.placeholder === 'string' ? field.placeholder : '',",
+    "      description: typeof field?.description === 'string' ? field.description : '',",
+    "      required: field?.required === true",
+    "    };",
+    "    if (normalizedType !== 'pet_info' && field?.profileMapping && (field.profileMapping.target === 'client' || field.profileMapping.target === 'pet')) {",
+    "      const allowedOptions = field.profileMapping.target === 'client' ? clientProfileOptions : petProfileOptions;",
+    "      if (allowedOptions.some((item) => item.value === field.profileMapping.field)) {",
+    "        nextField.profileMapping = {",
+    "          target: field.profileMapping.target,",
+    "          field: field.profileMapping.field",
+    "        };",
+    "      }",
+    "    }",
+    "    if (optionFieldTypes.has(normalizedType)) {",
+    "      const options = Array.isArray(field?.options)",
+    "        ? field.options.map((option) => trimValue(option)).filter((option) => option !== '')",
+    "        : [];",
+    "      nextField.options = options.length > 0 ? options : ['Option 1'];",
+    "    }",
+    "    return nextField;",
+    "  };",
+    "  const serializeField = (field) => {",
+    "    const nextField = {",
+    "      type: field.type,",
+    "      label: trimValue(field.label)",
+    "    };",
+    "    const placeholder = trimValue(field.placeholder);",
+    "    const description = trimValue(field.description);",
+    "    if (placeholder !== '') nextField.placeholder = placeholder;",
+    "    if (description !== '') nextField.description = description;",
+    "    if (field.required === true) nextField.required = true;",
+    "    if (field.type !== 'pet_info' && field.profileMapping && (field.profileMapping.target === 'client' || field.profileMapping.target === 'pet') && trimValue(field.profileMapping.field) !== '') {",
+    "      nextField.profileMapping = {",
+    "        target: field.profileMapping.target,",
+    "        field: trimValue(field.profileMapping.field)",
+    "      };",
+    "    }",
+    "    if (optionFieldTypes.has(field.type)) {",
+    "      const options = (Array.isArray(field.options) ? field.options : [])",
+    "        .map((option) => trimValue(option))",
+    "        .filter((option) => option !== '');",
+    "      nextField.options = options.length > 0 ? options : ['Option 1'];",
+    "    }",
+    "    return nextField;",
+    "  };",
+    "  const syncHiddenInput = (state, output) => {",
+    "    output.value = JSON.stringify(state.map((field) => serializeField(field)));",
+    "  };",
+    "  const getProfileOptions = (target) => target === 'client'",
+    "    ? clientProfileOptions",
+    "    : target === 'pet'",
+    "      ? petProfileOptions",
+    "      : [];",
+    "  const renderOptionEditor = (field, fieldIndex) => {",
+    "    if (!optionFieldTypes.has(field.type)) return '';",
+    "    const options = Array.isArray(field.options) ? field.options : [];",
+    "    return [",
+    "      '<div class=\"form-builder__section\">',",
+    "      '<div class=\"form-builder__section-label\">Options</div>',",
+    "      '<div class=\"form-builder__options\">',",
+    "      options.map((option, optionIndex) => [",
+    "        '<div class=\"form-builder__option-row\">',",
+    "        `<label>Option ${optionIndex + 1}<input type=\"text\" data-field-index=\"${fieldIndex}\" data-option-index=\"${optionIndex}\" data-option-value value=\"${escapeHtml(option)}\"></label>`,",
+    "        `<button type=\"button\" data-remove-option=\"${fieldIndex}\" data-option-index=\"${optionIndex}\">Remove</button>`,",
+    "        '</div>'",
+    "      ].join('')).join(''),",
+    "      '</div>',",
+    "      `<div class=\"form-actions\"><button type=\"button\" data-add-option=\"${fieldIndex}\">Add Option</button></div>`,",
+    "      '</div>'",
+    "    ].join('');",
+    "  };",
+    "  const renderProfileEditor = (field, fieldIndex) => {",
+    "    if (field.type === 'pet_info') {",
+    "      return [",
+    "        '<div class=\"form-builder__section form-builder__section--muted\">',",
+    "        '<div class=\"form-builder__section-label\">Pet Profile Save</div>',",
+    "        `<p class=\"meta\">Pet Info always saves ${petInfoFields.join(', ')} into the linked pet profile.</p>`,",
+    "        '</div>'",
+    "      ].join('');",
+    "    }",
+    "    const profileTarget = field.profileMapping?.target === 'client' || field.profileMapping?.target === 'pet'",
+    "      ? field.profileMapping.target",
+    "      : '';",
+    "    const profileField = trimValue(field.profileMapping?.field);",
+    "    const profileOptions = getProfileOptions(profileTarget);",
+    "    return [",
+    "      '<div class=\"form-builder__section\">',",
+    "      '<div class=\"form-builder__section-label\">Profile Mapping</div>',",
+    "      '<div class=\"form-grid form-grid--two\">',",
+    "      `<label>Target<select data-field-index=\"${fieldIndex}\" data-profile-target><option value=\"\">No Mapping</option><option value=\"client\"${profileTarget === 'client' ? ' selected' : ''}>Client Profile</option><option value=\"pet\"${profileTarget === 'pet' ? ' selected' : ''}>Pet Profile</option></select></label>`,",
+    "      `<label>Field<select data-field-index=\"${fieldIndex}\" data-profile-field${profileTarget === '' ? ' disabled' : ''}><option value=\"\">Select Field</option>${profileOptions.map((option) => `<option value=\"${escapeHtml(option.value)}\"${profileField === option.value ? ' selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}</select></label>`,",
+    "      '</div>',",
+    "      '</div>'",
+    "    ].join('');",
+    "  };",
+    "  const renderFieldCard = (field, index, totalCount) => {",
+    "    const title = trimValue(field.label) === '' ? `Field ${index + 1}` : trimValue(field.label);",
+    "    return [",
+    "      '<section class=\"form-builder__field\">',",
+    "      `<div class=\"form-builder__field-header\"><div><h3 data-field-title>${escapeHtml(title)}</h3><p class=\"meta\">${escapeHtml(fieldTypeOptions.find((option) => option.value === field.type)?.label ?? 'Field')}</p></div><div class=\"form-builder__field-actions\"><button type=\"button\" data-move-up=\"${index}\"${index === 0 ? ' disabled' : ''}>Move Up</button><button type=\"button\" data-move-down=\"${index}\"${index === totalCount - 1 ? ' disabled' : ''}>Move Down</button><button type=\"button\" data-delete-field=\"${index}\">Delete</button></div></div>`,",
+    "      '<div class=\"form-grid form-grid--two\">',",
+    "      `<label>Label<input type=\"text\" data-field-index=\"${index}\" data-field-key=\"label\" value=\"${escapeHtml(field.label ?? '')}\" required></label>`,",
+    "      `<label>Field Type<select data-field-index=\"${index}\" data-field-key=\"type\">${fieldTypeOptions.map((option) => `<option value=\"${option.value}\"${field.type === option.value ? ' selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}</select></label>`,",
+    "      '</div>',",
+    "      '<div class=\"form-grid form-grid--two\">',",
+    "      `<label>Placeholder<input type=\"text\" data-field-index=\"${index}\" data-field-key=\"placeholder\" value=\"${escapeHtml(field.placeholder ?? '')}\" placeholder=\"Optional helper text\"></label>`,",
+    "      `<label>Description<textarea rows=\"2\" data-field-index=\"${index}\" data-field-key=\"description\" placeholder=\"Optional field description\">${escapeHtml(field.description ?? '')}</textarea></label>`,",
+    "      '</div>',",
+    "      `<label class=\"form-builder__required-toggle\"><input type=\"checkbox\" data-field-index=\"${index}\" data-field-key=\"required\"${field.required === true ? ' checked' : ''}> Required</label>`,",
+    "      renderProfileEditor(field, index),",
+    "      renderOptionEditor(field, index),",
+    "      '</section>'",
+    "    ].join('');",
+    "  };",
+    "  document.querySelectorAll('[data-admin-form-builder]').forEach((root) => {",
+    "    if (!(root instanceof HTMLElement) || root.dataset.builderReady === 'true') return;",
+    "    root.dataset.builderReady = 'true';",
+    "    const list = root.querySelector('[data-form-builder-list]');",
+    "    const output = root.querySelector('[data-form-builder-output]');",
+    "    const addButton = root.querySelector('[data-form-builder-add]');",
+    "    const form = root.closest('form');",
+    "    if (!(list instanceof HTMLElement) || !(output instanceof HTMLInputElement) || !(addButton instanceof HTMLButtonElement) || !(form instanceof HTMLFormElement)) return;",
+    "    let state;",
+    "    try {",
+    "      const parsed = JSON.parse(root.getAttribute('data-initial-fields') || '[]');",
+    "      state = Array.isArray(parsed) && parsed.length > 0",
+    "        ? parsed.map((field) => normalizeField(field))",
+    "        : [createField()];",
+    "    } catch {",
+    "      state = [createField()];",
+    "    }",
+    "    const render = () => {",
+    "      if (state.length === 0) {",
+    "        list.innerHTML = '<div class=\"form-builder__empty\">No fields added yet. Use Add Field to start building this template.</div>';",
+    "        syncHiddenInput(state, output);",
+    "        return;",
+    "      }",
+    "      list.innerHTML = state.map((field, index) => renderFieldCard(field, index, state.length)).join('');",
+    "      syncHiddenInput(state, output);",
+    "    };",
+    "    addButton.addEventListener('click', () => {",
+    "      state = [...state, createField()];",
+    "      render();",
+    "    });",
+    "    list.addEventListener('click', (event) => {",
+    "      const target = event.target;",
+    "      if (!(target instanceof HTMLElement)) return;",
+    "      if (target.hasAttribute('data-move-up')) {",
+    "        const index = Number.parseInt(target.getAttribute('data-move-up') || '', 10);",
+    "        if (!Number.isInteger(index) || index <= 0) return;",
+    "        [state[index - 1], state[index]] = [state[index], state[index - 1]];",
+    "        render();",
+    "        return;",
+    "      }",
+    "      if (target.hasAttribute('data-move-down')) {",
+    "        const index = Number.parseInt(target.getAttribute('data-move-down') || '', 10);",
+    "        if (!Number.isInteger(index) || index >= state.length - 1) return;",
+    "        [state[index], state[index + 1]] = [state[index + 1], state[index]];",
+    "        render();",
+    "        return;",
+    "      }",
+    "      if (target.hasAttribute('data-delete-field')) {",
+    "        const index = Number.parseInt(target.getAttribute('data-delete-field') || '', 10);",
+    "        if (!Number.isInteger(index)) return;",
+    "        state = state.filter((_, itemIndex) => itemIndex !== index);",
+    "        render();",
+    "        return;",
+    "      }",
+    "      if (target.hasAttribute('data-add-option')) {",
+    "        const index = Number.parseInt(target.getAttribute('data-add-option') || '', 10);",
+    "        const field = state[index];",
+    "        if (!field || !optionFieldTypes.has(field.type)) return;",
+    "        field.options = [...(Array.isArray(field.options) ? field.options : []), `Option ${(Array.isArray(field.options) ? field.options.length : 0) + 1}`];",
+    "        render();",
+    "        return;",
+    "      }",
+    "      if (target.hasAttribute('data-remove-option')) {",
+    "        const fieldIndex = Number.parseInt(target.getAttribute('data-remove-option') || '', 10);",
+    "        const optionIndex = Number.parseInt(target.getAttribute('data-option-index') || '', 10);",
+    "        const field = state[fieldIndex];",
+    "        if (!field || !optionFieldTypes.has(field.type) || !Array.isArray(field.options)) return;",
+    "        field.options = field.options.filter((_, index) => index !== optionIndex);",
+    "        if (field.options.length === 0) field.options = ['Option 1'];",
+    "        render();",
+    "      }",
+    "    });",
+    "    list.addEventListener('input', (event) => {",
+    "      const target = event.target;",
+    "      if (!(target instanceof HTMLInputElement) && !(target instanceof HTMLTextAreaElement)) return;",
+    "      const fieldIndex = Number.parseInt(target.getAttribute('data-field-index') || '', 10);",
+    "      if (!Number.isInteger(fieldIndex)) return;",
+    "      const field = state[fieldIndex];",
+    "      if (!field) return;",
+    "      if (target.hasAttribute('data-option-value')) {",
+    "        const optionIndex = Number.parseInt(target.getAttribute('data-option-index') || '', 10);",
+    "        if (!Array.isArray(field.options) || !Number.isInteger(optionIndex)) return;",
+    "        field.options[optionIndex] = target.value;",
+    "        syncHiddenInput(state, output);",
+    "        return;",
+    "      }",
+    "      const key = target.getAttribute('data-field-key');",
+    "      if (key === 'label' || key === 'placeholder' || key === 'description') {",
+    "        field[key] = target.value;",
+    "        syncHiddenInput(state, output);",
+    "      }",
+    "    });",
+    "    list.addEventListener('change', (event) => {",
+    "      const target = event.target;",
+    "      if (!(target instanceof HTMLInputElement) && !(target instanceof HTMLSelectElement)) return;",
+    "      const fieldIndex = Number.parseInt(target.getAttribute('data-field-index') || '', 10);",
+    "      if (!Number.isInteger(fieldIndex)) return;",
+    "      const field = state[fieldIndex];",
+    "      if (!field) return;",
+    "      if (target instanceof HTMLInputElement && target.type === 'checkbox' && target.getAttribute('data-field-key') === 'required') {",
+    "        field.required = target.checked;",
+    "        syncHiddenInput(state, output);",
+    "        return;",
+    "      }",
+    "      if (target instanceof HTMLSelectElement && target.getAttribute('data-field-key') === 'type') {",
+    "        const nextType = fieldTypeOptions.some((option) => option.value === target.value) ? target.value : 'text';",
+    "        field.type = nextType;",
+    "        if (optionFieldTypes.has(nextType)) {",
+    "          const currentOptions = Array.isArray(field.options)",
+    "            ? field.options.map((option) => trimValue(option)).filter((option) => option !== '')",
+    "            : [];",
+    "          field.options = currentOptions.length > 0 ? currentOptions : ['Option 1'];",
+    "        } else {",
+    "          delete field.options;",
+    "        }",
+    "        if (nextType === 'pet_info') {",
+    "          delete field.profileMapping;",
+    "        }",
+    "        render();",
+    "        return;",
+    "      }",
+    "      if (target instanceof HTMLSelectElement && target.hasAttribute('data-profile-target')) {",
+    "        if (target.value !== 'client' && target.value !== 'pet') {",
+    "          delete field.profileMapping;",
+    "        } else {",
+    "          const options = target.value === 'client' ? clientProfileOptions : petProfileOptions;",
+    "          field.profileMapping = {",
+    "            target: target.value,",
+    "            field: options[0]?.value ?? ''",
+    "          };",
+    "        }",
+    "        render();",
+    "        return;",
+    "      }",
+    "      if (target instanceof HTMLSelectElement && target.hasAttribute('data-profile-field')) {",
+    "        const profileTarget = field.profileMapping?.target;",
+    "        if (profileTarget !== 'client' && profileTarget !== 'pet') return;",
+    "        const allowedOptions = profileTarget === 'client' ? clientProfileOptions : petProfileOptions;",
+    "        if (!allowedOptions.some((option) => option.value === target.value)) {",
+    "          delete field.profileMapping;",
+    "          render();",
+    "          return;",
+    "        }",
+    "        field.profileMapping = {",
+    "          target: profileTarget,",
+    "          field: target.value",
+    "        };",
+    "        syncHiddenInput(state, output);",
+    "      }",
+    "    });",
+    "    form.addEventListener('submit', (event) => {",
+    "      const missingLabelIndex = state.findIndex((field) => trimValue(field.label) === '');",
+    "      if (missingLabelIndex !== -1) {",
+    "        event.preventDefault();",
+    "        render();",
+    "        const input = list.querySelector(`[data-field-index=\"${missingLabelIndex}\"][data-field-key=\"label\"]`);",
+    "        if (input instanceof HTMLElement) input.focus();",
+    "        window.alert('Each form field needs a label.');",
+    "        return;",
+    "      }",
+    "      const missingOptionIndex = state.findIndex((field) => optionFieldTypes.has(field.type) && !(Array.isArray(field.options) && field.options.map((option) => trimValue(option)).filter((option) => option !== '').length > 0));",
+    "      if (missingOptionIndex !== -1) {",
+    "        event.preventDefault();",
+    "        render();",
+    "        const input = list.querySelector(`[data-field-index=\"${missingOptionIndex}\"][data-option-value]`);",
+    "        if (input instanceof HTMLElement) input.focus();",
+    "        window.alert('Radio, checkbox, and select fields need at least one option.');",
+    "        return;",
+    "      }",
+    "      syncHiddenInput(state, output);",
+    "    });",
+    "    render();",
+    "  });",
+    "}());",
+    "</script>"
+  ].join("");
+}
+
 function renderAdminFormTemplateEditor(template: {
   id: string;
   name: string;
@@ -9087,6 +10019,9 @@ function renderAdminFormTemplateEditor(template: {
     templateIsInternal: options.defaultInternal === true,
     templateShowInClientPortal: true
   };
+  const builderFields = normalizeAdminFormBuilderFields(item.fields ?? []);
+  const initialBuilderFields = builderFields.length > 0 ? builderFields : [createDefaultAdminFormBuilderField()];
+  const initialBuilderFieldsJson = JSON.stringify(initialBuilderFields);
 
   return [
     `<section class="surface-block"${options.anchorId == null ? "" : ` id="${escapeAttribute(options.anchorId)}"`}>`,
@@ -9105,8 +10040,13 @@ function renderAdminFormTemplateEditor(template: {
     )).join("")}</select></label>`,
     "</div>",
     `<label>Description<textarea name="description">${escapeHtml(item.description ?? "")}</textarea></label>`,
-    `<label>Fields JSON<textarea name="fields" rows="16">${escapeHtml(JSON.stringify(item.fields ?? [], null, 2))}</textarea></label>`,
-    '<p class="meta">Enter a JSON array of field definitions. Existing booking, survey, and public-form rendering uses this same payload.</p>',
+    '<div class="form-builder" data-admin-form-builder data-initial-fields="' + escapeAttribute(initialBuilderFieldsJson) + '">',
+    `<input type="hidden" name="fields" value="${escapeAttribute(initialBuilderFieldsJson)}" data-form-builder-output>`,
+    '<div class="form-builder__header"><div><h3>Form Builder</h3><p class="meta">Build the template visually. Supported fields include text, textarea, radio, checkbox, select, file upload, date, email, phone, and Pet Info.</p></div><div class="form-actions"><button type="button" data-form-builder-add>Add Field</button></div></div>',
+    '<div class="form-builder__list" data-form-builder-list></div>',
+    `<p class="meta">Pet Info always collects ${escapeHtml(adminFormBuilderPetInfoFields.join(", "))} and saves it into the client pet profile without changing the existing database structure.</p>`,
+    "</div>",
+    renderAdminFormBuilderScript(),
     `<label><input type="checkbox" name="templateIsInternal"${item.templateIsInternal === true ? " checked" : ""}> Internal Use Only</label>`,
     `<label><input type="checkbox" name="templateShowInClientPortal"${item.templateShowInClientPortal !== false ? " checked" : ""}> Show Submissions In Client Portal</label>`,
     `<label><input type="checkbox" name="active"${item.active ? " checked" : ""}> Active</label>`,
@@ -10200,19 +11140,18 @@ return;
 
       if (method === "POST" && url.pathname === "/backend/public/form.php" && handlers != null && resolved.api != null) {
         const session = await loadPersistedSession(resolved.sessionStore, request);
-        const form = await readFormBody(request);
-        const postedValues = extractLegacyPublicFormValues(form);
+        const formInput = await readPublicFormSubmissionInput(request);
 
         try {
           await submitPublicForm({
             submissionId: url.searchParams.get("id"),
             token: url.searchParams.get("token"),
             session,
-            contactName: form.get("contact_name"),
-            contactEmail: form.get("contact_email"),
-            contactPhone: form.get("contact_phone"),
-            responses: postedValues,
-            turnstileToken: form.get("turnstileToken")
+            contactName: formInput.contactName,
+            contactEmail: formInput.contactEmail,
+            contactPhone: formInput.contactPhone,
+            responses: formInput.responses,
+            turnstileToken: formInput.turnstileToken
           }, resolved.api.publicDocuments);
 
           const redirectUrl = new URL(request.url ?? requestPath, "http://localhost");
@@ -10251,29 +11190,40 @@ return;
             resourceId: result.body.item.id,
             complete: result.body.item.submittedAt != null
           });
-          const useDirectSubmit = session == null && result.body.item.submittedAt == null;
+          const directPublicSubmitEnabled = result.body.item.submittedAt == null && (
+            session == null
+            || (session.actorType === "portal_user" && session.actorId === result.body.item.clientId)
+          );
+          const petOptions = await loadPublicFormSelectablePets(resolved.api, session, result.body.item);
           writeHtml(response, getPublicDocumentMutationStatusCode(error), renderLegacyPublicFormDetailPage({
             submission: result.body.item,
             currentPath: requestPath,
             publicRenderAssets: await getPublicRenderAssets(),
             portalReturnPath,
-            sidebarTitle: useDirectSubmit ? "Secure form request" : actionPanel.title,
-            sidebarDescription: useDirectSubmit
-              ? "Complete the requested form directly from this secure access link."
+            sidebarTitle: directPublicSubmitEnabled
+              ? (session?.actorType === "portal_user" ? "Complete Form" : "Secure Form Request")
+              : actionPanel.title,
+            sidebarDescription: directPublicSubmitEnabled
+              ? (
+                session?.actorType === "portal_user"
+                  ? "Complete the requested form from your signed-in client session."
+                  : "Complete the requested form directly from this secure access link."
+              )
               : actionPanel.description,
-            sidebarMarkup: useDirectSubmit
+            sidebarMarkup: directPublicSubmitEnabled
               ? '<p class="meta">Use the form on this page to finish the requested submission.</p>'
               : actionPanel.actionMarkup,
             feedbackMarkup: renderLegacyPublicFeedback("error", errorMessage),
-            contentMarkup: useDirectSubmit
-              ? renderLegacyPublicFormSubmissionForm({
+            contentMarkup: directPublicSubmitEnabled
+              ? renderEnhancedPublicFormSubmissionForm({
                 submission: result.body.item,
                 currentPath: requestPath,
-                contactName: form.get("contact_name")?.trim() ?? result.body.item.contactName ?? "",
-                contactEmail: form.get("contact_email")?.trim() ?? result.body.item.contactEmail ?? "",
-                contactPhone: form.get("contact_phone")?.trim() ?? result.body.item.contactPhone ?? "",
-                turnstileToken: form.get("turnstileToken")?.trim() ?? "turnstile-ok",
-                postedValues
+                contactName: formInput.contactName || result.body.item.contactName || "",
+                contactEmail: formInput.contactEmail || result.body.item.contactEmail || "",
+                contactPhone: formInput.contactPhone || result.body.item.contactPhone || "",
+                turnstileToken: formInput.turnstileToken ?? "turnstile-ok",
+                postedValues: formInput.responses,
+                petOptions
               })
               : [
                 '<section class="surface-block">',
@@ -10317,32 +11267,43 @@ return;
           resourceId: result.body.item.id,
           complete: result.body.item.submittedAt != null
         });
-        const useDirectSubmit = session == null && result.body.item.submittedAt == null;
+        const directPublicSubmitEnabled = result.body.item.submittedAt == null && (
+          session == null
+          || (session.actorType === "portal_user" && session.actorId === result.body.item.clientId)
+        );
+        const petOptions = await loadPublicFormSelectablePets(resolved.api, session, result.body.item);
         const resultFlag = url.searchParams.get("result");
         writeHtml(response, 200, renderLegacyPublicFormDetailPage({
           submission: result.body.item,
           currentPath: requestPath,
           publicRenderAssets: await getPublicRenderAssets(),
           portalReturnPath,
-          sidebarTitle: useDirectSubmit ? "Secure form request" : actionPanel.title,
-          sidebarDescription: useDirectSubmit
-            ? "Complete the requested form directly from this secure access link."
+          sidebarTitle: directPublicSubmitEnabled
+            ? (session?.actorType === "portal_user" ? "Complete Form" : "Secure Form Request")
+            : actionPanel.title,
+          sidebarDescription: directPublicSubmitEnabled
+            ? (
+              session?.actorType === "portal_user"
+                ? "Complete the requested form from your signed-in client session."
+                : "Complete the requested form directly from this secure access link."
+            )
             : actionPanel.description,
-          sidebarMarkup: useDirectSubmit
+          sidebarMarkup: directPublicSubmitEnabled
             ? '<p class="meta">All required questions must be completed before the form can be submitted.</p>'
             : actionPanel.actionMarkup,
           feedbackMarkup: resultFlag === "submitted"
             ? renderLegacyPublicFeedback("success", "Thank you! Your form has been submitted successfully.")
             : undefined,
           contentMarkup: result.body.item.submittedAt == null
-            ? useDirectSubmit
-              ? renderLegacyPublicFormSubmissionForm({
+            ? directPublicSubmitEnabled
+              ? renderEnhancedPublicFormSubmissionForm({
                 submission: result.body.item,
                 currentPath: requestPath,
                 contactName: result.body.item.contactName ?? "",
                 contactEmail: result.body.item.contactEmail ?? "",
                 contactPhone: result.body.item.contactPhone ?? "",
-                postedValues: {}
+                postedValues: {},
+                petOptions
               })
               : [
                 '<section class="surface-block">',
@@ -14099,7 +15060,9 @@ const clientOptions = formType === "booking_form"
           if (errors.length === 0) {
             try {
               if (formType === "booking_form") {
-                generatedLink = buildLegacyPublicBookingRequestUrl(requestOrigin, appointmentType?.uniqueLink ?? "");
+                generatedLink = appointmentType == null
+                  ? ""
+                  : buildPublicBookingUrl(requestOrigin, appointmentType);
               } else {
                 const createdRequest = await resolved.api.adminResources.createAdminFormRequest({
                   templateId,
@@ -17577,9 +18540,12 @@ return;
             redirect(response, "/admin/appointment-types");
             return;
           }
+          const requestOrigin = buildRequestOrigin(request);
+          const publicBookingUrl = buildPublicBookingUrl(requestOrigin, appointmentType.body.item);
+          const publicBookingPublished = appointmentType.body.item.active && appointmentType.body.item.publicAvailable;
 
-          writeHtml(response, 200, renderLayout({
-            title: "Admin Appointment Type",
+writeHtml(response, 200, renderLayout({
+title: "Admin Appointment Type",
             body: [
               '<article class="content-stack">',
               renderSectionIntro({
@@ -17587,18 +18553,28 @@ return;
                 title: appointmentType.body.item.name,
                 description: "Review the booking rules, scheduling model, billing defaults, and visibility controls for this appointment type."
               }),
-              adminNav,
-              renderDetailGrid([
-                { label: "Appointment Type ID", value: escapeHtml(appointmentType.body.item.id) },
-                { label: "Unique Link", value: escapeHtml(appointmentType.body.item.uniqueLink) },
-              { label: "Schedule Type", value: escapeHtml(formatAppointmentTypeScheduleTypeLabel(appointmentType.body.item)) },
-                { label: "Status", value: renderStatusPill(appointmentType.body.item.active ? "Active" : "Inactive", appointmentType.body.item.active ? "success" : "warning") }
-              ]),
-              '<section class="surface-block">',
-              "<h2>Appointment Type Actions</h2>",
-              `<div class="form-actions"><a href="/client/form_requests_create.php?form_type=booking_form&appointment_type_id=${encodeURIComponent(appointmentType.body.item.id)}">Generate Booking Link</a><a href="/admin/appointment-types">Back to Directory</a><form method="post" action="/admin/appointment-types/${encodeURIComponent(appointmentType.body.item.id)}/delete" onsubmit="return confirm('Delete this appointment type?');"><button type="submit">Delete Appointment Type</button></form></div>`,
-              "</section>",
-              renderAdminAppointmentTypeEditor(
+adminNav,
+renderDetailGrid([
+{ label: "Appointment Type ID", value: escapeHtml(appointmentType.body.item.id) },
+{ label: "Booking Slug", value: escapeHtml(appointmentType.body.item.uniqueLink) },
+{
+label: "Public Booking Page",
+value: publicBookingPublished
+? `<a href="${escapeAttribute(publicBookingUrl)}" target="_blank" rel="noreferrer">${escapeHtml(publicBookingUrl)}</a>`
+: "Not published"
+},
+{ label: "Schedule Type", value: escapeHtml(formatAppointmentTypeScheduleTypeLabel(appointmentType.body.item)) },
+{ label: "Status", value: renderStatusPill(appointmentType.body.item.active ? "Active" : "Inactive", appointmentType.body.item.active ? "success" : "warning") },
+{ label: "Front-End Visibility", value: renderStatusPill(appointmentType.body.item.publicAvailable ? "Visible" : "Hidden", appointmentType.body.item.publicAvailable ? "success" : "warning") }
+]),
+'<section class="surface-block">',
+"<h2>Appointment Type Actions</h2>",
+`<div class="form-actions">${publicBookingPublished ? `<a href="${escapeAttribute(publicBookingUrl)}" target="_blank" rel="noreferrer">Open Public Booking Page</a>` : ""}<a href="/admin/appointment-types">Back to Directory</a><form method="post" action="/admin/appointment-types/${encodeURIComponent(appointmentType.body.item.id)}/delete" onsubmit="return confirm('Delete this appointment type?');"><button type="submit">Delete Appointment Type</button></form></div>`,
+publicBookingPublished
+? ""
+: '<p class="section-copy">Booking links use the slug shown above. Enable both <strong>Active</strong> and <strong>Display on Front End</strong> to publish this appointment type on the public booking page.</p>',
+"</section>",
+renderAdminAppointmentTypeEditor(
                 appointmentType.body.item,
                 `/admin/appointment-types/${encodeURIComponent(appointmentType.body.item.id)}`
               ),

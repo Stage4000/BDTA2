@@ -93,10 +93,14 @@ export type AdminPetMutationInput = {
   name: string;
   species: string;
   breed: string;
+  dateOfBirth: string;
+  weight: string;
   age: string;
   gender: string;
   spayNeuterStatus: string;
   vaccineStatus: string;
+  source: string;
+  acquiredAgo: string;
   behaviorNotes: string;
   trainingNotes: string;
   medicalNotes: string;
