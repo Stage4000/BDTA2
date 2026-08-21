@@ -2241,8 +2241,9 @@ it("renders newsletter and Tawk settings on eligible public pages and suppresses
       expect(bookingByLinkHtml).toContain("Behavior assessment");
       expect(bookingByLinkHtml).toContain('value="appointment-type-1"');
       expect(bookingByTypeHtml).toContain("Private Coaching");
-      expect(hiddenBookingByLinkHtml).toContain("Invalid Booking Link");
-      expect(hiddenBookingByTypeHtml).toContain("Invalid Booking Link");
+      expect(hiddenBookingByLinkHtml).toContain("Internal Evaluation");
+      expect(hiddenBookingByLinkHtml).toContain('value="appointment-type-hidden"');
+      expect(hiddenBookingByTypeHtml).toContain("Internal Evaluation");
       expect(invalidBookingHtml).toContain("Invalid Booking Link");
 
       const legacyBookingSubmit = await fetch(`${baseUrl}/backend/public/book.php?link=private-coaching-link`, {
@@ -6002,7 +6003,7 @@ expect(settingsHtml).toContain("settings-summary-grid");
     expect(appointmentTypeDetailHtml).not.toContain('/client/form_requests_create.php?form_type=booking_form&appointment_type_id=appointment-type-1');
       expect(legacyAppointmentTypesHtml).toContain("Appointment Types");
       expect(legacyAppointmentTypesHtml).toContain("/client/appointment_types_duplicate.php");
-      expect(legacyAppointmentTypeDetailHtml).toContain("Unique Link");
+      expect(legacyAppointmentTypeDetailHtml).toContain("Booking Slug");
       expect(formTemplatesHtml).toContain("Form Templates");
       expect(formTemplatesHtml).toContain("/admin/form-templates/form-template-1/delete");
       expect(formTemplatesHtml).toContain("/admin/form-templates/form-template-1/duplicate");
