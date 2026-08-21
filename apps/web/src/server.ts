@@ -6024,12 +6024,26 @@ function buildDuplicateDisplayName(value: string): string {
   return trimmed.includes("(Copy)") ? `${trimmed} Copy` : `${trimmed} (Copy)`;
 }
 
-function buildDuplicateMachineKey(value: string): string {
+function buildMachineKey(value: string, fallback = "item"): string {
   const normalized = value
     .toLowerCase()
     .trim()
     .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "") || "item";
+    .replace(/^-+|-+$/g, "");
+  return normalized === "" ? fallback : normalized;
+}
+
+function resolveAppointmentTypeUniqueLinkInput(uniqueLink: string, name: string): string {
+  const explicitValue = uniqueLink.trim();
+  if (explicitValue !== "") {
+    return explicitValue;
+  }
+
+  return buildMachineKey(name, "appointment");
+}
+
+function buildDuplicateMachineKey(value: string): string {
+  const normalized = buildMachineKey(value, "item");
   return `${normalized}-copy-${Date.now().toString(36).slice(-6)}`;
 }
 
@@ -6196,6 +6210,18 @@ function renderWorkflowStepOptionOptions(
       `<option value="${escapeAttribute(option.id)}"${option.id === selectedId ? " selected" : ""}>${escapeHtml(option.label)}</option>`
     ))
   ].join("");
+}
+
+function renderMultiSelectOptions(
+  options: AppointmentTypeEditorOption[],
+  selectedIds: string[]
+): string {
+  const selectedIdSet = new Set(selectedIds);
+  return options
+    .map((option) => (
+      `<option value="${escapeAttribute(option.id)}"${selectedIdSet.has(option.id) ? " selected" : ""}>${escapeHtml(option.label)}</option>`
+    ))
+    .join("");
 }
 
 function renderSitePageEditorLegacyShell(page: SitePage): string {
@@ -8673,6 +8699,23 @@ type AppointmentTypeEditorMeta = {
   resourceUnitsPerBooking?: number;
 };
 
+type AppointmentTypeEditorOption = {
+  id: string;
+  label: string;
+};
+
+type AppointmentTypeSpecificDateRow = {
+  date: string;
+  startTime: string;
+  endTime: string;
+};
+
+type AppointmentTypeEditorOptions = {
+  formTemplates: AppointmentTypeEditorOption[];
+  contractTemplates: AppointmentTypeEditorOption[];
+  emailTemplates: AppointmentTypeEditorOption[];
+};
+
 const APPOINTMENT_SCHEDULE_MODE_OPTIONS: ReadonlyArray<{
   value: AppointmentTypeEditorScheduleMode;
   label: string;
@@ -8829,6 +8872,33 @@ function buildPublicBookingPath(appointmentType: Pick<AppointmentType, "id" | "u
 function buildPublicBookingUrl(origin: string, appointmentType: Pick<AppointmentType, "id" | "uniqueLink">): string {
   const path = buildPublicBookingPath(appointmentType);
   return origin === "" ? path : `${origin}${path}`;
+}
+
+async function loadAdminAppointmentTypeEditorOptions(api: ApiDependencies | null): Promise<AppointmentTypeEditorOptions> {
+  if (api == null) {
+    return {
+      formTemplates: [],
+      contractTemplates: [],
+      emailTemplates: []
+    };
+  }
+
+  const [formTemplates, workflowOptions] = await Promise.all([
+    api.adminConfiguration.listAdminFormTemplates(),
+    api.workflows.listWorkflowStepEditorOptions("__appointment_type_editor__")
+  ]);
+
+  return {
+    formTemplates: formTemplates
+      .filter((template) => template.active)
+      .map((template) => ({ id: template.id, label: template.name }))
+      .sort((left, right) => left.label.localeCompare(right.label)),
+    contractTemplates: [...workflowOptions.contractTemplates]
+      .sort((left, right) => left.label.localeCompare(right.label)),
+    emailTemplates: workflowOptions.emailTemplates
+      .map((template) => ({ id: template.id, label: template.label }))
+      .sort((left, right) => left.label.localeCompare(right.label))
+  };
 }
 
 function buildLegacyPublicFormRequestUrl(origin: string, submission: FormSubmission): string {
@@ -9011,6 +9081,41 @@ function addDaysToDateString(date: string, days: number): string {
   return parsedDate.toISOString().slice(0, 10);
 }
 
+function formatAppointmentTypeSpecificDateRows(
+  specificDates: AppointmentType["specificDates"],
+  specificDate: string | null,
+  availableStartTime: string,
+  availableEndTime: string
+): AppointmentTypeSpecificDateRow[] {
+  if (specificDates.length > 0) {
+    return specificDates.flatMap((entry) => {
+      if (entry.timeslots.length === 0) {
+        return [{
+          date: entry.date,
+          startTime: availableStartTime,
+          endTime: availableEndTime
+        }];
+      }
+
+      return entry.timeslots.map((timeslot) => ({
+        date: entry.date,
+        startTime: timeslot.type === "range" ? timeslot.start : timeslot.time,
+        endTime: timeslot.type === "range" ? timeslot.end : ""
+      }));
+    });
+  }
+
+  if (specificDate == null || specificDate.trim() === "") {
+    return [];
+  }
+
+  return [{
+    date: specificDate,
+    startTime: availableStartTime,
+    endTime: availableEndTime.trim() !== "" && availableEndTime !== availableStartTime ? availableEndTime : ""
+  }];
+}
+
 function formatAppointmentTypeSpecificDateEntries(
   specificDates: AppointmentType["specificDates"],
   specificDate: string | null,
@@ -9036,6 +9141,31 @@ function formatAppointmentTypeSpecificDateEntries(
   return availableEndTime.trim() !== "" && availableEndTime !== availableStartTime
     ? `${specificDate} ${availableStartTime}-${availableEndTime}`
     : `${specificDate} ${availableStartTime}`;
+}
+
+function buildAppointmentTypeSpecificDatesFromRows(rows: AppointmentTypeSpecificDateRow[]): AppointmentType["specificDates"] {
+  const entryMap = new Map<string, AppointmentType["specificDates"][number]>();
+
+  for (const row of rows) {
+    const date = row.date.trim();
+    const startTime = row.startTime.trim();
+    const endTime = row.endTime.trim();
+    if (date === "" || startTime === "") {
+      continue;
+    }
+
+    const existingEntry = entryMap.get(date);
+    const nextEntry = existingEntry ?? {
+      date,
+      timeslots: [] as AppointmentType["specificDates"][number]["timeslots"]
+    };
+    nextEntry.timeslots.push(endTime === ""
+      ? { type: "single", time: startTime }
+      : { type: "range", start: startTime, end: endTime });
+    entryMap.set(date, nextEntry);
+  }
+
+  return [...entryMap.values()];
 }
 
 function parseAppointmentTypeSpecificDateEntries(value: string): AppointmentType["specificDates"] {
@@ -9125,7 +9255,11 @@ function resolveAppointmentTypeLocationText(appointmentType: AppointmentType): s
   return buildAppointmentTypeLocationSummary(appointmentType.locationTypes, editorMeta, legacyLocation);
 }
 
-function renderAdminAppointmentTypeEditor(appointmentType: AppointmentType | null, action: string): string {
+function renderAdminAppointmentTypeEditor(
+  appointmentType: AppointmentType | null,
+  action: string,
+  options: AppointmentTypeEditorOptions
+): string {
   const item = appointmentType ?? {
     id: "",
     name: "",
@@ -9185,7 +9319,7 @@ function renderAdminAppointmentTypeEditor(appointmentType: AppointmentType | nul
 
   const editorMeta = parseAppointmentTypeEditorMeta(item);
   const scheduleMode = resolveAppointmentTypeEditorScheduleMode(item, editorMeta);
-  const specificDateEntries = formatAppointmentTypeSpecificDateEntries(
+  const specificDateRows = formatAppointmentTypeSpecificDateRows(
     item.specificDates,
     item.specificDate,
     item.availableStartTime,
@@ -9209,6 +9343,12 @@ function renderAdminAppointmentTypeEditor(appointmentType: AppointmentType | nul
   const allowIndividualSessionCancellation = editorMeta.allowIndividualSessionCancellation === true;
   const allowResourceOverlapWhenAvailable = editorMeta.allowResourceOverlapWhenAvailable === true;
   const resourceUnitsPerBooking = Math.max(1, editorMeta.resourceUnitsPerBooking ?? 1);
+  const renderedSpecificDateRows = specificDateRows.length > 0
+    ? specificDateRows
+    : [{ date: "", startTime: "09:00", endTime: "" }];
+  const formTemplateOptions = renderMultiSelectOptions(options.formTemplates, item.formTemplateIds);
+  const contractTemplateOptions = renderWorkflowStepOptionOptions(options.contractTemplates, item.contractTemplateId);
+  const renderEmailTemplateOptions = (selectedId: string | null) => renderWorkflowStepOptionOptions(options.emailTemplates, selectedId);
   const weeklyScheduleRows = APPOINTMENT_DAY_OPTIONS.map((day) => {
     const perDaySchedule = item.perDaySchedule[String(day.value)];
     const enabled = item.scheduleType === "recurring" && (item.availableDays.includes(day.value) || perDaySchedule != null);
@@ -9232,6 +9372,14 @@ function renderAdminAppointmentTypeEditor(appointmentType: AppointmentType | nul
     "</span>",
     "</label>"
   ].join("")).join("");
+  const specificDateRowMarkup = renderedSpecificDateRows.map((row, index) => [
+    `<div class="appointment-type-editor__specific-date-row" data-appointment-specific-date-row${index === 0 && renderedSpecificDateRows.length === 1 && row.date.trim() === "" ? ' data-empty-row="true"' : ""}>`,
+    `<label>Date<input type="date" name="specificDateDate" value="${escapeAttribute(row.date)}"${scheduleMode === "specific_dates" ? "" : " disabled"}></label>`,
+    `<label>Start Time<input type="time" name="specificDateStart" value="${escapeAttribute(row.startTime)}"${scheduleMode === "specific_dates" ? "" : " disabled"}></label>`,
+    `<label>End Time<input type="time" name="specificDateEnd" value="${escapeAttribute(row.endTime)}"${scheduleMode === "specific_dates" ? "" : " disabled"}></label>`,
+    '<div class="form-actions"><button type="button" data-appointment-specific-date-remove>Remove</button></div>',
+    "</div>"
+  ].join("")).join("");
 
   return [
     '<section class="surface-block" data-appointment-type-editor>',
@@ -9242,7 +9390,7 @@ function renderAdminAppointmentTypeEditor(appointmentType: AppointmentType | nul
     '<p class="appointment-type-editor__hint">Set the public-facing service details and booking link first.</p>',
     '<div class="form-grid form-grid--two">',
     `<label>Name<input type="text" name="name" value="${escapeAttribute(item.name)}" required></label>`,
-    `<label>Unique Link<input type="text" name="uniqueLink" value="${escapeAttribute(item.uniqueLink)}" required></label>`,
+    `<label>Booking Slug<input type="text" name="uniqueLink" value="${escapeAttribute(item.uniqueLink)}" placeholder="Auto-generate from title if left blank"></label>`,
     `<label>Assigned Admin ID<input type="text" name="adminUserId" value="${escapeAttribute(item.adminUserId ?? "")}"></label>`,
     `<label>Default Price<input type="number" name="defaultAmount" value="${item.defaultAmount}" min="0" step="0.01"></label>`,
     "</div>",
@@ -9282,8 +9430,11 @@ function renderAdminAppointmentTypeEditor(appointmentType: AppointmentType | nul
     "</section>",
     `<section class="appointment-type-editor__section appointment-type-editor__schedule-panel" data-appointment-schedule-section="specific_dates"${scheduleMode === "specific_dates" ? "" : " hidden"}>`,
     "<h3>Specific Date(s) and Time(s)</h3>",
-    '<p class="appointment-type-editor__hint">Enter one date per line using <code>YYYY-MM-DD HH:MM</code> or <code>YYYY-MM-DD HH:MM-HH:MM</code>.</p>',
-    `<label>Date and Time Entries<textarea name="specificDateEntries"${scheduleMode === "specific_dates" ? "" : " disabled"}>${escapeHtml(specificDateEntries)}</textarea></label>`,
+    '<p class="appointment-type-editor__hint">Add each date and start time as its own row. End time is optional.</p>',
+    '<div class="appointment-type-editor__specific-date-list" data-appointment-specific-date-list>',
+    specificDateRowMarkup,
+    "</div>",
+    '<div class="form-actions"><button type="button" data-appointment-specific-date-add>Add Date Row</button></div>',
     "</section>",
     `<section class="appointment-type-editor__section appointment-type-editor__schedule-panel" data-appointment-schedule-section="class_series"${scheduleMode === "class_series" ? "" : " hidden"}>`,
     "<h3>Class Series</h3>",
@@ -9301,7 +9452,7 @@ function renderAdminAppointmentTypeEditor(appointmentType: AppointmentType | nul
     '<p class="appointment-type-editor__hint">Toggle visibility, approval, requirements, and billing behavior here. Credits stay enabled automatically for every appointment type in this flow.</p>',
     '<div class="form-grid form-grid--two">',
     `<label><input type="checkbox" name="active"${item.active ? " checked" : ""}> Active</label>`,
-    `<label><input type="checkbox" name="publicAvailable"${item.publicAvailable ? " checked" : ""}> Display on Front End</label>`,
+    `<label><input type="checkbox" name="publicAvailable"${item.publicAvailable ? " checked" : ""}> Display in Public Booking Directory</label>`,
     `<label><input type="checkbox" name="portalAvailable"${item.portalAvailable ? " checked" : ""}> Show in Client Portal</label>`,
     `<label><input type="checkbox" name="requiresAdminConfirmation"${item.requiresAdminConfirmation ? " checked" : ""}> Require Admin Approval</label>`,
     `<label><input type="checkbox" name="requiresForms" data-appointment-toggle-input="requiresForms"${item.requiresForms ? " checked" : ""}> Require Forms</label>`,
@@ -9309,10 +9460,11 @@ function renderAdminAppointmentTypeEditor(appointmentType: AppointmentType | nul
     `<label><input type="checkbox" name="autoInvoice" data-appointment-toggle-input="autoInvoice"${item.autoInvoice ? " checked" : ""}> Auto Invoice</label>`,
     "</div>",
     `<div class="form-grid appointment-type-editor__toggle-panel" data-appointment-toggle-section="requiresForms"${item.requiresForms ? "" : " hidden"}>`,
-    `<label>Required Form Template IDs<textarea name="formTemplateIds"${item.requiresForms ? "" : " disabled"}>${escapeHtml(item.formTemplateIds.join("\n"))}</textarea></label>`,
+    `<label>Required Form Templates<select name="formTemplateIds" multiple size="${Math.max(4, Math.min(options.formTemplates.length, 8))}"${item.requiresForms ? "" : " disabled"}>${formTemplateOptions}</select></label>`,
+    '<p class="appointment-type-editor__hint">Hold Ctrl or Cmd to select multiple templates.</p>',
     "</div>",
     `<div class="form-grid form-grid--two appointment-type-editor__toggle-panel" data-appointment-toggle-section="requiresContract"${item.requiresContract ? "" : " hidden"}>`,
-    `<label>Contract Template ID<input type="text" name="contractTemplateId" value="${escapeAttribute(item.contractTemplateId ?? "")}"${item.requiresContract ? "" : " disabled"}></label>`,
+    `<label>Contract Template<select name="contractTemplateId"${item.requiresContract ? "" : " disabled"}>${contractTemplateOptions}</select></label>`,
     "</div>",
     `<div class="form-grid form-grid--two appointment-type-editor__toggle-panel" data-appointment-toggle-section="autoInvoice"${item.autoInvoice ? "" : " hidden"}>`,
     `<label>Invoice Send Offset (Days)<input type="number" name="invoiceDueDays" value="${item.invoiceDueDays}" min="0"${item.autoInvoice ? "" : " disabled"}></label>`,
@@ -9342,14 +9494,14 @@ function renderAdminAppointmentTypeEditor(appointmentType: AppointmentType | nul
     "</div>",
     "</section>",
     '<section class="appointment-type-editor__section">',
-    "<h3>Email Template IDs</h3>",
-    '<p class="appointment-type-editor__hint">Keep the current template IDs if you already have matching email templates configured.</p>',
+    "<h3>Email Templates</h3>",
+    '<p class="appointment-type-editor__hint">Choose the templates used for confirmations, approval requests, invoices, reminders, and cancellations.</p>',
     '<div class="form-grid form-grid--two">',
-    `<label>Confirmation Template ID<input type="text" name="confirmationTemplateId" value="${escapeAttribute(item.confirmationTemplateId ?? "")}"></label>`,
-    `<label>Approval Request Template ID<input type="text" name="bookingRequestTemplateId" value="${escapeAttribute(item.bookingRequestTemplateId ?? "")}"></label>`,
-    `<label>Invoice Template ID<input type="text" name="invoiceTemplateId" value="${escapeAttribute(item.invoiceTemplateId ?? "")}"></label>`,
-    `<label>Reminder Template ID<input type="text" name="reminderTemplateId" value="${escapeAttribute(item.reminderTemplateId ?? "")}"></label>`,
-    `<label>Cancellation Template ID<input type="text" name="cancellationTemplateId" value="${escapeAttribute(item.cancellationTemplateId ?? "")}"></label>`,
+    `<label>Confirmation Template<select name="confirmationTemplateId">${renderEmailTemplateOptions(item.confirmationTemplateId)}</select></label>`,
+    `<label>Approval Request Template<select name="bookingRequestTemplateId">${renderEmailTemplateOptions(item.bookingRequestTemplateId)}</select></label>`,
+    `<label>Invoice Template<select name="invoiceTemplateId">${renderEmailTemplateOptions(item.invoiceTemplateId)}</select></label>`,
+    `<label>Reminder Template<select name="reminderTemplateId">${renderEmailTemplateOptions(item.reminderTemplateId)}</select></label>`,
+    `<label>Cancellation Template<select name="cancellationTemplateId">${renderEmailTemplateOptions(item.cancellationTemplateId)}</select></label>`,
     "</div>",
     "</section>",
     `<div class="form-actions"><button type="submit">${appointmentType == null ? "Create Appointment Type" : "Save Appointment Type"}</button></div>`,
@@ -9398,14 +9550,26 @@ function readAdminAppointmentTypeFormInput(form: URLSearchParams) {
   const weeklyFallbackEnd = normalizedWeeklySchedule.availableDays
     .map((day) => normalizedWeeklySchedule.perDaySchedule[String(day)]?.end)
     .find((value) => value != null && value.trim() !== "") ?? "17:00";
+  const specificDateRowCount = Math.max(
+    form.getAll("specificDateDate").length,
+    form.getAll("specificDateStart").length,
+    form.getAll("specificDateEnd").length
+  );
+  const specificDateRows = Array.from({ length: specificDateRowCount }, (_, index) => ({
+    date: String(form.getAll("specificDateDate")[index] ?? "").trim(),
+    startTime: String(form.getAll("specificDateStart")[index] ?? "").trim(),
+    endTime: String(form.getAll("specificDateEnd")[index] ?? "").trim()
+  }));
   const specificDates = scheduleMode === "class_series"
     ? buildAppointmentTypeClassSeriesDates(
-        readOptionalFormValue(form, "classSeriesStartDate") ?? "",
-        readIntegerFormValue(form, "classSeriesSessionCount", 1),
-        readRequiredFormValue(form, "classSeriesStartTime") || "09:00"
-      )
+      readOptionalFormValue(form, "classSeriesStartDate") ?? "",
+      readIntegerFormValue(form, "classSeriesSessionCount", 1),
+      readRequiredFormValue(form, "classSeriesStartTime") || "09:00"
+    )
     : scheduleMode === "specific_dates"
-      ? parseAppointmentTypeSpecificDateEntries(form.get("specificDateEntries") ?? "")
+      ? (specificDateRows.length > 0
+        ? buildAppointmentTypeSpecificDatesFromRows(specificDateRows)
+        : parseAppointmentTypeSpecificDateEntries(form.get("specificDateEntries") ?? ""))
       : [];
   const locationTypes = readDelimitedFormValues(form, "locationTypes");
   const editorMeta: AppointmentTypeEditorMeta = {
@@ -9490,7 +9654,10 @@ function readAdminAppointmentTypeFormInput(form: URLSearchParams) {
     resourceName: form.get("resourceName") ?? "",
     resourceCapacity: Math.max(1, resourceCapacity),
     resourceAllocation: "per_appointment",
-    uniqueLink: readRequiredFormValue(form, "uniqueLink"),
+    uniqueLink: resolveAppointmentTypeUniqueLinkInput(
+      readRequiredFormValue(form, "uniqueLink"),
+      readRequiredFormValue(form, "name")
+    ),
     active: readCheckedFormValue(form, "active")
   };
 }
@@ -18479,7 +18646,10 @@ document.addEventListener("DOMContentLoaded", () => {
           }
 
 if (url.pathname === "/admin/appointment-types" || url.pathname === "/client/appointment_types_list.php") {
-const appointmentTypes = await handlers.handleAdminAppointmentTypes(session);
+const [appointmentTypes, appointmentTypeEditorOptions] = await Promise.all([
+handlers.handleAdminAppointmentTypes(session),
+loadAdminAppointmentTypeEditorOptions(resolved.api)
+]);
 if ("error" in appointmentTypes.body) {
 await handleProtectedRouteFailure({
 response,
@@ -18503,7 +18673,7 @@ return;
                 description: "Configure booking behavior, service availability, billing defaults, and public booking links for each appointment type."
               }),
               adminNav,
-              renderAdminAppointmentTypeEditor(null, "/admin/appointment-types"),
+              renderAdminAppointmentTypeEditor(null, "/admin/appointment-types", appointmentTypeEditorOptions),
               '<section class="surface-block">',
               "<h2>Appointment Type Directory</h2>",
               renderDataTable({
@@ -18535,14 +18705,18 @@ return;
           const appointmentTypeId = adminAppointmentTypeDetailMatch != null
             ? decodeURIComponent(adminAppointmentTypeDetailMatch[1] ?? "")
             : url.searchParams.get("id") ?? "";
-          const appointmentType = await handlers.handleAdminAppointmentTypeDetail(session, appointmentTypeId);
+ const [appointmentType, appointmentTypeEditorOptions] = await Promise.all([
+ handlers.handleAdminAppointmentTypeDetail(session, appointmentTypeId),
+ loadAdminAppointmentTypeEditorOptions(resolved.api)
+ ]);
           if ("error" in appointmentType.body) {
             redirect(response, "/admin/appointment-types");
             return;
           }
           const requestOrigin = buildRequestOrigin(request);
           const publicBookingUrl = buildPublicBookingUrl(requestOrigin, appointmentType.body.item);
-          const publicBookingPublished = appointmentType.body.item.active && appointmentType.body.item.publicAvailable;
+ const publicBookingAvailable = appointmentType.body.item.active;
+ const publicBookingDirectoryVisible = appointmentType.body.item.publicAvailable;
 
 writeHtml(response, 200, renderLayout({
 title: "Admin Appointment Type",
@@ -18559,24 +18733,27 @@ renderDetailGrid([
 { label: "Booking Slug", value: escapeHtml(appointmentType.body.item.uniqueLink) },
 {
 label: "Public Booking Page",
-value: publicBookingPublished
+value: publicBookingAvailable
 ? `<a href="${escapeAttribute(publicBookingUrl)}" target="_blank" rel="noreferrer">${escapeHtml(publicBookingUrl)}</a>`
-: "Not published"
+: escapeHtml(publicBookingUrl)
 },
 { label: "Schedule Type", value: escapeHtml(formatAppointmentTypeScheduleTypeLabel(appointmentType.body.item)) },
 { label: "Status", value: renderStatusPill(appointmentType.body.item.active ? "Active" : "Inactive", appointmentType.body.item.active ? "success" : "warning") },
-{ label: "Front-End Visibility", value: renderStatusPill(appointmentType.body.item.publicAvailable ? "Visible" : "Hidden", appointmentType.body.item.publicAvailable ? "success" : "warning") }
+{ label: "Public Directory Visibility", value: renderStatusPill(publicBookingDirectoryVisible ? "Visible" : "Hidden", publicBookingDirectoryVisible ? "success" : "warning") }
 ]),
 '<section class="surface-block">',
 "<h2>Appointment Type Actions</h2>",
-`<div class="form-actions">${publicBookingPublished ? `<a href="${escapeAttribute(publicBookingUrl)}" target="_blank" rel="noreferrer">Open Public Booking Page</a>` : ""}<a href="/admin/appointment-types">Back to Directory</a><form method="post" action="/admin/appointment-types/${encodeURIComponent(appointmentType.body.item.id)}/delete" onsubmit="return confirm('Delete this appointment type?');"><button type="submit">Delete Appointment Type</button></form></div>`,
-publicBookingPublished
-? ""
-: '<p class="section-copy">Booking links use the slug shown above. Enable both <strong>Active</strong> and <strong>Display on Front End</strong> to publish this appointment type on the public booking page.</p>',
+`<div class="form-actions">${publicBookingAvailable ? `<a href="${escapeAttribute(publicBookingUrl)}" target="_blank" rel="noreferrer">Open Public Booking Page</a>` : ""}<button type="button" data-copy-text="${escapeAttribute(publicBookingUrl)}">Copy Booking Link</button><a href="/admin/appointment-types">Back to Directory</a><form method="post" action="/admin/appointment-types/${encodeURIComponent(appointmentType.body.item.id)}/delete" onsubmit="return confirm('Delete this appointment type?');"><button type="submit">Delete Appointment Type</button></form></div>`,
+publicBookingAvailable
+? (publicBookingDirectoryVisible
+  ? ""
+  : '<p class="section-copy">This appointment type is hidden from the public booking directory, but its direct booking link still works.</p>')
+: '<p class="section-copy">This appointment type is inactive, so its booking link will not accept new bookings until you reactivate it.</p>',
 "</section>",
 renderAdminAppointmentTypeEditor(
                 appointmentType.body.item,
-                `/admin/appointment-types/${encodeURIComponent(appointmentType.body.item.id)}`
+                `/admin/appointment-types/${encodeURIComponent(appointmentType.body.item.id)}`,
+                appointmentTypeEditorOptions
               ),
               "</article>"
             ].join("")
